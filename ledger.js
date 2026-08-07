@@ -1,3 +1,25 @@
+        // APP_VERSION / APP_VERSION_DATE: a plain display label, shown in the small version
+        // badge in the corner of the screen (see index.html #versionBadge and the code right
+        // below this that fills it in). This only tells you what code shipped in this build —
+        // NOT what CACHE_NAME the Service Worker is actually serving right now, and it does NOT
+        // sync automatically with CACHE_NAME in sw.js (they live in different files loaded at
+        // different times). When you bump one, bump the other too — see the matching reminder
+        // comment on CACHE_NAME in sw.js.
+        //
+        // If the badge ever shows a version that doesn't match what you expect after deploying,
+        // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
+        // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
+        // just be running a cached copy of the old ledger.js.
+        const APP_VERSION = "v13";
+        const APP_VERSION_DATE = "2026-08-08";
+
+        // Runs immediately as this script executes (it's the last element in <body>, so the
+        // DOM — including #versionBadge and the lock overlay — already exists by this point).
+        // Deliberately NOT inside bootstrap() or the "load" listener: those gate on the app
+        // being unlocked, and this badge needs to show before that.
+        const versionBadgeEl = document.getElementById("versionBadge");
+        if (versionBadgeEl) versionBadgeEl.textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
+
         const DB_NAME = "EnterpriseMultiCurrencyLedgerDB_v4";
         const DB_VERSION = 2;
         const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories" };

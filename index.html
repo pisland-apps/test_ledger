@@ -437,6 +437,18 @@
             padding: 24px;
         }
         #lockOverlay.hidden { display: none; }
+
+        /* Small build-version label, bottom-right. Deliberately NOT inside #lockOverlay or any
+           page/modal container, and given a z-index above everything (including modals at
+           10000), so it's visible even on the lock screen before the passcode is entered — it's
+           just a display label, not something that requires being unlocked to see. Text content
+           is filled in by ledger.js from APP_VERSION / APP_VERSION_DATE. */
+        #versionBadge {
+            position: fixed; right: 8px; bottom: 6px; z-index: 10001;
+            font-size: 0.65rem; color: rgba(255,255,255,0.75);
+            font-family: monospace; pointer-events: none; user-select: none;
+            background: rgba(15,23,42,0.45); padding: 2px 6px; border-radius: 6px;
+        }
         .lock-card {
             background: var(--card-bg); border-radius: 20px; padding: 28px 24px;
             width: 100%; max-width: 360px; box-shadow: 0 20px 50px rgba(0,0,0,0.35);
@@ -490,6 +502,10 @@
     </style>
 </head>
 <body>
+
+    <!-- Build-version label — intentionally outside #lockOverlay so it's visible before unlock too.
+         Text is filled in by ledger.js (APP_VERSION / APP_VERSION_DATE), not hardcoded here. -->
+    <div id="versionBadge"></div>
 
     <!-- ================= APP LOCK OVERLAY (PBKDF2 + AES-GCM, blocks all app access until unlocked) ================= -->
     <div id="lockOverlay">

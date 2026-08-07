@@ -1,5 +1,10 @@
 // Bump this version string any time you re-deploy new content, so old caches get replaced.
-const CACHE_NAME = "ledger-cache-v12";
+//
+// This is a separate concern from APP_VERSION in ledger.js: CACHE_NAME controls which cached
+// files the Service Worker serves; APP_VERSION is just the display label in the corner of the
+// screen. They don't sync automatically (different files, different load times) — when you bump
+// one, bump the other too. See the matching reminder comment on APP_VERSION in ledger.js.
+const CACHE_NAME = "ledger-cache-v13";
 const ASSETS_TO_CACHE = [
     "./",
     "./index.html",
