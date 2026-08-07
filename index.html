@@ -1,0 +1,990 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Ledger</title>
+
+    <!-- Content-Security-Policy design notes:
+         - default-src 'none': everything below is an explicit opt-in allow-list.
+         - script-src 'self': all app logic lives in ledger.js (external file), no inline
+           <script> and no inline onclick/onchange/oninput attributes anywhere in this page
+           (those are wired up via delegated addEventListener + data-* attributes instead —
+           see the CLICK_ACTIONS/CHANGE_ACTIONS/INPUT_ACTIONS tables in ledger.js). This means
+           there's no sha256 hash to maintain: 'self' covers ledger.js regardless of its byte
+           content, so there's nothing that can drift out of sync between a local build and
+           what actually gets deployed.
+         - style-src 'self' 'unsafe-inline': left loose — this app uses inline style="..."
+           attributes throughout for one-off layout tweaks. Migrating all of those to CSS
+           classes was judged high-effort/low-value: CSS injection has a much smaller blast
+           radius than script injection, and connect-src below already blocks the network
+           requests that would make it useful to an attacker anyway.
+         - img-src 'self' data:: receipt/transaction photos are stored as base64 data URLs
+           in IndexedDB and displayed directly via <img src="data:...">; app icons are local.
+         - connect-src 'self': app makes no fetch/XHR calls (offline-first, IndexedDB only) —
+           kept as 'self' rather than 'none' so the Service Worker's own requests aren't
+           affected by this policy.
+         - object-src/base-uri/form-action 'none': no plugins, no dynamic <base>, no real
+           <form> submissions — safe to fully lock down.
+         - frame-ancestors is intentionally NOT set here: it's ignored by browsers when
+           delivered via <meta> (HTTP-header-only directive), and GitHub Pages doesn't support
+           custom response headers, so it can't actually be enforced in this deployment. -->
+    <meta http-equiv="Content-Security-Policy" content="
+        default-src 'none';
+        script-src 'self';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data:;
+        font-src 'self';
+        connect-src 'self';
+        worker-src 'self';
+        manifest-src 'self';
+        object-src 'none';
+        base-uri 'none';
+        form-action 'none';
+    ">
+
+    <!-- PWA / "Add to Home Screen" support — this build is meant to be hosted over https (e.g. GitHub Pages)
+         so the Service Worker (sw.js) can cache the app for true offline use. -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#4f46e5">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Ledger">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <style>
+        :root {
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-main: #0f172a;
+            --text-muted: #64748b;
+            --primary: #6366f1;
+            --income-color: #10b981;
+            --expense-color: #ef4444;
+            --transfer-color: #3b82f6;
+            --border-color: #e2e8f0;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            /* Prevents double-tap zoom delay on mobile devices */
+            touch-action: manipulation;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            padding: 16px;
+            max-width: 600px;
+            margin: 0 auto;
+            padding-bottom: 40px;
+        }
+
+        /* SPA Page management frameworks */
+        .page { display: block; }
+        .page.hidden { display: none !important; }
+
+        header {
+            background: var(--card-bg);
+            padding: 16px;
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            margin-bottom: 20px;
+        }
+
+        .net-worth-container {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 1.6rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+        }
+
+        .currency-pill {
+            background: #f1f5f9;
+            border: 1px solid var(--border-color);
+            padding: 12px 14px; /* Enlarged touch target for mobile */
+            border-radius: 8px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            cursor: pointer;
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+
+        .section-title {
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+        }
+
+        .text-btn {
+            background: none;
+            border: none;
+            color: var(--primary);
+            font-size: 0.85rem;
+            font-weight: 700;
+            padding: 8px 12px; /* Touch target optimized */
+            cursor: pointer;
+        }
+
+        .actions-bar {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .action-btn {
+            border: none;
+            border-radius: 12px;
+            padding: 16px 6px; /* Touch friendly height */
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: white;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            transition: transform 0.1s ease;
+        }
+        .action-btn:active { transform: scale(0.96); }
+        .btn-income { background-color: var(--income-color); }
+        .btn-expense { background-color: var(--expense-color); }
+        .btn-transfer { background-color: var(--transfer-color); }
+
+        .report-card {
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1.5px solid var(--border-color);
+            padding: 16px;
+        }
+
+        .report-summary-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .stat-box {
+            padding: 14px;
+            border-radius: 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: opacity 0.15s;
+        }
+        .stat-box:active { opacity: 0.8; }
+        .stat-box.income { background: #f0fdf4; border: 1px solid #bbf7d0; }
+        .stat-box.expense { background: #fef2f2; border: 1px solid #fecaca; }
+
+        .stat-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
+        .stat-amount { font-size: 1.15rem; margin-top: 4px; font-weight: 700; }
+
+        .net-savings-banner {
+            padding: 14px;
+            border-radius: 10px;
+            text-align: center;
+            font-weight: 700;
+            font-size: 0.95rem;
+            margin-bottom: 14px;
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+        .net-savings-banner:active { transform: scale(0.98); }
+
+        .progress-bar-container {
+            background: #e2e8f0;
+            height: 8px;
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 4px;
+        }
+        .progress-bar-fill { background: var(--expense-color); height: 100%; border-radius: 4px; }
+
+        .category-row-item {
+            cursor: pointer;
+            transition: background 0.15s;
+            padding: 10px 6px; /* Easier to tap on phone screens */
+            border-radius: 8px;
+        }
+        .category-row-item:active { background: #f1f5f9; }
+
+        .filters {
+            display: flex;
+            gap: 8px;
+            margin-top: 12px;
+        }
+        select {
+            padding: 10px;
+            border: 1.5px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--bg-color);
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--text-main);
+            flex: 1;
+            height: 40px;
+        }
+
+        .account-list-container {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .account-list-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+        }
+        .account-list-row:last-child { border-bottom: none; }
+        .account-list-row:active { background-color: #f1f5f9; }
+
+        /* Storage Metrics elements */
+        .data-meter-box {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 16px;
+            padding: 14px;
+            margin-top: 24px;
+            font-size: 0.78rem;
+            color: #555555;
+            line-height: 1.6;
+        }
+        .hardware-track {
+            background-color: #f4ede4;
+            border: 1.5px solid #dcd1c4;
+            height: 14px;
+            border-radius: 7px;
+            margin: 8px 0;
+            overflow: hidden;
+            padding: 1px;
+        }
+        .hardware-fill {
+            background: linear-gradient(to bottom, #e3cbb3, #c5a88a);
+            height: 100%;
+            border-radius: 5px;
+            width: 0.5%;
+        }
+
+        /* LEDGER WORKSPACE PAGES */
+        .nav-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+        .back-btn {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            padding: 10px 16px;
+            border-radius: 10px;
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .back-btn:active { background: #f1f5f9; }
+
+        .ledger-container {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .ledger-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            transition: background 0.1s;
+        }
+        .ledger-item:active { background: #f1f5f9; }
+        .item-left { display: flex; flex-direction: column; gap: 2px; max-width: 65%; }
+        .item-name { font-weight: 600; font-size: 0.9rem; }
+        .item-meta { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; }
+        .item-right { display: flex; align-items: center; gap: 10px; }
+        .item-value { font-weight: 700; font-size: 0.9rem; text-align: right; }
+        .converted-subtext { font-size: 0.65rem; color: var(--text-muted); display: block; font-weight: 500; }
+        .trash-btn { background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 8px; font-size: 1.1rem; }
+        .trash-btn:active { color: var(--expense-color); }
+
+        /* Statement sheets */
+        .statement-card {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .statement-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 12px 0;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        .statement-row:last-child { border-bottom: none; }
+        .statement-row:active { background: #f8fafc; }
+
+        /* Modal Elements */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(15, 23, 42, 0.4);
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            padding: 16px;
+        }
+        .modal.active { display: flex; }
+        .modal-sheet {
+            background: var(--card-bg);
+            width: 100%;
+            max-width: 450px;
+            border-radius: 16px;
+            padding: 20px;
+            max-height: 85vh;
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch; /* Butter-smooth scrolling on iOS/Android */
+        }
+        .form-row { margin-bottom: 12px; }
+        .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+        label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
+        input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: #f8fafc; height: 44px; }
+        .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
+        .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
+        .config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+        .config-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); }
+        .util-row { display: flex; gap: 8px; margin-top: 24px; }
+        .btn-util { flex: 1; padding: 12px; font-size: 0.8rem; border-radius: 8px; background: #e2e8f0; border: none; font-weight: 600; cursor: pointer; }
+
+        /* Emoji Icon Picker Grid Design */
+        .emoji-picker-container {
+            border: 1.5px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px;
+            background: #f8fafc;
+            max-height: 180px;
+            overflow-y: auto;
+            margin-bottom: 12px;
+            -webkit-overflow-scrolling: touch;
+        }
+        .emoji-section-title {
+            font-size: 0.65rem;
+            font-weight: 800;
+            color: var(--text-muted);
+            margin: 8px 0 4px 0;
+            text-transform: uppercase;
+        }
+        .emoji-grid {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 6px;
+        }
+        .emoji-btn {
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            font-size: 1.2rem;
+            padding: 8px 0; /* Expanded touch height for mobile taps */
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.1s;
+        }
+        .emoji-btn:active, .emoji-btn.selected {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+            transform: scale(1.1);
+        }
+        .category-display-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* ===== App Lock (PBKDF2 + AES-GCM) ===== */
+        #lockOverlay {
+            position: fixed; inset: 0; z-index: 9999;
+            background: linear-gradient(160deg, #4f46e5 0%, #312e81 100%);
+            display: flex; align-items: center; justify-content: center;
+            padding: 24px;
+        }
+        #lockOverlay.hidden { display: none; }
+        .lock-card {
+            background: var(--card-bg); border-radius: 20px; padding: 28px 24px;
+            width: 100%; max-width: 360px; box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+        }
+        .lock-card h2 { font-size: 1.3rem; font-weight: 800; margin-bottom: 6px; }
+        .lock-card p.lock-sub { font-size: 0.82rem; color: var(--text-muted); font-weight: 600; margin-bottom: 18px; line-height: 1.5; }
+        .lock-icon { font-size: 2.2rem; margin-bottom: 8px; display: block; }
+        .lock-card input[type="password"] {
+            width: 100%; padding: 13px 14px; border-radius: 10px; border: 1.5px solid var(--border-color);
+            font-size: 1rem; margin-bottom: 12px; background: var(--bg-color); color: var(--text-main);
+            letter-spacing: 2px;
+        }
+        .lock-card button.lock-submit-btn {
+            width: 100%; padding: 13px; border-radius: 10px; border: none; background: var(--primary);
+            color: #fff; font-weight: 700; font-size: 0.95rem; cursor: pointer; margin-top: 4px;
+        }
+        .lock-card button.lock-submit-btn:active { opacity: 0.85; }
+        #lockError {
+            color: var(--expense-color); font-size: 0.8rem; font-weight: 700; margin-bottom: 10px; min-height: 1em;
+        }
+        .lock-reset-link {
+            display: block; text-align: center; margin-top: 16px; font-size: 0.75rem; color: var(--text-muted);
+            font-weight: 600; text-decoration: underline; cursor: pointer; background: none; border: none;
+        }
+        .lock-btn-header {
+            background: none; border: none; font-size: 1.2rem; cursor: pointer; padding: 6px; margin-left: 4px;
+        }
+
+        /* Toggle switch for the export-encryption option */
+        .toggle-switch-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 12px;
+            margin-top: 10px; padding: 10px 12px; background: var(--bg-color); border-radius: 10px;
+        }
+        .toggle-switch-label { font-size: 0.78rem; font-weight: 700; color: var(--text-main); }
+        .toggle-switch { position: relative; display: inline-block; width: 44px; height: 25px; flex-shrink: 0; }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-slider {
+            position: absolute; cursor: pointer; inset: 0; background-color: #cbd5e1;
+            transition: 0.2s; border-radius: 999px;
+        }
+        .toggle-slider::before {
+            position: absolute; content: ""; height: 19px; width: 19px; left: 3px; bottom: 3px;
+            background-color: #fff; transition: 0.2s; border-radius: 50%;
+        }
+        .toggle-switch input:checked + .toggle-slider { background-color: var(--income-color); }
+        .toggle-switch input:checked + .toggle-slider::before { transform: translateX(19px); }
+        .export-hint-text {
+            font-size: 0.7rem; color: var(--expense-color); font-weight: 600; margin-top: 6px; line-height: 1.4;
+        }
+        .export-hint-text.hidden { display: none; }
+    </style>
+</head>
+<body>
+
+    <!-- ================= APP LOCK OVERLAY (PBKDF2 + AES-GCM, blocks all app access until unlocked) ================= -->
+    <div id="lockOverlay">
+        <div class="lock-card">
+            <!-- SETUP MODE: shown the very first time the app runs (no passcode configured yet) -->
+            <div id="lockSetupView">
+                <span class="lock-icon">🔐</span>
+                <h2>Set an App Passcode</h2>
+                <p class="lock-sub">Your data will be encrypted on this device with a key derived from this passcode (PBKDF2 + AES-GCM). There is no password recovery — if you forget it, your data cannot be decrypted.</p>
+                <div id="lockError"></div>
+                <input type="password" id="setupPasscodeInput" placeholder="Create passcode (min 4 characters)" autocomplete="new-password" inputmode="text">
+                <input type="password" id="setupPasscodeConfirmInput" placeholder="Confirm passcode" autocomplete="new-password" inputmode="text">
+                <button type="button" class="lock-submit-btn" data-click="handleSetupPasscodeSubmit">Create &amp; Continue</button>
+            </div>
+
+            <!-- UNLOCK MODE: shown on every subsequent app open -->
+            <div id="lockUnlockView" style="display:none;">
+                <span class="lock-icon">🔒</span>
+                <h2>Enter Passcode</h2>
+                <p class="lock-sub">This ledger is locked. Enter your passcode to decrypt and continue.</p>
+                <button type="button" class="lock-submit-btn" id="biometricUnlockBtn" style="display:none; background:#0f172a; margin-bottom:12px;">🫆 Unlock with Biometrics</button>
+                <div id="lockError2"></div>
+                <input type="password" id="unlockPasscodeInput" placeholder="Passcode" autocomplete="current-password" inputmode="text">
+                <button type="button" class="lock-submit-btn" data-click="handleUnlockSubmit">Unlock</button>
+                <button type="button" class="lock-reset-link" data-click="handleForgotPasscode">Forgot passcode? Reset app data</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= PAGE 1: PORTFOLIO MAIN WORKSPACE ================= -->
+    <div id="page-workspace" class="page">
+        <header>
+            <div class="net-worth-container">
+                <div>
+                    <h1 id="netWorthDisplay">0.00</h1>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">Portfolio Net Worth</p>
+                </div>
+                <button class="currency-pill" data-click="openCurrencyConfig">
+                    Base: <span id="currentBasePill">USD</span> ⚙
+                </button>
+                <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
+            </div>
+        </header>
+
+        <div id="fdReminderContainer"></div>
+
+        <div class="section-header" style="margin-top: 0;">
+            <span class="section-title">Quick Transaction Entry</span>
+            <button class="text-btn" data-click="openCategoriesConfig">🏷 Categories</button>
+        </div>
+        <div class="actions-bar">
+            <button class="action-btn btn-income" data-click="openTransactionForm" data-type="income">
+                <span>🟢 Income</span>
+            </button>
+            <button class="action-btn btn-expense" data-click="openTransactionForm" data-type="expense">
+                <span>🔴 Expense</span>
+            </button>
+            <button class="action-btn btn-transfer" data-click="openTransactionForm" data-type="transfer">
+                <span>🔄 Transfer</span>
+            </button>
+        </div>
+
+        <div class="section-header">
+            <span class="section-title">Financial Report Card</span>
+        </div>
+        <div class="report-card">
+            <div class="report-summary-grid">
+                <div class="stat-box income" data-click="navigateToDirectTypePage" data-type="income">
+                    <span class="stat-title" style="color: #166534;">Total Income</span>
+                    <div class="stat-amount" id="reportIncome" style="color: #15803d;">0.00</div>
+                </div>
+                <div class="stat-box expense" data-click="navigateToDirectTypePage" data-type="expense">
+                    <span class="stat-title" style="color: #991b1b;">Total Expenses</span>
+                    <div class="stat-amount" id="reportExpense" style="color: #b91c1c;">0.00</div>
+                </div>
+            </div>
+            <!-- Clickable Net Savings to route to SPA financial balance sheet page -->
+            <div id="savingsBanner" class="net-savings-banner" data-click="navigateToSavingsPage">
+                Net Savings: <span id="reportSavings">0.00</span> 📊
+            </div>
+            
+            <label>Spending Breakdown (Click Category to Filter)</label>
+            <div id="categoryReportList" style="display: flex; flex-direction: column; gap: 8px; margin-top: 6px;"></div>
+
+            <div class="filters">
+                <select id="filterMonth" data-change="resetLedgerPageAndRender">
+                    <option value="all">All Months</option>
+                    <option value="0">January</option><option value="1">February</option><option value="2">March</option>
+                    <option value="3">April</option><option value="4">May</option><option value="5">June</option>
+                    <option value="6">July</option><option value="7">August</option><option value="8">September</option>
+                    <option value="9">October</option><option value="10">November</option><option value="11">December</option>
+                </select>
+                <select id="filterYear" data-change="resetLedgerPageAndRender">
+                    <option value="all" selected>All Years</option>
+                    <option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option><option value="2027">2027</option><option value="2028">2028</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="section-header">
+            <span class="section-title">My Financial Accounts</span>
+            <button class="text-btn" data-click="openAccountsConfig">🛠 Manage</button>
+        </div>
+        <div class="account-list-container" id="accountsListView"></div>
+
+        <!-- Fully Translated Data Meter Info -->
+        <div class="data-meter-box">
+            <div id="appStorageText">App Local Database footprint: ~0.00 MB (0 attached, 0.00 MB)</div>
+            <div class="hardware-track">
+                <div class="hardware-fill" id="meterFillElement"></div>
+            </div>
+            <div id="systemQuotaText">Total browser quota limit: ~10240.00 MB, Used: 0.00 MB (across local sandboxes)</div>
+        </div>
+
+        <div class="util-row">
+            <button class="btn-util" data-click="exportBackup">💾 Export JSON</button>
+            <button class="btn-util" data-click="openImportInput">📥 Import JSON</button>
+            <input type="file" id="importInput" accept=".json" style="display:none" data-change="importBackup">
+        </div>
+        <div class="toggle-switch-row">
+            <span class="toggle-switch-label">🔐 Encrypt this backup export</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="exportEncryptToggle" checked data-change="handleExportEncryptToggleChange">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        <p class="export-hint-text hidden" id="exportPlaintextHint">明文备份不含密码保护，请妥善保管</p>
+        <div class="toggle-switch-row" id="biometricToggleRow" style="display:none;">
+            <span class="toggle-switch-label">🫆 Biometric quick unlock (fingerprint/Face)</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="biometricToggle" data-change="handleBiometricToggleChange">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+        <div class="util-row" style="margin-top:8px;">
+            <button class="btn-util" data-click="repairLegacyFdEntries" style="width:100%;">🔧 Fix Legacy FD/Opening Balance Entries</button>
+        </div>
+    </div>
+
+    <!-- ================= PAGE 2: LEDGER ACTIVITY LOG ================= -->
+    <div id="page-ledger" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="handleLedgerBackClick">&larr; Back</button>
+            <div>
+                <h3 id="ledgerTargetTitle" style="font-weight:800; font-size:1.2rem;">Account Ledger</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
+            </div>
+        </div>
+        <div class="ledger-container" id="ledgerList"></div>
+    </div>
+
+    <!-- ================= PAGE 3: NET SAVINGS STATEMENT SHEET ================= -->
+    <div id="page-savings" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Net Savings Statement</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Balanced Category Sheet</p>
+            </div>
+        </div>
+        
+        <div class="statement-card">
+            <h4 style="margin-bottom:10px; color:var(--income-color);">INCOME CATEGORIES</h4>
+            <div id="savingsIncomeRows"></div>
+        </div>
+
+        <div class="statement-card">
+            <h4 style="margin-bottom:10px; color:var(--expense-color);">EXPENSE CATEGORIES</h4>
+            <div id="savingsExpenseRows"></div>
+        </div>
+
+        <div class="statement-card" style="border: 2px solid var(--primary); background: #f5f3ff;">
+            <div style="display:flex; justify-content:space-between; font-weight:800; font-size:1.1rem;">
+                <span id="savingsSurplusLabel">Surplus Margin:</span>
+                <span id="savingsSurplusValue">0.00</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= SYSTEM MODALS ================= -->
+    <!-- MODAL: Advanced Multi-Currency Core Configuration -->
+    <div class="modal" id="currencyModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;">Global Currency Settings</h3>
+                <button data-click="closeModal" data-modal="currencyModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div class="form-row">
+                <label>Main Base Currency</label>
+                <select id="baseCurrencySelect" class="form-input" data-change="handleBaseCurrencyChange">
+                    <option value="USD">USD ($)</option>
+                    <option value="EUR">EUR (€)</option>
+                    <option value="GBP">GBP (£)</option>
+                    <option value="SGD">SGD (S$)</option>
+                    <option value="MYR">MYR (RM)</option>
+                </select>
+            </div>
+            <p style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; text-transform: uppercase;">Exchange Rates (Per 1 Base Unit)</p>
+            <div id="fxRatesFormContainer"></div>
+            <button type="button" data-click="saveFxRates" class="submit-btn" style="margin-top: 10px;">Save FX Values</button>
+        </div>
+    </div>
+
+    <!-- MODAL: Accounts Subsystem Manager -->
+    <div class="modal" id="accountsModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;">Manage Accounts</h3>
+                <button data-click="closeModal" data-modal="accountsModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
+                <h4 id="accountFormHeaderTitle" style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Create New Account</h4>
+                <input type="hidden" id="editAccountId">
+
+                <div class="form-row">
+                    <label>Account Type</label>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" id="accTypeBtnNormal" data-click="setAccountTypeUI" data-type="normal" class="submit-btn" style="margin-top:0; flex:1; font-size:0.75rem; padding:10px 4px;">🏛️ Normal</button>
+                        <button type="button" id="accTypeBtnMulti" data-click="setAccountTypeUI" data-type="multi" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.75rem; padding:10px 4px;">💱 Multi-Currency</button>
+                        <button type="button" id="accTypeBtnFd" data-click="setAccountTypeUI" data-type="fd" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.75rem; padding:10px 4px;">🏦 Fixed Deposit</button>
+                    </div>
+                    <input type="hidden" id="newAccType" value="normal">
+                </div>
+
+                <p id="accTypeHint" style="font-size:0.72rem; color:var(--text-muted); margin:-4px 0 10px;"></p>
+
+                <div class="form-row">
+                    <label>Account Name</label>
+                    <input type="text" id="newAccName" placeholder="e.g. DBS Bank, Cash Wallet" required>
+                </div>
+
+                <!-- Currency + Opening Balance — only applicable to "Normal" (single-currency) accounts. -->
+                <div class="form-row-inline" id="newAccBalCurrRow">
+                    <div>
+                        <label>Opening Value</label>
+                        <input type="number" id="newAccBal" step="0.01" value="0">
+                    </div>
+                    <div>
+                        <label>Currency</label>
+                        <select id="newAccCurrency" class="form-input"></select>
+                    </div>
+                </div>
+
+                <!-- Multi-Currency: seed one or more opening currency balances at creation time.
+                     Each row becomes an "Opening Balance" transaction once the account is created. -->
+                <div id="multiOpeningWrap" style="display:none;">
+                    <label style="font-size:0.8rem; font-weight:700; color:var(--text-main); display:block; margin-bottom:6px;">Opening Balances (optional)</label>
+                    <div id="multiOpeningRows"></div>
+                    <button type="button" data-click="addMultiCurrencyRow" class="submit-btn" style="margin-top:2px; margin-bottom:14px; background:#e0f2fe; color:#0369a1;">+ Add Currency</button>
+                </div>
+
+                <!-- Fixed Deposit: seed one or more opening placements (e.g. several existing FDs with
+                     Bank A, each with its own currency, amount, commencing/maturity date, and rate). -->
+                <div id="fdOpeningWrap" style="display:none;">
+                    <label style="font-size:0.8rem; font-weight:700; color:var(--text-main); display:block; margin-bottom:6px;">Opening Fixed Deposit Placements (optional)</label>
+                    <div id="fdOpeningRows"></div>
+                    <button type="button" data-click="addFdPlacementRow" class="submit-btn" style="margin-top:2px; margin-bottom:14px; background:#ede9fe; color:#6d28d9;">+ Add Placement</button>
+                </div>
+
+                <!-- Action handlers changed to button onclick to bypass Android keyboard/form intercept bugs -->
+                <button type="button" id="accFormSubmitBtn" data-click="handleCreateAccountMobile" class="submit-btn" style="background: var(--transfer-color);">Create Account</button>
+                <button type="button" id="accFormCancelBtn" class="submit-btn" data-click="resetAccountForm" style="background:#64748b; margin-top:6px; display:none;">Cancel Edit</button>
+            </div>
+            <div class="config-list" id="accountConfigList"></div>
+        </div>
+    </div>
+
+    <!-- MODAL: Dynamic Category Creator & Customizer -->
+    <div class="modal" id="categoriesModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;">Categories Designer</h3>
+                <button data-click="closeModal" data-modal="categoriesModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
+                <h4 style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Design Custom Category</h4>
+                <div class="form-row-inline" style="grid-template-columns: 2fr 1fr; margin-bottom: 8px;">
+                    <div>
+                        <label>Category Label Name</label>
+                        <input type="text" id="catLabelName" placeholder="e.g. Subscriptions, Crypto" required>
+                    </div>
+                    <div>
+                        <label>Fin. Type</label>
+                        <select id="catTypeSelect" class="form-input">
+                            <option value="expense">Expense</option>
+                            <option value="income">Income</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-row" style="margin-bottom: 8px;">
+                    <label>Selected Badge Icon: <span id="currentSelectedEmojiBadge" style="font-size:1.1rem; font-weight:bold;">🍔</span></label>
+                    <input type="hidden" id="catSelectedEmoji" value="🍔">
+                </div>
+
+                <!-- Rich Emoji Directory Grid -->
+                <div class="emoji-picker-container" id="emojiPickerPanel"></div>
+
+                <!-- Crucial Mobile Fix: Changed to direct touch target button executing native JS -->
+                <button type="button" data-click="handleCreateCategoryMobile" class="submit-btn">Register Category Badge</button>
+            </div>
+            <div class="config-list" id="categoriesConfigList" style="max-height: 200px; overflow-y:auto;"></div>
+        </div>
+    </div>
+
+    <!-- MODAL: Transaction Creator / Editor (Hybrid) -->
+    <div class="modal" id="txModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 id="txModalTitle" style="font-weight: 800;">Log Ledger Item</h3>
+                <button data-click="closeModal" data-modal="txModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div>
+                <input type="hidden" id="txId">
+                <input type="hidden" id="txType">
+                <div class="form-row"><label>Description</label><input type="text" id="txDesc" required></div>
+                <div class="form-row-inline">
+                    <div><label>Amount</label><input type="number" id="txAmount" step="0.01" required data-input="recalcTxFdMaturity"></div>
+                    <div><label>Currency</label><select id="txCurrency" class="form-input" data-change="recalcTxFdMaturity"></select></div>
+                </div>
+                <div class="form-row" id="srcAccRow"><label id="srcAccLabel">Account</label><select id="srcAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
+                <div class="form-row" id="destAccRow" style="display:none;"><label>To Account</label><select id="destAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
+                <div class="form-row" id="categoryRow"><label>Category</label><select id="txCategory" class="form-input"></select></div>
+                <div class="form-row"><label>Date</label><input type="date" id="txDate" required></div>
+
+                <!-- Fixed Deposit placement terms — shown only when this entry deposits funds into an FD account -->
+                <div id="txFdFieldsWrap" style="display:none; background:#faf5ff; border:1px solid #ede9fe; border-radius:10px; padding:10px; margin-bottom:10px;">
+                    <p style="font-size:0.7rem; font-weight:700; text-transform:uppercase; color:#6d28d9; margin-bottom:8px;">🏦 Fixed Deposit Placement Terms</p>
+                    <div class="form-row">
+                        <label>Account / Reference No. (optional)</label>
+                        <input type="text" id="txFdReference" placeholder="e.g. FD-2026-00123">
+                    </div>
+                    <div class="form-row-inline">
+                        <div>
+                            <label>Commencing Date</label>
+                            <input type="date" id="txFdStartDate" data-change="recalcTxFdMaturity">
+                        </div>
+                        <div>
+                            <label>Tenure (months)</label>
+                            <input type="number" id="txFdTenureMonths" step="1" min="1" value="12" data-change="recalcTxFdMaturity">
+                        </div>
+                    </div>
+                    <div class="form-row-inline">
+                        <div>
+                            <label>Interest Rate (% p.a.)</label>
+                            <input type="number" id="txFdInterestRate" step="0.01" min="0" value="3.0" data-input="recalcTxFdMaturity">
+                        </div>
+                        <div>
+                            <label>Maturity Date</label>
+                            <input type="date" id="txFdMaturityDate" readonly>
+                        </div>
+                    </div>
+                    <p id="txFdMaturityPreview" style="font-size:0.72rem; color:#6d28d9; margin-top:2px;"></p>
+                </div>
+
+                <div class="form-row">
+                    <label>Receipt / Photo (optional)</label>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" data-click="openCameraInput" class="submit-btn" style="margin-top:0; background:#e2e8f0; color:var(--text-main); flex:1;">📷 Take Photo</button>
+                        <button type="button" data-click="openGalleryInput" class="submit-btn" style="margin-top:0; background:#e2e8f0; color:var(--text-main); flex:1;">🖼️ Gallery</button>
+                    </div>
+                    <input type="file" id="txCameraInput" accept="image/*" capture="environment" style="display:none;" data-change="handleTxImageSelected">
+                    <input type="file" id="txGalleryInput" accept="image/*" style="display:none;" data-change="handleTxImageSelected">
+
+                    <div id="txImagePreviewWrap" style="display:none; margin-top:10px; position:relative; width:fit-content;">
+                        <img id="txImagePreview" src="" style="max-width:140px; max-height:140px; border-radius:10px; border:1px solid var(--border-color); display:block;">
+                        <button type="button" data-click="removeTxImage" style="position:absolute; top:-8px; right:-8px; width:24px; height:24px; border-radius:50%; background:var(--expense-color); color:white; border:none; font-weight:700; cursor:pointer; line-height:1;">✕</button>
+                    </div>
+                    <p id="txImageStatus" style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;"></p>
+                </div>
+
+                <button type="button" data-click="handleTransactionSubmitMobile" id="txSubmitBtn" class="submit-btn">Commit Entry</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Resolve Fixed Deposit Maturity (renew or withdraw) -->
+    <div class="modal" id="resolveFdModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;">🏦 Resolve Maturity</h3>
+                <button data-click="closeModal" data-modal="resolveFdModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <input type="hidden" id="resolveFdTxId">
+
+            <div style="background:#faf5ff; border:1px solid #ede9fe; border-radius:10px; padding:10px; margin-bottom:14px; font-size:0.82rem;">
+                <p id="resolveFdSummary" style="font-weight:700; color:#6d28d9;"></p>
+                <p id="resolveFdMeta" style="color:var(--text-muted); margin-top:2px;"></p>
+            </div>
+
+            <div class="form-row">
+                <label>Actual Interest Received</label>
+                <input type="number" id="resolveFdInterest" step="0.01" min="0">
+            </div>
+
+            <div class="form-row">
+                <label>What would you like to do?</label>
+                <div style="display:flex; gap:8px;">
+                    <button type="button" id="resolveFdActionRenewBtn" data-click="setResolveFdAction" data-action-value="renew" class="submit-btn" style="margin-top:0; flex:1;">🔄 Renew</button>
+                    <button type="button" id="resolveFdActionWithdrawBtn" data-click="setResolveFdAction" data-action-value="withdraw" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main);">💸 Withdraw & Close</button>
+                </div>
+                <input type="hidden" id="resolveFdAction" value="renew">
+            </div>
+
+            <!-- Renewal-specific fields -->
+            <div id="resolveFdRenewWrap">
+                <div class="form-row">
+                    <label>Renewal Mode</label>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" id="resolveFdModeCapitalizeBtn" data-click="setResolveFdRenewMode" data-mode="capitalize" class="submit-btn" style="margin-top:0; flex:1; font-size:0.78rem;">➕ Renew with Interest</button>
+                        <button type="button" id="resolveFdModePrincipalBtn" data-click="setResolveFdRenewMode" data-mode="principal" class="submit-btn" style="margin-top:0; flex:1; font-size:0.78rem; background:#e2e8f0; color:var(--text-main);">🏛️ Principal Only</button>
+                    </div>
+                    <input type="hidden" id="resolveFdRenewMode" value="capitalize">
+                </div>
+
+                <div class="form-row" id="resolveFdInterestDestRow" style="display:none;">
+                    <label>Transfer Interest To</label>
+                    <select id="resolveFdInterestDest" class="form-input"></select>
+                </div>
+
+                <p style="font-size:0.72rem; font-weight:700; text-transform:uppercase; color:#6d28d9; margin:10px 0 6px;">New Placement Terms</p>
+                <div class="form-row">
+                    <label>New Account / Reference No. (optional)</label>
+                    <input type="text" id="resolveFdNewReference" placeholder="e.g. FD-2026-00456">
+                </div>
+                <div class="form-row-inline">
+                    <div>
+                        <label>Commencing Date</label>
+                        <input type="date" id="resolveFdNewStart" data-change="recalcResolveFdMaturity">
+                    </div>
+                    <div>
+                        <label>Tenure (months)</label>
+                        <input type="number" id="resolveFdNewTenure" step="1" min="1" value="12" data-change="recalcResolveFdMaturity">
+                    </div>
+                </div>
+                <div class="form-row-inline">
+                    <div>
+                        <label>Interest Rate (% p.a.)</label>
+                        <input type="number" id="resolveFdNewRate" step="0.01" min="0" data-input="recalcResolveFdMaturity">
+                    </div>
+                    <div>
+                        <label>Maturity Date</label>
+                        <input type="date" id="resolveFdNewMaturity" readonly>
+                    </div>
+                </div>
+                <p id="resolveFdRenewPreview" style="font-size:0.75rem; color:#6d28d9; margin-top:2px;"></p>
+            </div>
+
+            <!-- Withdrawal-specific fields -->
+            <div id="resolveFdWithdrawWrap" style="display:none;">
+                <div class="form-row">
+                    <label>Transfer Proceeds To</label>
+                    <select id="resolveFdWithdrawDest" class="form-input"></select>
+                </div>
+                <p id="resolveFdWithdrawPreview" style="font-size:0.8rem; color:var(--text-muted);"></p>
+            </div>
+
+            <button type="button" data-click="confirmResolveFd" class="submit-btn" style="background:var(--transfer-color);">Confirm</button>
+        </div>
+    </div>
+
+    <!-- MODAL: Fullscreen image viewer for transaction receipts -->
+    <div class="modal" id="imageViewerModal" style="background:rgba(0,0,0,0.85);">
+        <div style="max-width:95vw; max-height:85vh; display:flex; flex-direction:column; align-items:center; gap:12px;">
+            <img id="imageViewerImg" src="" style="max-width:95vw; max-height:75vh; border-radius:10px; object-fit:contain;">
+            <button type="button" data-click="closeModal" data-modal="imageViewerModal" class="submit-btn" style="margin-top:0; width:auto; padding:10px 24px;">Close</button>
+        </div>
+    </div>
+
+    <!-- MODAL: Custom Confirm Dialog (replaces native confirm() for consistent styling) -->
+    <div class="modal" id="confirmModal" style="z-index:10000;">
+        <div class="modal-sheet" style="max-width: 340px;">
+            <p id="confirmModalMessage" style="font-size:0.9rem; line-height:1.5; margin-bottom:18px;"></p>
+            <div style="display:flex; gap:10px;">
+                <button type="button" id="confirmModalCancelBtn" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:0;">Cancel</button>
+                <button type="button" id="confirmModalOkBtn" class="submit-btn" style="background:var(--expense-color); margin-top:0;">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Backup Passcode Prompt (used when importing an encrypted backup whose passcode
+         doesn't match the app's current unlocked session — e.g. restoring on a new device) -->
+    <div class="modal" id="backupPasscodeModal" style="z-index:10000;">
+        <div class="modal-sheet" style="max-width: 340px;">
+            <p style="font-size:0.9rem; line-height:1.5; margin-bottom:12px; font-weight:700;">This backup is encrypted. Enter its passcode to restore it.</p>
+            <div id="backupPasscodeError" style="color:var(--expense-color); font-size:0.8rem; font-weight:700; margin-bottom:8px; min-height:1em;"></div>
+            <input type="password" id="backupPasscodeInput" class="form-input" placeholder="Backup passcode" style="width:100%; margin-bottom:14px;">
+            <div style="display:flex; gap:10px;">
+                <button type="button" id="backupPasscodeCancelBtn" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:0;">Cancel</button>
+                <button type="button" id="backupPasscodeOkBtn" class="submit-btn" style="background:var(--primary); margin-top:0;">Decrypt</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= ENGINE CONTROLLERS ================= -->
+    <script src="ledger.js"></script>
+</body>
+</html>
