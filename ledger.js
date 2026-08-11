@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v13";
-        const APP_VERSION_DATE = "2026-08-08";
+        const APP_VERSION = "v14";
+        const APP_VERSION_DATE = "2026-08-12";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -254,16 +254,30 @@
             location.reload();
         }
 
-        /* ================= BIOMETRIC QUICK UNLOCK (WebAuthn platform authenticator) =================
-           WebAuthn doesn't hand us a reusable encryption key, so this isn't a second independent
-           encryption path — it's a convenience layer on top of the same passcode: the passcode is
-           wrapped with a non-extractable AES-GCM key that lives only in this browser's IndexedDB (so
-           script can't read the raw key material out of it), and unwrapping it is gated behind a
-           fingerprint/Face unlock prompt. The passcode itself remains the only way to derive the real
-           data-encryption key, so it's still required as a fallback and after "Forgot passcode". Needs
-           a secure context (https://) and a platform authenticator (e.g. Android fingerprint) — quietly
+        /* ================= BIOMETRIC QUICK UNLOCK (WebAuthn platform authenticator, PRF) =================
+           PRF mode only: the wrapping key that unwraps the passcode is derived directly from the
+           WebAuthn PRF extension output, so that key cannot exist without redoing the biometric
+           ceremony — the fingerprint/Face check is cryptographically load-bearing, not just a UI
+           gate in front of a separately-stored, independently-usable key.
+           (An earlier build of this file used a non-extractable AES-GCM key generated and stored
+           as a plain CryptoKey object in IndexedDB, gated only by *choosing* to call
+           navigator.credentials.get() first in app code. That key was still directly readable and
+           usable via idb + crypto.subtle.decrypt() by anyone with script execution in the page —
+           devtools, or a future XSS bug — without ever completing a WebAuthn ceremony, i.e. the
+           biometric prompt didn't actually protect anything. That mode has been removed:
+           enableBiometricUnlock() below only succeeds when the platform returns usable PRF output,
+           and attemptBiometricUnlock() has no path that trusts an unauthenticated wrapping key.
+           Any pre-existing "gate"-mode record is detected and dropped automatically, falling back
+           to the passcode field until the user re-enrolls — which will only succeed on a device
+           that actually supports PRF.
+           PRF support is inconsistent across Android/Chrome versions/OEMs: on some devices
+           credentials.create() with a `prf` extension fails outright, on others it succeeds but
+           never returns usable PRF output. On those devices biometric unlock simply isn't offered;
+           the passcode remains the only unlock mechanism, which is always required to exist
+           regardless. Needs a secure context (https://) and a platform authenticator — quietly
            unavailable otherwise (plain file:// or an unsupported browser). */
         const SECURITY_DB_NAME = "LedgerSecurityDB_v1";
+        const BIO_RECORD_KEY = "biometric";
 
         function openSecurityDB() {
             return new Promise((resolve, reject) => {
@@ -289,68 +303,166 @@
         function getBiometricRecord() {
             return openSecurityDB().then(secDb => new Promise((resolve) => {
                 const tx = secDb.transaction(["security"], "readonly");
-                const req = tx.objectStore("security").get("biometric");
+                const req = tx.objectStore("security").get(BIO_RECORD_KEY);
                 req.onsuccess = () => resolve(req.result || null);
                 req.onerror = () => resolve(null);
             }));
         }
 
-        // Registers a platform-authenticator (fingerprint/Face) credential, then wraps the current
-        // passcode behind a non-extractable AES-GCM key gated by it.
-        async function enableBiometricUnlock(passcode) {
-            const challenge = crypto.getRandomValues(new Uint8Array(32));
-            const userId = crypto.getRandomValues(new Uint8Array(16));
-            const credential = await navigator.credentials.create({
-                publicKey: {
-                    challenge,
-                    rp: { name: "Ledger" },
-                    user: { id: userId, name: "ledger-local-user", displayName: "Ledger" },
-                    pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
-                    authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-                    timeout: 60000,
-                    attestation: "none"
-                }
-            });
-            const wrappingKey = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
-            const { iv, data } = await aesEncryptString(wrappingKey, passcode);
-            const secDb = await openSecurityDB();
-            await new Promise((resolve, reject) => {
+        function putBiometricRecord(record) {
+            return openSecurityDB().then(secDb => new Promise((resolve, reject) => {
                 const tx = secDb.transaction(["security"], "readwrite");
-                tx.objectStore("security").put({ key: "biometric", credentialId: bufToB64(credential.rawId), wrappingKey, iv, data });
+                tx.objectStore("security").put(Object.assign({ key: BIO_RECORD_KEY }, record));
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => reject(tx.error);
-            });
+            }));
         }
 
         async function disableBiometricUnlock() {
             const secDb = await openSecurityDB();
             await new Promise((resolve, reject) => {
                 const tx = secDb.transaction(["security"], "readwrite");
-                tx.objectStore("security").delete("biometric");
+                tx.objectStore("security").delete(BIO_RECORD_KEY);
                 tx.oncomplete = () => resolve();
                 tx.onerror = () => reject(tx.error);
             });
         }
 
-        // Prompts fingerprint/Face, unwraps the passcode, then derives the real app key from it
-        // exactly like manual passcode entry does. Returns true/false — never throws, so callers can
-        // silently fall back to the passcode input on cancel/failure.
+        async function deriveAesKeyFromPrfBytes(bytes) {
+            return crypto.subtle.importKey("raw", bytes, { name: "AES-GCM" }, false, ["encrypt", "decrypt"]);
+        }
+
+        function biometricCreateOptions(withPrf, salt) {
+            const opts = {
+                challenge: crypto.getRandomValues(new Uint8Array(32)),
+                rp: { name: "Ledger" },
+                user: { id: crypto.getRandomValues(new Uint8Array(16)), name: "ledger-local-user", displayName: "Ledger" },
+                pubKeyCredParams: [{ type: "public-key", alg: -7 }, { type: "public-key", alg: -257 }],
+                authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
+                timeout: 60000,
+                attestation: "none"
+            };
+            if (withPrf) opts.extensions = { prf: { eval: { first: salt } } };
+            return opts;
+        }
+
+        // Registers a platform-authenticator (fingerprint/Face) credential and, only if the
+        // platform actually returns usable PRF output, wraps the current passcode with a key
+        // derived from that output. Returns true/false — never throws.
+        async function enableBiometricUnlock(passcode) {
+            const salt = crypto.getRandomValues(new Uint8Array(32));
+            let cred = null;
+            let prfRequested = true;
+
+            // Attempt 1: register with the PRF extension requested — the stronger binding, key is
+            // derived straight from the biometric result.
+            try {
+                cred = await navigator.credentials.create({ publicKey: biometricCreateOptions(true, salt) });
+            } catch (err) {
+                console.warn("[ledger] biometric registration with PRF failed, retrying without PRF", err);
+                prfRequested = false;
+            }
+
+            // Attempt 2 (fallback): some devices reject credentials.create() outright the instant a
+            // `prf` extension is requested. If that happened, retry the exact same registration
+            // without asking for PRF at all — this still tells us whether platform auth works, even
+            // though it won't yield PRF output and enrollment will fail cleanly below.
+            if (!cred) {
+                try {
+                    cred = await navigator.credentials.create({ publicKey: biometricCreateOptions(false, salt) });
+                } catch (err2) {
+                    console.error("[ledger] biometric registration failed", err2);
+                    return false;
+                }
+            }
+
+            // Figure out whether we actually got usable PRF output. It can come back immediately on
+            // create(), or only on a follow-up get() on some platforms — and on others it never
+            // comes back at all.
+            let prfBytes = null;
+            if (prfRequested) {
+                const ext = cred.getClientExtensionResults();
+                if (ext && ext.prf && ext.prf.results && ext.prf.results.first) {
+                    prfBytes = ext.prf.results.first;
+                } else {
+                    try {
+                        const assertion = await navigator.credentials.get({
+                            publicKey: {
+                                challenge: crypto.getRandomValues(new Uint8Array(32)),
+                                allowCredentials: [{ id: cred.rawId, type: "public-key" }],
+                                userVerification: "required",
+                                extensions: { prf: { eval: { first: salt } } }
+                            }
+                        });
+                        const aext = assertion.getClientExtensionResults();
+                        prfBytes = aext && aext.prf && aext.prf.results && aext.prf.results.first;
+                    } catch (err3) { /* leave prfBytes null — enrollment fails cleanly below */ }
+                }
+            }
+
+            // No usable PRF output: do not fall back to an unauthenticated "gate" mode (see the
+            // comment block above this section) — fail enrollment cleanly instead of silently
+            // storing something weaker than what the UI implies.
+            if (!prfBytes) {
+                console.error("[ledger] biometric registration succeeded but no usable PRF output was returned; not enrolling");
+                alert("This device/browser's fingerprint or Face unlock doesn't support the security capability (PRF) this app requires, so biometric unlock can't be enabled here. Continue using your passcode.");
+                return false;
+            }
+
+            const iv = crypto.getRandomValues(new Uint8Array(12));
+            const bioKey = await deriveAesKeyFromPrfBytes(prfBytes);
+            const ctBuf = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, bioKey, new TextEncoder().encode(passcode));
+            await putBiometricRecord({
+                v: 2,
+                method: "prf",
+                credentialId: bufToB64(cred.rawId),
+                salt: bufToB64(salt),
+                iv: bufToB64(iv),
+                ct: bufToB64(ctBuf)
+            });
+            return true;
+        }
+
+        // Prompts fingerprint/Face, redoes the PRF ceremony to reconstruct the wrapping key,
+        // unwraps the passcode, then derives the real app key from it exactly like manual passcode
+        // entry does. Returns true/false — never throws, so callers can silently fall back to the
+        // passcode input on cancel/failure.
         async function attemptBiometricUnlock() {
             try {
                 const record = await getBiometricRecord();
                 if (!record) return false;
+
+                // v1 records predate PRF support and stored a plain, directly-usable CryptoKey —
+                // that mode's biometric check could be bypassed entirely by anyone with script
+                // execution in the page. Rather than honor a stale record that provides false
+                // reassurance, remove it and fall back to the passcode field; the user can
+                // re-enroll, which will only succeed if this device actually supports PRF.
+                if (record.method !== "prf") {
+                    console.warn("[ledger] removing legacy insecure biometric enrollment; re-enroll to use biometric unlock (requires PRF support)");
+                    await disableBiometricUnlock().catch(() => {});
+                    return false;
+                }
 
                 const assertion = await navigator.credentials.get({
                     publicKey: {
                         challenge: crypto.getRandomValues(new Uint8Array(32)),
                         allowCredentials: [{ id: b64ToBuf(record.credentialId), type: "public-key" }],
                         userVerification: "required",
-                        timeout: 60000
+                        timeout: 60000,
+                        extensions: { prf: { eval: { first: new Uint8Array(b64ToBuf(record.salt)) } } }
                     }
                 });
                 if (!assertion) return false;
 
-                const passcode = await aesDecryptString(record.wrappingKey, record.iv, record.data);
+                const ext = assertion.getClientExtensionResults();
+                const prfBytes = ext && ext.prf && ext.prf.results && ext.prf.results.first;
+                if (!prfBytes) return false;
+
+                const bioKey = await deriveAesKeyFromPrfBytes(prfBytes);
+                const ivBuf = new Uint8Array(b64ToBuf(record.iv));
+                const ptBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv: ivBuf }, bioKey, b64ToBuf(record.ct));
+                const passcode = new TextDecoder().decode(ptBuf);
+
                 const cfg = getLockConfig();
                 const key = await deriveKeyFromPasscode(passcode, cfg.salt, cfg.iterations);
                 const check = await aesDecryptString(key, cfg.verifierIv, cfg.verifierData);
