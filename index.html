@@ -99,6 +99,8 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
         h1 {
@@ -114,6 +116,25 @@
             border-radius: 8px;
             font-size: 0.75rem;
             font-weight: 700;
+            cursor: pointer;
+        }
+
+        .auto-lock-wrap {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            background: #f1f5f9;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 6px 8px;
+        }
+        .auto-lock-icon { font-size: 0.85rem; }
+        .auto-lock-select {
+            border: none;
+            background: transparent;
+            font-size: 0.72rem;
+            font-weight: 700;
+            color: var(--text-main);
             cursor: pointer;
         }
 
@@ -466,7 +487,7 @@
             color: #fff; font-weight: 700; font-size: 0.95rem; cursor: pointer; margin-top: 4px;
         }
         .lock-card button.lock-submit-btn:active { opacity: 0.85; }
-        #lockError {
+        #lockError, #lockError2 {
             color: var(--expense-color); font-size: 0.8rem; font-weight: 700; margin-bottom: 10px; min-height: 1em;
         }
         .lock-reset-link {
@@ -476,6 +497,17 @@
         .lock-btn-header {
             background: none; border: none; font-size: 1.2rem; cursor: pointer; padding: 6px; margin-left: 4px;
         }
+        .numpad-grid {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;
+        }
+        .numpad-btn {
+            padding: 16px 0; border-radius: 10px; border: 1.5px solid var(--border-color);
+            background: var(--bg-color); color: var(--text-main); font-size: 1.2rem; font-weight: 700;
+            cursor: pointer;
+        }
+        .numpad-btn:active { opacity: 0.7; }
+        .numpad-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+        .numpad-btn-wide { font-size: 0.85rem; }
 
         /* Toggle switch for the export-encryption option */
         .toggle-switch-row {
@@ -529,6 +561,20 @@
                 <button type="button" class="lock-submit-btn" id="biometricUnlockBtn" style="display:none; background:#0f172a; margin-bottom:12px;">🫆 Unlock with Biometrics</button>
                 <div id="lockError2"></div>
                 <input type="password" id="unlockPasscodeInput" placeholder="Passcode" autocomplete="current-password" inputmode="text">
+                <div class="numpad-grid" id="unlockNumpad">
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="1">1</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="2">2</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="3">3</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="4">4</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="5">5</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="6">6</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="7">7</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="8">8</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="9">9</button>
+                    <button type="button" class="numpad-btn numpad-btn-wide" data-click="numpadClear">Clear</button>
+                    <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="0">0</button>
+                    <button type="button" class="numpad-btn numpad-btn-wide" data-click="numpadBackspace">⌫</button>
+                </div>
                 <button type="button" class="lock-submit-btn" data-click="handleUnlockSubmit">Unlock</button>
                 <button type="button" class="lock-reset-link" data-click="handleForgotPasscode">Forgot passcode? Reset app data</button>
             </div>
@@ -546,6 +592,16 @@
                 <button class="currency-pill" data-click="openCurrencyConfig">
                     Base: <span id="currentBasePill">USD</span> ⚙
                 </button>
+                <label class="auto-lock-wrap" title="Auto-lock after inactivity">
+                    <span class="auto-lock-icon">⏱️</span>
+                    <select id="autoLockSelect" class="auto-lock-select" data-change="handleAutoLockChange">
+                        <option value="0">Never</option>
+                        <option value="1">1 min</option>
+                        <option value="5">5 min</option>
+                        <option value="15" selected>15 min</option>
+                        <option value="30">30 min</option>
+                    </select>
+                </label>
                 <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
             </div>
         </header>

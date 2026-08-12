@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v14";
-        const APP_VERSION_DATE = "2026-08-12";
+        const APP_VERSION = "v19";
+        const APP_VERSION_DATE = "2026-08-13";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -235,6 +235,33 @@
         function handleSetupPasscodeSubmit() { if (window._resolveLockFlow) window._resolveLockFlow(); }
         function handleUnlockSubmit() { if (window._resolveLockFlow) window._resolveLockFlow(); }
 
+        // On-screen number pad for the unlock passcode field — appends/removes digits from
+        // #unlockPasscodeInput. Purely an input aid alongside the physical/OS keyboard, not a
+        // replacement: passcodes are free text (any characters, min 4 chars), not digit-only PINs,
+        // so someone with a non-numeric passcode can still just type it as before.
+        // Deliberately does NOT call input.focus() — focusing the field is what pops the mobile
+        // OS keyboard, defeating the point of an on-screen numpad. blur() is called instead, so if
+        // the field was already focused (user tapped it directly before switching to the numpad),
+        // any open keyboard gets dismissed rather than staying up alongside the numpad.
+        function numpadDigit(digit) {
+            const input = document.getElementById("unlockPasscodeInput");
+            if (!input || input.disabled) return;
+            input.value += digit;
+            input.blur();
+        }
+        function numpadBackspace() {
+            const input = document.getElementById("unlockPasscodeInput");
+            if (!input || input.disabled) return;
+            input.value = input.value.slice(0, -1);
+            input.blur();
+        }
+        function numpadClear() {
+            const input = document.getElementById("unlockPasscodeInput");
+            if (!input || input.disabled) return;
+            input.value = "";
+            input.blur();
+        }
+
         // Re-locks the app immediately: drops the in-memory key/passcode and reloads, which forces
         // the unlock screen again and guarantees no decrypted data lingers in memory or on screen.
         function lockAppNow() {
@@ -242,6 +269,61 @@
             currentPasscode = null;
             location.reload();
         }
+
+        /* ================= IDLE AUTO-LOCK ================= */
+        // Locks the app automatically after a period of no user activity — selectable via the
+        // ⏱️ dropdown in the header (Never/1/5/15/30 min, default 15). The setting itself isn't
+        // sensitive, so it's kept in localStorage (plain, unencrypted) rather than the encrypted
+        // settings store — that also means it's available immediately on next launch without
+        // waiting on a DB read.
+        const AUTO_LOCK_KEY = "ledgerAutoLockMinutesV1";
+        const DEFAULT_AUTO_LOCK_MINUTES = 15;
+        const AUTO_LOCK_ACTIVITY_EVENTS = ["click", "keydown", "touchstart", "mousemove", "scroll"];
+        let autoLockMinutes = DEFAULT_AUTO_LOCK_MINUTES;
+        let autoLockTimer = null;
+        let lastAutoLockActivityAt = 0;
+
+        function getAutoLockMinutes() {
+            const raw = localStorage.getItem(AUTO_LOCK_KEY);
+            if (raw === null) return DEFAULT_AUTO_LOCK_MINUTES;
+            const n = parseInt(raw, 10);
+            return Number.isNaN(n) ? DEFAULT_AUTO_LOCK_MINUTES : n;
+        }
+
+        function resetAutoLockTimer() {
+            if (autoLockTimer) { clearTimeout(autoLockTimer); autoLockTimer = null; }
+            if (!appKey || !autoLockMinutes || autoLockMinutes <= 0) return; // "Never", or not unlocked
+            autoLockTimer = setTimeout(() => { lockAppNow(); }, autoLockMinutes * 60 * 1000);
+        }
+
+        // Wired to the header <select data-change="handleAutoLockChange">.
+        function handleAutoLockChange() {
+            const sel = document.getElementById("autoLockSelect");
+            autoLockMinutes = parseInt(sel.value, 10) || 0;
+            localStorage.setItem(AUTO_LOCK_KEY, String(autoLockMinutes));
+            resetAutoLockTimer();
+        }
+
+        // Called once from bootstrap() after a successful unlock — syncs the dropdown to the
+        // stored setting and starts the idle timer. Activity listeners are registered once at
+        // script load (below) and are cheap no-ops while the app is locked or set to "Never".
+        function initAutoLock() {
+            autoLockMinutes = getAutoLockMinutes();
+            const sel = document.getElementById("autoLockSelect");
+            if (sel) sel.value = String(autoLockMinutes);
+            resetAutoLockTimer();
+        }
+
+        AUTO_LOCK_ACTIVITY_EVENTS.forEach((evt) => {
+            document.addEventListener(evt, () => {
+                if (!appKey || !autoLockMinutes) return;
+                // Throttled — mousemove/scroll fire far more often than the timer needs resetting.
+                const now = Date.now();
+                if (now - lastAutoLockActivityAt < 1000) return;
+                lastAutoLockActivityAt = now;
+                resetAutoLockTimer();
+            }, { passive: true });
+        });
 
         async function handleForgotPasscode() {
             const step1 = await customConfirm("There is no passcode recovery. Resetting will permanently erase ALL data stored in this app on this device (accounts, transactions, categories). Continue?");
@@ -520,6 +602,29 @@
         // Dynamic category registry
         let dynamicCategories = [];
 
+        // Built-in starter categories (auto-provisioned if missing; user can still
+        // rename/remove via the Categories manager same as any custom category)
+        const DEFAULT_CATEGORIES = [
+            { name: "Dividend ASNB", type: "income", icon: "📈" },
+            { name: "Divident EPF", type: "income", icon: "🏦" },
+            { name: "FD Interest", type: "income", icon: "🏦" },
+            { name: "Bank Interest", type: "income", icon: "💰" },
+            { name: "Gift Received", type: "income", icon: "🎁" },
+            { name: "Rebate", type: "income", icon: "💸" },
+            { name: "Grants", type: "income", icon: "🎓" },
+            { name: "Bank Charges", type: "expense", icon: "💳" },
+            { name: "Education", type: "expense", icon: "🎓" },
+            { name: "Family", type: "expense", icon: "👨‍👩‍👧‍👦" },
+            { name: "Beting", type: "expense", icon: "🎰" },
+            { name: "Clothing", type: "expense", icon: "👕" },
+            { name: "Gift Given", type: "expense", icon: "🎁" },
+            { name: "Subscription", type: "expense", icon: "📡" },
+            { name: "Tech Appliances", type: "expense", icon: "💻" },
+            { name: "Travelling", type: "expense", icon: "✈️" },
+            { name: "Tax", type: "expense", icon: "🧾" },
+            { name: "Offering", type: "expense", icon: "🙏" }
+        ];
+
         // Dynamic Rich Catalog of Preset Icons grouped logically
         const emojiDirectory = {
             "Money & Fin.": ["💵", "💰", "💳", "📈", "📉", "🪙", "💎", "💸"],
@@ -547,7 +652,25 @@
             entertainment: "🎬",
             "opening balance": "🏛️",
             "fixed deposit": "🏦",
-            "interest income": "💰"
+            "interest income": "💰",
+            "dividend asnb": "📈",
+            "divident epf": "🏦",
+            "fd interest": "🏦",
+            "bank interest": "💰",
+            "gift received": "🎁",
+            "rebate": "💸",
+            "grants": "🎓",
+            "bank charges": "💳",
+            "education": "🎓",
+            "family": "👨‍👩‍👧‍👦",
+            "beting": "🎰",
+            "clothing": "👕",
+            "gift given": "🎁",
+            "subscription": "📡",
+            "tech appliances": "💻",
+            "travelling": "✈️",
+            "tax": "🧾",
+            "offering": "🙏"
         };
 
         // Helper to retrieve correct category icon safely
@@ -1320,6 +1443,22 @@
             dynamicCategories = customCats;
         }
 
+        // Idempotent: inserts any DEFAULT_CATEGORIES entry not already present
+        // (matched case-insensitively by name), so re-running on every launch is safe
+        // and never overwrites a category the user has renamed or customised.
+        async function ensureDefaultCategories() {
+            const existing = await readAllDB(STORES.CATEGORIES);
+            const existingNames = new Set(existing.map(c => c.name.toLowerCase().trim()));
+            const missing = DEFAULT_CATEGORIES.filter(c => !existingNames.has(c.name.toLowerCase()));
+            if (missing.length === 0) return;
+
+            const slugify = s => "cat_" + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+            for (const c of missing) {
+                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon });
+            }
+            await syncAndLoadCategories();
+        }
+
         // --- TRANSACTION CREATION / EDITOR CORE ---
         async function openTransactionForm(type, existingTxId = null) {
             const accounts = await readAllDB(STORES.ACCOUNTS);
@@ -1981,7 +2120,7 @@
                         : (daysLeft === 0 ? `matures today` : `matures in ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${t.fdMaturityDate})`);
                     reminderHTML += `
                         <div data-click="openResolveFdModal" data-id="${t.id}" style="cursor:pointer; background:${bg}; border:1px solid ${border}; color:${textCol}; border-radius:12px; padding:12px 14px; margin-bottom:8px; font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-                            <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(t.amount, t.currency)} placement in "${holdingAccount.name}" ${label} — plan renewal or withdrawal.</span>
+                            <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(t.amount, t.currency)} placement in "${escapeHtml(holdingAccount.name)}" ${label} — plan renewal or withdrawal.</span>
                             <span style="font-size:1.1rem;">›</span>
                         </div>
                     `;
@@ -2118,9 +2257,9 @@
                 const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(tBase, baseCurrency)}</span>` : '';
                 const iconBadge = t.type === "transfer" ? "🔄" : getCategoryIcon(t.cat, t.type);
                 const receiptBadge = t.image
-                    ? `<span data-click="openImageViewer" data-image="${t.image}" style="cursor:pointer; margin-left:4px;" title="View attached photo">📎</span>`
+                    ? `<span data-click="openImageViewer" data-image="${escapeHtml(t.image)}" style="cursor:pointer; margin-left:4px;" title="View attached photo">📎</span>`
                     : '';
-                const referenceText = t.fdReferenceNo ? ` · Ref: ${t.fdReferenceNo}` : '';
+                const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
 
                 // FD placement status — shows at a glance whether a placement is still running,
                 // overdue for action, or has already been renewed/withdrawn and closed out.
@@ -2140,7 +2279,7 @@
                     <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${t.id}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)} 📝${fdStatusBadge}</span>
-                            <span class="item-meta">${t.date} [${t.cat || 'Transfer'}]${referenceText}${receiptBadge}</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${receiptBadge}</span>
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight: bold;">
@@ -2178,7 +2317,7 @@
                 catHTML += `
                     <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" style="font-size:0.75rem; margin-top:4px;">
                         <div style="display:flex; justify-content:space-between; margin-bottom: 2px;">
-                            <strong>${icon} ${c.toUpperCase()}</strong>
+                            <strong>${icon} ${escapeHtml(c.toUpperCase())}</strong>
                             <span>${formatCurrency(amount, baseCurrency)} (${pct}%)</span>
                         </div>
                         <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%;"></div></div>
@@ -2244,6 +2383,7 @@
             if (storedRates) fxRates = storedRates.value;
 
             await syncAndLoadCategories();
+            await ensureDefaultCategories();
 
             const accs = await readAllDB(STORES.ACCOUNTS);
             if(accs.length === 0) {
@@ -2254,6 +2394,7 @@
             
             window.history.replaceState({ view: "workspace" }, "");
             
+            initAutoLock();
             renderApp();
         }
 
@@ -2523,6 +2664,9 @@
             openImageViewer: (el, e) => openImageViewer(el.dataset.image, e),
             deleteTx: (el, e) => deleteTx(Number(el.dataset.id), e),
             navigateToCategoryPage: (el) => navigateToCategoryPage(el.dataset.category, el.dataset.back || "workspace"),
+            numpadDigit: (el) => numpadDigit(el.dataset.digit),
+            numpadBackspace: () => numpadBackspace(),
+            numpadClear: () => numpadClear(),
         };
 
         const CHANGE_ACTIONS = {
@@ -2536,6 +2680,7 @@
             handleTxImageSelected: (el, e) => handleTxImageSelected(e),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
+            handleAutoLockChange: () => handleAutoLockChange(),
         };
 
         const INPUT_ACTIONS = {
