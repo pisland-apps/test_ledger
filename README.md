@@ -214,3 +214,55 @@ current value row, FD description toggle, savings statement filters
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v23 per the deploy checklist above, since both `index.html`
 and `ledger.js` changed.
+
+## v24: fixed a stray-account ledger bug, a back-button bug, added
+default payment account
+
+- **Bug: an Income/Expense entry could show up in an unrelated
+  account's ledger too.** The "To Account" `<select>` is one shared
+  element reused every time the transaction modal opens. It's only
+  shown for Transfers — for Income/Expense it's hidden, but its value
+  was never cleared, so it silently kept whatever account had last
+  been picked for an earlier Transfer. That stale value got saved as
+  the new Income/Expense record's `dest`, and the per-account ledger
+  view matches on `t.src === account OR t.dest === account` — so the
+  entry appeared a second time in whichever account happened to be
+  left over in that hidden field, even though it had nothing to do
+  with that account (and correctly did NOT affect that account's
+  actual balance, since only Transfers touch `dest` when balances are
+  computed — this is why the ledger list and the balance figure
+  stopped matching). Fixed three ways: (1) `openTransactionForm()` now
+  clears `destAccount` whenever a non-Transfer type is opened; (2)
+  `handleTransactionSubmitMobile()` now forces `record.dest = null`
+  for any non-Transfer save, regardless of what's sitting in the
+  hidden field, as a second line of defense; (3) a one-time migration
+  `migrateStaleDestFieldCleanup()` (runs on every launch, idempotent)
+  nulls out `dest` on any already-saved non-Transfer transaction that
+  has one, cleaning up historical data created before this fix.
+- **Bug: closing a modal (Save/Cancel/X) could bounce you all the way
+  back to the workspace instead of back to the page you were on** —
+  e.g. editing a transaction from inside an account's ledger view,
+  tapping Save, and landing on the dashboard instead of staying on
+  that account's ledger. Root cause: `closeModal()` removed the
+  modal's `active` class itself and THEN called `history.back()`. The
+  `popstate` listener's own job is to look for a still-active modal
+  and close it — but by the time it ran, the modal already looked
+  closed, so it always concluded "no modal was open" and fell through
+  to the page-level back logic instead (`handleLedgerBackClick()`,
+  which exits the ledger page entirely). Fixed by having `closeModal()`
+  only call `history.back()` — the `popstate` listener remains the
+  single place that actually removes the `active` class, so it now
+  correctly recognizes the modal it's closing and stops there.
+- **Default Payment Account.** Manage Accounts (🧰 Manage) now has a
+  "Default Payment Account" dropdown, persisted to the `settings`
+  store (`defaultPaymentAccount`) via `saveDefaultPaymentAccount()`.
+  `openTransactionForm()` pre-selects it in the Account field on a
+  brand-new entry (never when editing), only if the saved default
+  still exists.
+- Confirmed the "💰 Current Value" row lives only in the dashboard's
+  My Financial Accounts list (as added in v23) — it isn't duplicated
+  anywhere on the per-account ledger/activity page, so there was
+  nothing to remove there.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v24.

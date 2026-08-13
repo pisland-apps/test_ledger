@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v23";
-        const APP_VERSION_DATE = "2026-08-13";
+        const APP_VERSION = "v24";
+        const APP_VERSION_DATE = "2026-08-14";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -608,6 +608,10 @@
         let defaultIncomeCategory = "";
         let defaultExpenseCategory = "";
 
+        // Account pre-selected in the "Account" field whenever a NEW transaction entry is opened
+        // (never applied when editing). Stored in the SETTINGS store, "" means no default set.
+        let defaultPaymentAccount = "";
+
         // Built-in starter categories (auto-provisioned if missing; user can still
         // rename/remove via the Categories manager same as any custom category)
         const DEFAULT_CATEGORIES = [
@@ -802,10 +806,17 @@
             pushVirtualState(id);
         }
         
+        // Closing a modal is just "go back" — the popstate listener above is the single place
+        // that actually removes the "active" class (see its activeModals loop). Previously this
+        // function removed "active" itself before calling history.back(), which meant by the time
+        // popstate fired, every modal already looked inactive — so the listener's own "was a modal
+        // open?" check always came back false and fell through to page-level back navigation
+        // instead (e.g. leaving an account's ledger view for the workspace right after Save/Cancel
+        // on the transaction editor, rather than just closing that editor). Letting popstate do the
+        // actual closing keeps the visible UI and the history stack in lockstep.
         function closeModal(id) { 
             const el = document.getElementById(id);
             if (el && el.classList.contains("active")) {
-                el.classList.remove("active");
                 window.history.back();
             }
         }
@@ -985,7 +996,22 @@
 
             resetAccountForm();
             renderAccountSettingsList();
+            populateDefaultPaymentAccountSelect();
             openModal("accountsModal");
+        }
+
+        // Fills the Default Payment Account dropdown with every account, and selects whatever is
+        // currently saved as the default.
+        async function populateDefaultPaymentAccountSelect() {
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const select = document.getElementById("defaultPaymentAccountSelect");
+            select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.currency || a.type)})</option>`).join("");
+            select.value = accounts.some(a => a.id === defaultPaymentAccount) ? defaultPaymentAccount : "";
+        }
+
+        async function saveDefaultPaymentAccount() {
+            defaultPaymentAccount = document.getElementById("defaultPaymentAccountSelect").value;
+            await writeDB(STORES.SETTINGS, { key: "defaultPaymentAccount", value: defaultPaymentAccount });
         }
 
         let multiOpeningRowCounter = 0;
@@ -1517,6 +1543,7 @@
             }
             await syncAndLoadCategories();
             await migrateOthersCategoryRename();
+            await migrateStaleDestFieldCleanup();
         }
 
         // One-time migration: "Others" (the implicit income/expense fallback category — never a
@@ -1531,6 +1558,22 @@
             for (const t of txs) {
                 if (t.cat === "Others" && (t.type === "income" || t.type === "expense")) {
                     t.cat = t.type === "income" ? "Other Income" : "Other Expenses";
+                    await writeDB(STORES.TRANSACTIONS, t);
+                }
+            }
+        }
+
+        // One-time cleanup for a fixed bug: the "To Account" <select> used to keep whatever value
+        // it last held from an earlier Transfer entry even after being hidden for Income/Expense,
+        // so some already-saved Income/Expense records may carry a leftover `dest` pointing at an
+        // unrelated account. That stray `dest` made the record wrongly show up in that other
+        // account's ledger too (the per-account view matches on src OR dest). Only `dest` is
+        // cleared — the record's real account (`src`), amount, category, etc. are untouched.
+        async function migrateStaleDestFieldCleanup() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            for (const t of txs) {
+                if (t.type !== "transfer" && t.dest) {
+                    t.dest = null;
                     await writeDB(STORES.TRANSACTIONS, t);
                 }
             }
@@ -1605,8 +1648,24 @@
                 document.getElementById("txDesc").value = "";
                 document.getElementById("txAmount").value = "";
 
+                // Pre-select the user's default payment account, if one is set and still exists —
+                // new entries only, never when editing (handled above via tx.src).
+                if (defaultPaymentAccount && accounts.some(a => a.id === defaultPaymentAccount)) {
+                    srcSelect.value = defaultPaymentAccount;
+                }
+
                 document.getElementById("destAccRow").style.display = type === "transfer" ? "block" : "none";
                 document.getElementById("categoryRow").style.display = type === "transfer" ? "none" : "block";
+
+                // "To Account" is a single <select> shared across every time the transaction modal
+                // is opened. It's only reset here (not on every open) because without it, a value
+                // picked for an earlier Transfer entry silently lingers in the DOM after the field
+                // is hidden for Income/Expense — and would otherwise get saved as that record's
+                // `dest`, making it wrongly appear in that other account's ledger too. See also the
+                // defensive `record.dest = null` guard in handleTransactionSubmitMobile().
+                if (type !== "transfer") {
+                    document.getElementById("destAccount").value = "";
+                }
 
                 const currentCats = dynamicCategories.filter(c => c.type === type).map(c => c.name);
                 const fallbackGroup = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
@@ -2100,7 +2159,12 @@
                 desc: desc,
                 amount: parsedAmount,
                 src: document.getElementById("srcAccount").value,
-                dest: document.getElementById("destAccount").value,
+                // "To Account" only applies to Transfers — the <select> can carry a leftover
+                // value from an earlier Transfer entry (the field is hidden, not cleared, when
+                // switching to Income/Expense), so it's forced to null here rather than trusted
+                // as-is; otherwise a stale `dest` makes this record wrongly appear in that other
+                // account's ledger too (see the isBound check in renderApp()).
+                dest: document.getElementById("txType").value === "transfer" ? document.getElementById("destAccount").value : null,
                 currency: document.getElementById("txCurrency").value,
                 cat: document.getElementById("txCategory").value,
                 date: dateVal,
@@ -2629,6 +2693,9 @@
             const storedDefaultExpenseCat = await readKeyDB("settings", "defaultExpenseCategory");
             if (storedDefaultExpenseCat) defaultExpenseCategory = storedDefaultExpenseCat.value || "";
 
+            const storedDefaultPaymentAcc = await readKeyDB("settings", "defaultPaymentAccount");
+            if (storedDefaultPaymentAcc) defaultPaymentAccount = storedDefaultPaymentAcc.value || "";
+
             await syncAndLoadCategories();
             await ensureDefaultCategories();
 
@@ -2882,6 +2949,7 @@
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             handleAutoLockChange: () => handleAutoLockChange(),
             saveDefaultCategories: () => saveDefaultCategories(),
+            saveDefaultPaymentAccount: () => saveDefaultPaymentAccount(),
             toggleTxFdDescMode: () => toggleTxFdDescMode(),
             resetSavingsPageAndRender: () => renderSavingsStatement(),
         };

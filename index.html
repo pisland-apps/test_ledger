@@ -835,6 +835,15 @@
                 <button type="button" id="accFormSubmitBtn" data-click="handleCreateAccountMobile" class="submit-btn" style="background: var(--transfer-color);">Create Account</button>
                 <button type="button" id="accFormCancelBtn" class="submit-btn" data-click="resetAccountForm" style="background:#64748b; margin-top:6px; display:none;">Cancel Edit</button>
             </div>
+            <!-- Default account pre-selected on new transaction entries -->
+            <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
+                <h4 style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Default Payment Account</h4>
+                <div class="form-row">
+                    <label>Account pre-selected on new entries</label>
+                    <select id="defaultPaymentAccountSelect" class="form-input" data-change="saveDefaultPaymentAccount"></select>
+                </div>
+            </div>
+
             <div class="config-list" id="accountConfigList"></div>
         </div>
     </div>
