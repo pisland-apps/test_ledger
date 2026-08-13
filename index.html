@@ -655,8 +655,7 @@
                     <option value="9">October</option><option value="10">November</option><option value="11">December</option>
                 </select>
                 <select id="filterYear" data-change="resetLedgerPageAndRender">
-                    <option value="all" selected>All Years</option>
-                    <option value="2024">2024</option><option value="2025">2025</option><option value="2026">2026</option><option value="2027">2027</option><option value="2028">2028</option>
+                    <option value="all">All Years</option>
                 </select>
             </div>
         </div>
@@ -696,9 +695,6 @@
                 <span class="toggle-slider"></span>
             </label>
         </div>
-        <div class="util-row" style="margin-top:8px;">
-            <button class="btn-util" data-click="repairLegacyFdEntries" style="width:100%;">🔧 Fix Legacy FD/Opening Balance Entries</button>
-        </div>
     </div>
 
     <!-- ================= PAGE 2: LEDGER ACTIVITY LOG ================= -->
@@ -722,15 +718,29 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Balanced Category Sheet</p>
             </div>
         </div>
-        
+
+        <div class="filters" style="margin-bottom:12px;">
+            <select id="savingsYearFilter" data-change="resetSavingsPageAndRender">
+                <option value="all">All Years</option>
+            </select>
+        </div>
+
         <div class="statement-card">
             <h4 style="margin-bottom:10px; color:var(--income-color);">INCOME CATEGORIES</h4>
             <div id="savingsIncomeRows"></div>
+            <div class="statement-row" style="border-top:2px solid var(--border-color); margin-top:8px; padding-top:8px;">
+                <strong>Total Income</strong>
+                <span id="savingsIncomeTotal" style="color: var(--income-color); font-weight:800;">+0.00</span>
+            </div>
         </div>
 
         <div class="statement-card">
             <h4 style="margin-bottom:10px; color:var(--expense-color);">EXPENSE CATEGORIES</h4>
             <div id="savingsExpenseRows"></div>
+            <div class="statement-row" style="border-top:2px solid var(--border-color); margin-top:8px; padding-top:8px;">
+                <strong>Total Expenses</strong>
+                <span id="savingsExpenseTotal" style="color: var(--expense-color); font-weight:800;">-0.00</span>
+            </div>
         </div>
 
         <div class="statement-card" style="border: 2px solid var(--primary); background: #f5f3ff;">
@@ -863,6 +873,22 @@
                 <!-- Crucial Mobile Fix: Changed to direct touch target button executing native JS -->
                 <button type="button" data-click="handleCreateCategoryMobile" class="submit-btn">Register Category Badge</button>
             </div>
+
+            <!-- Default category pre-selected on new Income / Expense entries -->
+            <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
+                <h4 style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Default Category</h4>
+                <div class="form-row-inline">
+                    <div>
+                        <label>Default Income Category</label>
+                        <select id="defaultIncomeCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
+                    </div>
+                    <div>
+                        <label>Default Expense Category</label>
+                        <select id="defaultExpenseCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
+                    </div>
+                </div>
+            </div>
+
             <div class="config-list" id="categoriesConfigList" style="max-height: 200px; overflow-y:auto;"></div>
         </div>
     </div>
@@ -877,7 +903,7 @@
             <div>
                 <input type="hidden" id="txId">
                 <input type="hidden" id="txType">
-                <div class="form-row"><label>Description</label><input type="text" id="txDesc" required></div>
+                <div class="form-row" id="txDescRow"><label>Description</label><input type="text" id="txDesc" required></div>
                 <div class="form-row-inline">
                     <div><label>Amount</label><input type="number" id="txAmount" step="0.01" required data-input="recalcTxFdMaturity"></div>
                     <div><label>Currency</label><select id="txCurrency" class="form-input" data-change="recalcTxFdMaturity"></select></div>
@@ -893,6 +919,16 @@
                     <div class="form-row">
                         <label>Account / Reference No. (optional)</label>
                         <input type="text" id="txFdReference" placeholder="e.g. FD-2026-00123">
+                    </div>
+                    <!-- FD placements already have their own Account/Reference No. field above, so the
+                         generic Description field is optional here — off by default (auto-filled from
+                         the reference no./placement terms), switchable to manual free text. -->
+                    <div class="toggle-switch-row" style="margin:0 0 4px;">
+                        <span class="toggle-switch-label" style="font-size:0.75rem;">✏️ Manually fill Description</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="txFdManualDesc" data-change="toggleTxFdDescMode">
+                            <span class="toggle-slider"></span>
+                        </label>
                     </div>
                     <div class="form-row-inline">
                         <div>

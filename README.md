@@ -117,3 +117,100 @@ re-iconed, or deleted. Matching entries were also added to the
 `fallbackIcons` map as a backstop, so the right icon still shows even if
 one of these categories is later deleted from the Categories store while
 old transactions still reference its name.
+
+## v20: category sort, Betting rename, year range, cleanup
+
+- **Categories now sort alphabetically.** `syncAndLoadCategories()` sorts
+  `dynamicCategories` by name (locale-aware, case-insensitive) once on
+  load, so the transaction-form category dropdown, the Categories
+  manager list, and the income/expense report lists are all sorted
+  automatically — each of those filters `dynamicCategories` by type
+  without re-sorting, so they inherit the order.
+- **"Beting" → "Betting".** `DEFAULT_CATEGORIES` and `fallbackIcons` were
+  corrected to "Betting". `ensureDefaultCategories()` also does a
+  one-time migration: if a category with the auto-seeded id `cat_beting`
+  still has the name "Beting", it's renamed in place to "Betting" rather
+  than left alongside a newly-inserted "Betting" entry — so v19 users
+  don't end up with a duplicate. It only touches that specific
+  auto-seeded record, never a category you've since renamed yourself.
+- **Removed the "Fix Legacy FD/Opening Balance Entries" button** from
+  the main page.
+- **Year filter range** changed from All Years, 2024–2028 to All Years,
+  2026–2036.
+
+## v21: removed legacy FD repair function
+
+`repairLegacyFdEntries()` and its `CLICK_ACTIONS` dispatch entry are now
+fully deleted from `ledger.js` (v20 only removed the button; the
+function and its console-callable path remained). If a pre-v14.0
+account's opening balance / FD placement / renewal entries ever need
+that repair again, restore the function from an earlier deploy zip
+(v19 or v20) rather than re-adding a UI entry point for it.
+
+## v22: dynamic year range, category sort carried forward
+
+(No functional changes beyond v21 beyond the version bump baseline this
+zip was built from — see the app's own in-file history for detail.)
+
+## v23: default categories, "Others" rename, opening balance ordering,
+current value row, FD description toggle, savings statement filters
+
+- **Default Income/Expense category.** The Categories manager
+  (🏷 Categories) now has a "Default Category" section with two
+  dropdowns — Default Income Category / Default Expense Category.
+  Selecting one persists it to the `settings` store
+  (`defaultIncomeCategory` / `defaultExpenseCategory`) via
+  `saveDefaultCategories()`. `openTransactionForm()` pre-selects that
+  category on a brand-new Income/Expense entry (never when editing an
+  existing transaction), only if the saved default still exists among
+  the current category options.
+- **"Others" → "Other Income" / "Other Expenses".** The implicit
+  fallback category (never a real stored `categories` record — just a
+  literal string merged into the dropdown/summary lists) is now
+  type-specific: income entries see "Other Income", expense entries see
+  "Other Expenses". Updated everywhere the old literal `"Others"`
+  appeared (transaction form dropdown ×2, category summary ×2), the
+  "protected keyword" guard in `handleCreateCategoryMobile()` (now
+  blocks creating a category literally named "Other Income" or "Other
+  Expenses"), and `fallbackIcons` (added `other income` / `other
+  expenses`, kept legacy `others` for old data). Added a one-time
+  migration `migrateOthersCategoryRename()` (runs after
+  `ensureDefaultCategories()` on every launch, idempotent) that rewrites
+  any existing transaction whose `cat` is still the literal string
+  `"Others"` to the type-appropriate new name.
+- **Opening Balance Setup moved to the bottom.** In the per-account
+  ledger view, the "[Opening Balance Setup]" pseudo-entry is now built
+  the same way as before but appended to `ledgerHTML` LAST, so it
+  renders under every real transaction instead of pinned above them.
+- **"Current Value" row.** The "My Financial Accounts" list on the
+  dashboard now has a highlighted top row — "💰 Current Value" — showing
+  the same total (`globalBaseNetWorth`, converted to base currency)
+  as the header's Portfolio Net Worth figure, surfaced again at the top
+  of the account list itself.
+- **Fixed Deposit: optional manual Description.** The FD placement
+  terms block (shown when depositing into a Fixed Deposit account) now
+  has a "✏️ Manually fill Description" toggle, off by default. Off:
+  the Description field is hidden and not required; on submit it's
+  auto-filled from `buildAutoFdDescription()` — "Fixed Deposit Placement
+  (<reference no.>)" if a reference was given, else just "Fixed Deposit
+  Placement" — since the placement already has its own Account/Reference
+  No. field. On: the Description field behaves as before (shown,
+  required, free text). Editing an existing FD transaction always
+  defaults the toggle to "manual" so an already-saved description stays
+  visible rather than being hidden.
+- **Net Savings Statement: own Year filter, hidden zero rows, totals.**
+  The statement page now has its own "All Years / Year" dropdown
+  (`#savingsYearFilter`, `populateSavingsYearFilterOptions()`) — fully
+  independent of the dashboard's month+year filter, so switching the
+  dashboard filter no longer affects this page and vice versa. Rendering
+  moved into a dedicated `renderSavingsStatement()` (called at the end
+  of `renderApp()` and whenever the new Year select changes). Category
+  rows whose total is within `SAVINGS_ZERO_EPS` (0.005) of zero are
+  hidden — this also absorbs FX-conversion rounding noise that could
+  otherwise surface as a stray "-0.00" expense line. Added a "Total
+  Income" / "Total Expenses" row under each category list
+  (`#savingsIncomeTotal` / `#savingsExpenseTotal`).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v23 per the deploy checklist above, since both `index.html`
+and `ledger.js` changed.
