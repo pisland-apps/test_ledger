@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v29";
-        const APP_VERSION_DATE = "2026-08-15";
+        const APP_VERSION = "v30";
+        const APP_VERSION_DATE = "2026-08-16";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -733,10 +733,18 @@
 
             const ledgerPage = document.getElementById("page-ledger");
             const savingsPage = document.getElementById("page-savings");
+            const accountsPage = document.getElementById("page-accounts");
+            const categoriesPage = document.getElementById("page-categories");
+            const backupPage = document.getElementById("page-backup");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
-            } else if (!savingsPage.classList.contains("hidden")) {
+            } else if (
+                !savingsPage.classList.contains("hidden") ||
+                !accountsPage.classList.contains("hidden") ||
+                !categoriesPage.classList.contains("hidden") ||
+                !backupPage.classList.contains("hidden")
+            ) {
                 navigateToWorkspace();
             }
         });
@@ -851,6 +859,16 @@
         }
 
         // --- SPA NAVIGATION PIPELINE ---
+        // Every top-level page div's id — used by showPage() to hide all but the target,
+        // so adding a new page never risks leaving a stale one visible underneath.
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup"];
+        function showPage(id) {
+            APP_PAGE_IDS.forEach(p => {
+                const el = document.getElementById(p);
+                if (el) el.classList.toggle("hidden", p !== id);
+            });
+        }
+
         function navigateToLedgerPage(accountId) {
             workspaceScrollY = window.scrollY;
             activeLedgerAccountView = accountId;
@@ -858,9 +876,7 @@
             directTypeView = "all";
             ledgerBackToPage = "workspace";
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
-            document.getElementById("page-workspace").classList.add("hidden");
-            document.getElementById("page-savings").classList.add("hidden");
-            document.getElementById("page-ledger").classList.remove("hidden");
+            showPage("page-ledger");
             window.scrollTo(0,0);
             pushVirtualState("ledger");
             renderApp();
@@ -873,9 +889,7 @@
             directTypeView = "all";
             ledgerBackToPage = backTarget;
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
-            document.getElementById("page-workspace").classList.add("hidden");
-            document.getElementById("page-savings").classList.add("hidden");
-            document.getElementById("page-ledger").classList.remove("hidden");
+            showPage("page-ledger");
             window.scrollTo(0,0);
             pushVirtualState("category_history");
             renderApp();
@@ -888,9 +902,7 @@
             activeCategoryView = "all";
             ledgerBackToPage = "workspace";
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
-            document.getElementById("page-workspace").classList.add("hidden");
-            document.getElementById("page-savings").classList.add("hidden");
-            document.getElementById("page-ledger").classList.remove("hidden");
+            showPage("page-ledger");
             window.scrollTo(0,0);
             pushVirtualState("ledger_type_filter");
             renderApp();
@@ -898,18 +910,14 @@
 
         function navigateToSavingsPage() {
             workspaceScrollY = window.scrollY;
-            document.getElementById("page-workspace").classList.add("hidden");
-            document.getElementById("page-ledger").classList.add("hidden");
-            document.getElementById("page-savings").classList.remove("hidden");
+            showPage("page-savings");
             window.scrollTo(0,0);
             pushVirtualState("savings");
             renderApp();
         }
 
         async function navigateToWorkspace() {
-            document.getElementById("page-ledger").classList.add("hidden");
-            document.getElementById("page-savings").classList.add("hidden");
-            document.getElementById("page-workspace").classList.remove("hidden");
+            showPage("page-workspace");
             await renderApp();
             // Restored after renderApp() finishes rebuilding the dashboard's DOM (account list,
             // report card, etc.) — scrolling before that would target a not-yet-full-height page
@@ -917,10 +925,33 @@
             window.scrollTo(0, workspaceScrollY);
         }
 
+        async function navigateToAccountsPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-accounts");
+            window.scrollTo(0, 0);
+            pushVirtualState("accounts");
+            await renderAccountsPage();
+        }
+
+        async function navigateToCategoriesPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-categories");
+            window.scrollTo(0, 0);
+            pushVirtualState("categories");
+            await renderCategoriesPage();
+        }
+
+        function navigateToBackupPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-backup");
+            window.scrollTo(0, 0);
+            pushVirtualState("backup");
+            calculateStorageMetrics();
+        }
+
         function handleLedgerBackClick() {
             if (ledgerBackToPage === "savings") {
-                document.getElementById("page-ledger").classList.add("hidden");
-                document.getElementById("page-savings").classList.remove("hidden");
+                showPage("page-savings");
             } else {
                 navigateToWorkspace();
             }
@@ -947,8 +978,14 @@
             const workspaceHidden = document.getElementById("page-workspace").classList.contains("hidden");
             const savingsHidden = document.getElementById("page-savings").classList.contains("hidden");
             const ledgerHidden = document.getElementById("page-ledger").classList.contains("hidden");
+            const accountsHidden = document.getElementById("page-accounts").classList.contains("hidden");
+            const categoriesHidden = document.getElementById("page-categories").classList.contains("hidden");
+            const backupHidden = document.getElementById("page-backup").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
+            else if (!accountsHidden) target = "accounts";
+            else if (!categoriesHidden) target = "categories";
+            else if (!backupHidden) target = "backup";
             else if (!ledgerHidden) {
                 const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
                 target = isUnfiltered ? "all-ledger" : null;
@@ -959,25 +996,18 @@
             }
         }
 
-        // Routes a sidebar tap to the matching page/modal. Modals (accounts/categories/currency)
-        // are their own overlay and don't require the dashboard to be the visible page underneath.
+        // Routes a sidebar tap to the matching page/modal. Backup & Restore and Accounts/Categories
+        // are now full pages (not modals) — see navigateToAccountsPage/CategoriesPage/BackupPage.
         function sidebarGo(el) {
             const target = el.dataset.target;
             closeSidebar();
             if (target === "workspace") navigateToWorkspace();
             else if (target === "all-ledger") navigateToLedgerPage("all");
             else if (target === "savings") navigateToSavingsPage();
-            else if (target === "accounts") openAccountsConfig();
-            else if (target === "categories") openCategoriesConfig();
-            else if (target === "currency") openCurrencyConfig();
-            else if (target === "backup") {
-                (async () => {
-                    if (document.getElementById("page-workspace").classList.contains("hidden")) {
-                        await navigateToWorkspace();
-                    }
-                    document.querySelector(".util-row")?.scrollIntoView({ behavior: "smooth", block: "center" });
-                })();
-            } else if (target === "lock") lockAppNow();
+            else if (target === "accounts") navigateToAccountsPage();
+            else if (target === "categories") navigateToCategoriesPage();
+            else if (target === "backup") navigateToBackupPage();
+            else if (target === "lock") lockAppNow();
         }
 
         // --- LOCAL STORAGE DATA CALCULATION ---
@@ -1058,15 +1088,12 @@
         }
 
         // --- ACCOUNTS MANAGER SETUP (WITH INTEGRATED EDITOR) ---
-        function openAccountsConfig() {
+        // Opens the Accounts modal in "create" mode — used by the "+" FAB on the Accounts page.
+        function openAccountFormModal() {
             const select = document.getElementById("newAccCurrency"); select.innerHTML = "";
             Object.keys(fxRates).forEach(c => { select.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
-            
             select.value = baseCurrency;
-
             resetAccountForm();
-            renderAccountSettingsList();
-            populateDefaultPaymentAccountSelect();
             openModal("accountsModal");
         }
 
@@ -1244,6 +1271,7 @@
             document.getElementById("accountFormHeaderTitle").textContent = "Create New Account";
             document.getElementById("accFormSubmitBtn").textContent = "Create Account";
             document.getElementById("accFormCancelBtn").style.display = "none";
+            document.getElementById("accFormDeleteBtn").style.display = "none";
 
             document.getElementById("multiOpeningRows").innerHTML = "";
             document.getElementById("fdOpeningRows").innerHTML = "";
@@ -1365,11 +1393,24 @@
             }
 
             resetAccountForm();
-            renderAccountSettingsList();
-            renderApp();
+            await refreshAfterAccountChange();
         }
 
-        async function renderAccountSettingsList() {
+        // Refreshes the dashboard's compact account list (always, via renderApp) and, if the
+        // full Accounts page happens to be the one on screen, its list too — called after any
+        // account create/edit/delete so whichever view the user is looking at stays current.
+        async function refreshAfterAccountChange() {
+            await renderApp();
+            if (!document.getElementById("page-accounts").classList.contains("hidden")) {
+                await renderAccountsPage();
+            }
+        }
+
+        // Renders the full "Accounts" page: the Default Payment Account selector plus a plain
+        // list of every account (tap a row to open its Activity page — editing/deleting now
+        // lives on that Activity page instead, via the ✏️ icon beside the account name).
+        async function renderAccountsPage() {
+            await populateDefaultPaymentAccountSelect();
             const accounts = await readAllDB(STORES.ACCOUNTS);
             let html = "";
             accounts.forEach(a => {
@@ -1380,24 +1421,28 @@
                         : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${a.currency}</span>`;
 
                 const balSummary = a.type === "fd" || a.type === "multi"
-                    ? '<span style="color:var(--text-muted);">— balances shown in Accounts list</span>'
+                    ? '<span style="color:var(--text-muted);">— balances shown in Activity</span>'
                     : `<span style="color:var(--text-muted);">${formatCurrency(a.initialBalance, a.currency)}</span>`;
 
                 html += `
-                    <div class="config-item">
-                        <span style="cursor:pointer;" data-click="editAccount" data-id="${a.id}">
-                            <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary} 📝
-                        </span>
-                        <button class="trash-btn" data-click="removeAccount" data-id="${a.id}">🗑</button>
+                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}">
+                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}</span>
+                        <span style="color:var(--text-muted);">›</span>
                     </div>`;
             });
-            document.getElementById("accountConfigList").innerHTML = html;
+            document.getElementById("accountsPageList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts yet — tap + to add one.</p>`;
         }
 
+        // Shared by both entry points: the ✏️ icon on an account's Activity page, and (kept for
+        // completeness) any future caller passing an id directly. Populates the form and opens
+        // the Accounts modal in "edit" mode, showing the Delete button.
         async function editAccount(id) {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const account = accounts.find(a => a.id === id);
             if (!account) return;
+
+            const select = document.getElementById("newAccCurrency"); select.innerHTML = "";
+            Object.keys(fxRates).forEach(c => { select.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
 
             document.getElementById("editAccountId").value = account.id;
             document.getElementById("newAccName").value = account.name;
@@ -1411,8 +1456,28 @@
             document.getElementById("accountFormHeaderTitle").textContent = "Edit Account Credentials";
             document.getElementById("accFormSubmitBtn").textContent = "Save Changes";
             document.getElementById("accFormCancelBtn").style.display = "block";
+            document.getElementById("accFormDeleteBtn").style.display = "block";
 
-            pushVirtualState("edit_account");
+            const modal = document.getElementById("accountsModal");
+            if (modal.classList.contains("active")) {
+                pushVirtualState("edit_account");
+            } else {
+                openModal("accountsModal");
+            }
+        }
+
+        // Wired to the ✏️ icon beside the account name on its Activity page — reads which
+        // account is currently being viewed rather than relying on a data-id, since that page
+        // is shared by several views (single account / category / type / "all").
+        function editAccountFromLedgerHeader() {
+            if (activeLedgerAccountView !== "all") editAccount(activeLedgerAccountView);
+        }
+
+        // Wired to the Delete button inside the Accounts modal — only visible while editing,
+        // so editAccountId is always populated when this fires.
+        function deleteAccountFromForm() {
+            const id = document.getElementById("editAccountId").value;
+            if (id) removeAccount(id);
         }
 
         async function removeAccount(id) {
@@ -1431,20 +1496,27 @@
                 return;
             }
 
-            if (activeLedgerAccountView === id) activeLedgerAccountView = "all";
+            const wasViewingThisAccount = activeLedgerAccountView === id;
+            if (wasViewingThisAccount) activeLedgerAccountView = "all";
+
             resetAccountForm();
-            renderAccountSettingsList();
-            renderApp();
+            const modal = document.getElementById("accountsModal");
+            if (modal.classList.contains("active")) modal.classList.remove("active");
+
+            if (wasViewingThisAccount && !document.getElementById("page-ledger").classList.contains("hidden")) {
+                await navigateToWorkspace();
+            } else {
+                await refreshAfterAccountChange();
+            }
         }
 
         // --- CATEGORIES SYSTEM WORKSPACE DESIGNER ---
-        function openCategoriesConfig() {
+        // Opens the Categories modal in "add" mode — used by the "+" FAB on the Categories page.
+        function openCategoryFormModal() {
             document.getElementById("catLabelName").value = "";
             document.getElementById("catSelectedEmoji").value = "🍔";
             document.getElementById("currentSelectedEmojiBadge").textContent = "🍔";
             buildEmojiSelectionPanel();
-            renderCategoriesManagerList();
-            populateDefaultCategorySelects();
             openModal("categoriesModal");
         }
 
@@ -1540,27 +1612,37 @@
             document.getElementById("catLabelName").value = "";
             
             await syncAndLoadCategories();
-            renderCategoriesManagerList();
-            renderApp();
+            await refreshAfterCategoryChange();
         }
 
-        async function renderCategoriesManagerList() {
-            const listContainer = document.getElementById("categoriesConfigList");
-            listContainer.innerHTML = "";
-            
-            dynamicCategories.forEach(c => {
-                const item = document.createElement("div");
-                item.className = "config-item";
-                item.innerHTML = `
-                    <span class="category-display-badge">
-                        <span>${c.icon}</span> 
-                        <strong>${escapeHtml(c.name)}</strong> 
-                        <span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; text-transform:uppercase; font-weight:bold;">${c.type}</span>
-                    </span>
+        // Refreshes the dashboard (renderApp, for category dropdowns elsewhere) and, if the full
+        // Categories page happens to be the one on screen, its income/spending lists too.
+        async function refreshAfterCategoryChange() {
+            await renderApp();
+            if (!document.getElementById("page-categories").classList.contains("hidden")) {
+                await renderCategoriesPage();
+            }
+        }
+
+        // Renders the full "Categories" page: Default Category selectors up top, then every
+        // category split into Income / Spending sections (dynamicCategories already includes
+        // both custom and starter categories — see ensureDefaultCategories).
+        async function renderCategoriesPage() {
+            populateDefaultCategorySelects();
+
+            const rowHtml = c => `
+                <div class="config-item">
+                    <span class="category-display-badge"><span>${c.icon}</span> <strong>${escapeHtml(c.name)}</strong></span>
                     <button class="trash-btn" data-click="removeCategory" data-id="${c.id}">🗑</button>
-                `;
-                listContainer.appendChild(item);
-            });
+                </div>`;
+
+            const incomeCats = dynamicCategories.filter(c => c.type === "income");
+            const expenseCats = dynamicCategories.filter(c => c.type === "expense");
+
+            document.getElementById("categoriesPageIncomeList").innerHTML = incomeCats.map(rowHtml).join("")
+                || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No income categories yet.</p>`;
+            document.getElementById("categoriesPageExpenseList").innerHTML = expenseCats.map(rowHtml).join("")
+                || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No expense categories yet.</p>`;
         }
 
         async function removeCategory(id) {
@@ -1574,8 +1656,7 @@
                 return;
             }
             await syncAndLoadCategories();
-            renderCategoriesManagerList();
-            renderApp();
+            await refreshAfterCategoryChange();
         }
 
         async function syncAndLoadCategories() {
@@ -2525,13 +2606,17 @@
             if (activeCategoryView !== "all") {
                 const icon = getCategoryIcon(activeCategoryView);
                 document.getElementById("ledgerTargetTitle").textContent = `${icon} ${activeCategoryView.toUpperCase()}`;
+                document.getElementById("ledgerTargetEditBtn").style.display = "none";
             } else if (directTypeView !== "all") {
                 document.getElementById("ledgerTargetTitle").textContent = `All ${directTypeView.charAt(0).toUpperCase() + directTypeView.slice(1)} Log`;
+                document.getElementById("ledgerTargetEditBtn").style.display = "none";
             } else if (activeLedgerAccountView === "all") {
                 document.getElementById("ledgerTargetTitle").textContent = "Portfolio General Log";
+                document.getElementById("ledgerTargetEditBtn").style.display = "none";
             } else {
                 const currentActiveAccName = accounts.find(a => a.id === activeLedgerAccountView)?.name || "Vault";
                 document.getElementById("ledgerTargetTitle").textContent = `${currentActiveAccName} Activity`;
+                document.getElementById("ledgerTargetEditBtn").style.display = "inline-block";
             }
 
             let incBaseTotal = 0, expBaseTotal = 0;
@@ -3062,9 +3147,14 @@
             handleForgotPasscode: () => handleForgotPasscode(),
             openCurrencyConfig: () => openCurrencyConfig(),
             lockAppNow: () => lockAppNow(),
-            openCategoriesConfig: () => openCategoriesConfig(),
             navigateToSavingsPage: () => navigateToSavingsPage(),
-            openAccountsConfig: () => openAccountsConfig(),
+            navigateToAccountsPage: () => navigateToAccountsPage(),
+            navigateToCategoriesPage: () => navigateToCategoriesPage(),
+            navigateToBackupPage: () => navigateToBackupPage(),
+            openAccountFormModal: () => openAccountFormModal(),
+            openCategoryFormModal: () => openCategoryFormModal(),
+            deleteAccountFromForm: () => deleteAccountFromForm(),
+            editAccountFromLedgerHeader: () => editAccountFromLedgerHeader(),
             exportBackup: () => exportBackup(),
             openImportInput: () => document.getElementById("importInput").click(),
             handleLedgerBackClick: () => handleLedgerBackClick(),

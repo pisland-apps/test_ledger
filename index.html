@@ -448,6 +448,40 @@
             margin: 8px 20px;
         }
 
+        /* Floating "+" action button used on the Accounts / Categories full pages */
+        .fab-btn {
+            position: fixed;
+            right: 20px;
+            bottom: 24px;
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            font-size: 1.8rem;
+            font-weight: 700;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.45);
+            cursor: pointer;
+            z-index: 50;
+        }
+        .fab-btn:active { background: #4f46e5; }
+
+        /* Small icon-only button beside the account name on its Activity page */
+        .icon-edit-btn {
+            background: none;
+            border: none;
+            font-size: 1rem;
+            padding: 4px 6px;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .icon-edit-btn:active { opacity: 0.6; }
+
         .ledger-container {
             background: var(--card-bg);
             border: 1.5px solid var(--border-color);
@@ -688,9 +722,6 @@
             <button class="sidebar-item" data-click="sidebarGo" data-target="categories">
                 <span class="sidebar-item-icon">🏷</span> Categories
             </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="currency">
-                <span class="sidebar-item-icon">💱</span> Currency &amp; FX Rates
-            </button>
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Data &amp; Security</div>
@@ -760,16 +791,6 @@
                 <button class="currency-pill" data-click="openCurrencyConfig">
                     Base: <span id="currentBasePill">USD</span> ⚙
                 </button>
-                <label class="auto-lock-wrap" title="Auto-lock after inactivity">
-                    <span class="auto-lock-icon">⏱️</span>
-                    <select id="autoLockSelect" class="auto-lock-select" data-change="handleAutoLockChange">
-                        <option value="0">Never</option>
-                        <option value="1">1 min</option>
-                        <option value="5">5 min</option>
-                        <option value="15" selected>15 min</option>
-                        <option value="30">30 min</option>
-                    </select>
-                </label>
                 <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
             </div>
         </header>
@@ -778,7 +799,7 @@
 
         <div class="section-header" style="margin-top: 0;">
             <span class="section-title">Quick Transaction Entry</span>
-            <button class="text-btn" data-click="openCategoriesConfig">🏷 Categories</button>
+            <button class="text-btn" data-click="navigateToCategoriesPage">🏷 Categories</button>
         </div>
         <div class="actions-bar">
             <button class="action-btn btn-income" data-click="openTransactionForm" data-type="income">
@@ -830,11 +851,102 @@
 
         <div class="section-header">
             <span class="section-title">My Financial Accounts</span>
-            <button class="text-btn" data-click="openAccountsConfig">🛠 Manage</button>
+            <button class="text-btn" data-click="navigateToAccountsPage">🛠 Manage</button>
         </div>
         <div class="account-list-container" id="accountsListView"></div>
+    </div>
 
-        <!-- Fully Translated Data Meter Info -->
+
+    <!-- ================= PAGE 2: LEDGER ACTIVITY LOG ================= -->
+    <div id="page-ledger" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="handleLedgerBackClick">&larr; Back</button>
+            <div style="flex:1;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h3 id="ledgerTargetTitle" style="font-weight:800; font-size:1.2rem;">Account Ledger</h3>
+                    <button id="ledgerTargetEditBtn" class="icon-edit-btn" style="display:none;" data-click="editAccountFromLedgerHeader" title="Edit account credentials">✏️</button>
+                </div>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
+            </div>
+        </div>
+        <div class="ledger-container" id="ledgerList"></div>
+    </div>
+
+    <!-- ================= PAGE 4: ALL ACCOUNTS ================= -->
+    <div id="page-accounts" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Accounts</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Tap an account to view its activity</p>
+            </div>
+        </div>
+
+        <div class="section-header" style="margin-top:0;">
+            <span class="section-title">Default Payment Account</span>
+        </div>
+        <div class="form-row" style="margin-bottom:18px;">
+            <select id="defaultPaymentAccountSelect" class="form-input" data-change="saveDefaultPaymentAccount"></select>
+        </div>
+
+        <div class="section-header">
+            <span class="section-title">All Accounts</span>
+        </div>
+        <div class="config-list" id="accountsPageList" style="padding-bottom:88px;"></div>
+
+        <button class="fab-btn" data-click="openAccountFormModal" aria-label="Add account" title="Add account">+</button>
+    </div>
+
+    <!-- ================= PAGE 5: ALL CATEGORIES ================= -->
+    <div id="page-categories" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Categories</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">All income &amp; spending categories</p>
+            </div>
+        </div>
+
+        <div class="section-header" style="margin-top:0;">
+            <span class="section-title">Default Category</span>
+        </div>
+        <div class="form-row-inline" style="margin-bottom:18px;">
+            <div>
+                <label>Default Income Category</label>
+                <select id="defaultIncomeCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
+            </div>
+            <div>
+                <label>Default Expense Category</label>
+                <select id="defaultExpenseCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
+            </div>
+        </div>
+
+        <div class="section-header">
+            <span class="section-title">🟢 Income Categories</span>
+        </div>
+        <div class="config-list" id="categoriesPageIncomeList"></div>
+
+        <div class="section-header">
+            <span class="section-title">🔴 Spending Categories</span>
+        </div>
+        <div class="config-list" id="categoriesPageExpenseList" style="padding-bottom:88px;"></div>
+
+        <button class="fab-btn" data-click="openCategoryFormModal" aria-label="Add category" title="Add category">+</button>
+    </div>
+
+    <!-- ================= PAGE 6: BACKUP & RESTORE ================= -->
+    <div id="page-backup" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Backup &amp; Restore</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Local database, auto-lock, export &amp; import</p>
+            </div>
+        </div>
+
+        <div class="section-header" style="margin-top:0;">
+            <span class="section-title">App Local Database</span>
+        </div>
         <div class="data-meter-box">
             <div id="appStorageText">App Local Database footprint: ~0.00 MB (0 attached, 0.00 MB)</div>
             <div class="hardware-track">
@@ -843,6 +955,30 @@
             <div id="systemQuotaText">Total browser quota limit: ~10240.00 MB, Used: 0.00 MB (across local sandboxes)</div>
         </div>
 
+        <div class="section-header">
+            <span class="section-title">Security</span>
+        </div>
+        <div class="form-row" style="margin-bottom:12px;">
+            <label>⏱️ Auto-lock after inactivity</label>
+            <select id="autoLockSelect" class="form-input" data-change="handleAutoLockChange">
+                <option value="0">Never</option>
+                <option value="1">1 min</option>
+                <option value="5">5 min</option>
+                <option value="15" selected>15 min</option>
+                <option value="30">30 min</option>
+            </select>
+        </div>
+        <div class="toggle-switch-row" id="biometricToggleRow" style="display:none;">
+            <span class="toggle-switch-label">🫆 Biometric quick unlock (fingerprint/Face)</span>
+            <label class="toggle-switch">
+                <input type="checkbox" id="biometricToggle" data-change="handleBiometricToggleChange">
+                <span class="toggle-slider"></span>
+            </label>
+        </div>
+
+        <div class="section-header">
+            <span class="section-title">Export &amp; Import</span>
+        </div>
         <div class="util-row">
             <button class="btn-util" data-click="exportBackup">💾 Export JSON</button>
             <button class="btn-util" data-click="openImportInput">📥 Import JSON</button>
@@ -856,25 +992,6 @@
             </label>
         </div>
         <p class="export-hint-text hidden" id="exportPlaintextHint">明文备份不含密码保护，请妥善保管</p>
-        <div class="toggle-switch-row" id="biometricToggleRow" style="display:none;">
-            <span class="toggle-switch-label">🫆 Biometric quick unlock (fingerprint/Face)</span>
-            <label class="toggle-switch">
-                <input type="checkbox" id="biometricToggle" data-change="handleBiometricToggleChange">
-                <span class="toggle-slider"></span>
-            </label>
-        </div>
-    </div>
-
-    <!-- ================= PAGE 2: LEDGER ACTIVITY LOG ================= -->
-    <div id="page-ledger" class="page hidden">
-        <div class="nav-header">
-            <button class="back-btn" data-click="handleLedgerBackClick">&larr; Back</button>
-            <div>
-                <h3 id="ledgerTargetTitle" style="font-weight:800; font-size:1.2rem;">Account Ledger</h3>
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
-            </div>
-        </div>
-        <div class="ledger-container" id="ledgerList"></div>
     </div>
 
     <!-- ================= PAGE 3: NET SAVINGS STATEMENT SHEET ================= -->
@@ -892,6 +1009,7 @@
                 <option value="all">All Years</option>
             </select>
         </div>
+
 
         <div class="statement-card">
             <h4 style="margin-bottom:10px; color:var(--income-color);">INCOME CATEGORIES</h4>
@@ -947,7 +1065,7 @@
     <div class="modal" id="accountsModal">
         <div class="modal-sheet">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <h3 style="font-weight: 800;">Manage Accounts</h3>
+                <h3 style="font-weight: 800;">Add / Edit Account</h3>
                 <button data-click="closeModal" data-modal="accountsModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
             </div>
             <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
@@ -1002,17 +1120,8 @@
                 <!-- Action handlers changed to button onclick to bypass Android keyboard/form intercept bugs -->
                 <button type="button" id="accFormSubmitBtn" data-click="handleCreateAccountMobile" class="submit-btn" style="background: var(--transfer-color);">Create Account</button>
                 <button type="button" id="accFormCancelBtn" class="submit-btn" data-click="resetAccountForm" style="background:#64748b; margin-top:6px; display:none;">Cancel Edit</button>
+                <button type="button" id="accFormDeleteBtn" data-click="deleteAccountFromForm" class="submit-btn" style="background:#fee2e2; color:var(--expense-color); margin-top:6px; display:none;">🗑 Delete Account</button>
             </div>
-            <!-- Default account pre-selected on new transaction entries -->
-            <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
-                <h4 style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Default Payment Account</h4>
-                <div class="form-row">
-                    <label>Account pre-selected on new entries</label>
-                    <select id="defaultPaymentAccountSelect" class="form-input" data-change="saveDefaultPaymentAccount"></select>
-                </div>
-            </div>
-
-            <div class="config-list" id="accountConfigList"></div>
         </div>
     </div>
 
@@ -1020,10 +1129,10 @@
     <div class="modal" id="categoriesModal">
         <div class="modal-sheet">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <h3 style="font-weight: 800;">Categories Designer</h3>
+                <h3 style="font-weight: 800;">Add Category</h3>
                 <button data-click="closeModal" data-modal="categoriesModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
             </div>
-            <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
+            <div>
                 <h4 style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Design Custom Category</h4>
                 <div class="form-row-inline" style="grid-template-columns: 2fr 1fr; margin-bottom: 8px;">
                     <div>
@@ -1050,23 +1159,6 @@
                 <!-- Crucial Mobile Fix: Changed to direct touch target button executing native JS -->
                 <button type="button" data-click="handleCreateCategoryMobile" class="submit-btn">Register Category Badge</button>
             </div>
-
-            <!-- Default category pre-selected on new Income / Expense entries -->
-            <div style="border-bottom: 2px dashed var(--border-color); padding-bottom: 15px; margin-bottom: 15px;">
-                <h4 style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Default Category</h4>
-                <div class="form-row-inline">
-                    <div>
-                        <label>Default Income Category</label>
-                        <select id="defaultIncomeCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
-                    </div>
-                    <div>
-                        <label>Default Expense Category</label>
-                        <select id="defaultExpenseCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
-                    </div>
-                </div>
-            </div>
-
-            <div class="config-list" id="categoriesConfigList" style="max-height: 200px; overflow-y:auto;"></div>
         </div>
     </div>
 

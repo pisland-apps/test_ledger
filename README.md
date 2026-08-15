@@ -399,6 +399,8 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
   their existing modals directly, no page navigation required;
   Backup & Restore returns to the dashboard (if needed) and scrolls
   the existing export/import controls into view.
+  **(Superseded by v30 below — Accounts/Categories/Backup became
+  full pages, and Currency & FX Rates was removed from the drawer.)**
 - **Active-item highlighting.** `updateSidebarActiveState()` marks
   whichever nav item matches the page currently on screen (Dashboard
   / All Transactions / Net Savings) each time the drawer opens, so it
@@ -410,3 +412,56 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v29.
+
+## v30: Accounts / Categories / Backup are now full pages
+
+Follow-up to v29 — the sidebar's Accounts, Categories, and Backup &
+Restore entries opened modals, not pages, so they didn't feel like
+the rest of the app. They're now full pages built on the same
+`showPage()` navigation pipeline as the dashboard/ledger/savings
+pages (added centrally so future pages can't accidentally leave a
+stale one visible underneath — every nav function now routes through
+it, including `popstate`/back-button handling).
+
+- **Accounts page** (`page-accounts`): the Default Payment Account
+  selector plus a plain, tap-to-open list of every account — no
+  inline add form. A floating **+** button (bottom-right) opens the
+  account form in a modal, now titled "Add / Edit Account" instead
+  of "Manage Accounts" since it's no longer where the list lives.
+  Tapping an account name goes straight to that account's Activity
+  page (`navigateToLedgerPage`, unchanged).
+- **Account Activity page**: added a ✏️ icon beside the account name
+  — shown only when viewing one specific account, not the "All
+  Transactions"/category/type views — that reopens the Add/Edit
+  Account modal pre-filled with that account's details. Added a
+  **🗑 Delete Account** button inside that modal (only visible in
+  edit mode) so deleting no longer requires going back to a list.
+  Deleting the account currently being viewed now returns to the
+  dashboard rather than leaving a stale/blank account page open.
+- **Categories page** (`page-categories`): Default Income/Expense
+  Category selectors, then every category split into 🟢 Income and
+  🔴 Spending sections, each with its own 🗑 delete. A floating **+**
+  button opens the "Add Category" modal (unchanged form/emoji
+  picker), now stripped down to just that form.
+- **Backup & Restore page** (`page-backup`): now holds the App Local
+  Database footprint meter, Auto-lock setting (moved out of the
+  dashboard header — it no longer needs its own compact header
+  widget now that it has a page), Export/Import JSON, the backup
+  encryption toggle, and the biometric quick-unlock toggle. All of
+  these were removed from the dashboard page; auto-lock also removed
+  from the header entirely.
+- **Removed the sidebar's "Currency & FX Rates" item** — redundant
+  with the header's currency pill, which already opens the same
+  settings.
+- Refactored account/category CRUD helpers (`removeAccount`,
+  `removeCategory`, `handleCreateAccountMobile`,
+  `handleCreateCategoryMobile`) to refresh whichever view is actually
+  on screen (`refreshAfterAccountChange` / `refreshAfterCategoryChange`)
+  instead of assuming the old single-modal-with-list layout.
+- No storage schema or export/import format changes — this is UI
+  restructuring only. Verified with `node --check` plus id/data-click/
+  data-change cross-reference scripts (no missing ids, no unbound
+  click/change handlers, no duplicate ids) after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v30.
