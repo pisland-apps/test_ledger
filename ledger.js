@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v30";
+        const APP_VERSION = "v31";
         const APP_VERSION_DATE = "2026-08-16";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -867,14 +867,17 @@
                 const el = document.getElementById(p);
                 if (el) el.classList.toggle("hidden", p !== id);
             });
+            // Keeps the sidebar's active-item highlight correct even when it's persistently
+            // visible (desktop/tablet) rather than only refreshed on drawer-open (mobile).
+            updateSidebarActiveState();
         }
 
-        function navigateToLedgerPage(accountId) {
+        function navigateToLedgerPage(accountId, backTarget = "workspace") {
             workspaceScrollY = window.scrollY;
             activeLedgerAccountView = accountId;
             activeCategoryView = "all";
             directTypeView = "all";
-            ledgerBackToPage = "workspace";
+            ledgerBackToPage = backTarget;
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
             showPage("page-ledger");
             window.scrollTo(0,0);
@@ -952,6 +955,9 @@
         function handleLedgerBackClick() {
             if (ledgerBackToPage === "savings") {
                 showPage("page-savings");
+            } else if (ledgerBackToPage === "accounts") {
+                showPage("page-accounts");
+                renderAccountsPage();
             } else {
                 navigateToWorkspace();
             }
@@ -1411,7 +1417,7 @@
         // lives on that Activity page instead, via the ✏️ icon beside the account name).
         async function renderAccountsPage() {
             await populateDefaultPaymentAccountSelect();
-            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const { accounts, nativeBalances } = await computeAccountBalances();
             let html = "";
             accounts.forEach(a => {
                 const typeBadge = a.type === "fd"
@@ -1420,12 +1426,19 @@
                         ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e0f2fe; color:#0369a1; font-weight:bold;">Multi-Currency</span>`
                         : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${a.currency}</span>`;
 
-                const balSummary = a.type === "fd" || a.type === "multi"
-                    ? '<span style="color:var(--text-muted);">— balances shown in Activity</span>'
-                    : `<span style="color:var(--text-muted);">${formatCurrency(a.initialBalance, a.currency)}</span>`;
+                let balSummary;
+                if (a.type === "fd" || a.type === "multi") {
+                    const baskets = nativeBalances[a.id];
+                    const currencies = Object.keys(baskets);
+                    balSummary = currencies.length === 0
+                        ? '<span style="color:var(--text-muted);">No funds yet</span>'
+                        : currencies.map(curr => `<strong>${formatCurrency(baskets[curr], curr)}</strong>`).join(" + ");
+                } else {
+                    balSummary = `<strong>${formatCurrency(nativeBalances[a.id], a.currency)}</strong>`;
+                }
 
                 html += `
-                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}">
+                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}" data-back="accounts">
                         <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}</span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
@@ -1504,7 +1517,7 @@
             if (modal.classList.contains("active")) modal.classList.remove("active");
 
             if (wasViewingThisAccount && !document.getElementById("page-ledger").classList.contains("hidden")) {
-                await navigateToWorkspace();
+                await navigateToAccountsPage();
             } else {
                 await refreshAfterAccountChange();
             }
@@ -2469,15 +2482,12 @@
             }
         }
 
-        // --- CONSOLIDATED RENDER ENGINE ---
-        async function renderApp() {
+        // Shared by renderApp() (dashboard/header) and renderAccountsPage() (Accounts page list)
+        // so both always show the same live, transaction-derived balances rather than each
+        // re-deriving it (or worse, one of them falling back to stale a.initialBalance).
+        async function computeAccountBalances() {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const txs = await readAllDB(STORES.TRANSACTIONS);
-            populateYearFilterOptions(txs);
-            const filterM = document.getElementById("filterMonth").value;
-            const filterY = document.getElementById("filterYear").value;
-
-            document.getElementById("currentBasePill").textContent = baseCurrency;
 
             const nativeBalances = {};
             accounts.forEach(a => {
@@ -2508,17 +2518,45 @@
                 }
             });
 
+            return { accounts, txs, nativeBalances };
+        }
+
+        // --- CONSOLIDATED RENDER ENGINE ---
+        async function renderApp() {
+            const { accounts, txs, nativeBalances } = await computeAccountBalances();
+            populateYearFilterOptions(txs);
+            const filterM = document.getElementById("filterMonth").value;
+            const filterY = document.getElementById("filterYear").value;
+
+            document.getElementById("currentBasePill").textContent = baseCurrency;
+
             let globalBaseNetWorth = 0;
+            const currencyTotals = {}; // native (unconverted) sum per currency actually held, across every account
             accounts.forEach(a => {
                 if (a.type === "multi" || a.type === "fd") {
                     Object.entries(nativeBalances[a.id]).forEach(([curr, amt]) => {
                         globalBaseNetWorth += convertCurrency(amt, curr, baseCurrency);
+                        currencyTotals[curr] = (currencyTotals[curr] || 0) + amt;
                     });
                 } else {
                     globalBaseNetWorth += convertCurrency(nativeBalances[a.id], a.currency, baseCurrency);
+                    currencyTotals[a.currency] = (currencyTotals[a.currency] || 0) + nativeBalances[a.id];
                 }
             });
             document.getElementById("netWorthDisplay").textContent = formatCurrency(globalBaseNetWorth, baseCurrency);
+
+            // Row 2 of the dashboard's net worth summary: what's actually held, per currency,
+            // with no conversion applied — a companion picture to Row 1's single converted total.
+            const currencyTotalsHTML = Object.entries(currencyTotals)
+                .sort((a, b) => b[1] - a[1])
+                .map(([curr, amt]) => `
+                    <div class="currency-total-chip">
+                        <div class="cur-code">${escapeHtml(curr)}</div>
+                        <div class="cur-amt">${formatCurrency(amt, curr)}</div>
+                    </div>
+                `).join("");
+            document.getElementById("currencyTotalsRow").innerHTML = currencyTotalsHTML
+                || `<p style="color:var(--text-muted); font-size:0.85rem;">No balances yet.</p>`;
 
             // --- Fixed Deposit maturity reminders ---
             // FD terms now live on the individual deposit transaction (each "placement"), not the
@@ -2552,55 +2590,6 @@
                 }
             });
             document.getElementById("fdReminderContainer").innerHTML = reminderHTML;
-
-            let accListHTML = "";
-
-            // Top row of the Accounts section: total current value across every account,
-            // converted to the base currency — same figure as the header's Portfolio Net
-            // Worth, surfaced again here at the top of the account list itself.
-            if (accounts.length > 0) {
-                accListHTML += `
-                    <div class="account-list-row" style="background:#f5f3ff; border:1px solid #ede9fe; cursor:default;">
-                        <div><strong>💰 Current Value</strong></div>
-                        <div style="text-align:right;"><strong>${formatCurrency(globalBaseNetWorth, baseCurrency)}</strong></div>
-                    </div>
-                `;
-            }
-
-            accounts.forEach(a => {
-                if (a.type === "multi" || a.type === "fd") {
-                    const baskets = nativeBalances[a.id];
-                    const currencies = Object.keys(baskets);
-                    const typeBadge = a.type === "fd"
-                        ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#ede9fe; color:#6d28d9; font-weight:bold;">🏦 Fixed Deposit</span>`
-                        : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e0f2fe; color:#0369a1; font-weight:bold;">💱 Multi-Currency</span>`;
-
-                    const basketsHTML = currencies.length === 0
-                        ? `<div style="font-size:0.75rem; color:var(--text-muted); padding-top:4px;">No funds yet — transfer in to get started</div>`
-                        : currencies.map(curr => {
-                            const amt = baskets[curr];
-                            const conv = curr !== baseCurrency ? ` <span class="converted-subtext">≈ ${formatCurrency(convertCurrency(amt, curr, baseCurrency), baseCurrency)}</span>` : '';
-                            return `<div style="display:flex; justify-content:space-between; font-size:0.82rem; padding:3px 0;"><span style="color:var(--text-muted); font-weight:600;">${curr}</span><span><strong>${formatCurrency(amt, curr)}</strong>${conv}</span></div>`;
-                        }).join("");
-
-                    accListHTML += `
-                        <div class="account-list-row" style="flex-direction:column; align-items:stretch; cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}">
-                            <div style="display:flex; justify-content:space-between; align-items:center;"><strong>${escapeHtml(a.name)}</strong>${typeBadge}</div>
-                            ${basketsHTML}
-                        </div>
-                    `;
-                } else {
-                    const bal = nativeBalances[a.id];
-                    const convText = a.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(bal, a.currency, baseCurrency), baseCurrency)}</span>` : '';
-                    accListHTML += `
-                        <div class="account-list-row" data-click="navigateToLedgerPage" data-id="${a.id}">
-                            <div><strong>${escapeHtml(a.name)}</strong> <span style="font-size:0.7rem; color:var(--text-muted); font-weight:bold; background:#e2e8f0; padding:2px 4px; border-radius:4px;">${a.currency}</span></div>
-                            <div style="text-align:right;"><strong>${formatCurrency(bal, a.currency)}</strong>${convText}</div>
-                        </div>
-                    `;
-                }
-            });
-            document.getElementById("accountsListView").innerHTML = accListHTML;
 
             // Compute structural titles
             if (activeCategoryView !== "all") {
@@ -3182,7 +3171,7 @@
             removeAccount: (el) => removeAccount(el.dataset.id),
             removeCategory: (el) => removeCategory(el.dataset.id),
             openResolveFdModal: (el) => openResolveFdModal(Number(el.dataset.id)),
-            navigateToLedgerPage: (el) => navigateToLedgerPage(el.dataset.id),
+            navigateToLedgerPage: (el) => navigateToLedgerPage(el.dataset.id, el.dataset.back || "workspace"),
             openImageViewer: (el, e) => openImageViewer(el.dataset.image, e),
             deleteTxFromEditModal: () => deleteTxFromEditModal(),
             navigateToCategoryPage: (el) => navigateToCategoryPage(el.dataset.category, el.dataset.back || "workspace"),

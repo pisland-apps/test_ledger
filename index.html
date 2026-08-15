@@ -482,6 +482,54 @@
         }
         .icon-edit-btn:active { opacity: 0.6; }
 
+        /* Row 2 of the dashboard's net worth summary — native (unconverted) total per currency */
+        .currency-totals-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .currency-total-chip {
+            flex: 1 1 110px;
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 12px;
+            padding: 10px 12px;
+            text-align: center;
+        }
+        .currency-total-chip .cur-code {
+            font-size: 0.7rem;
+            font-weight: 800;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        .currency-total-chip .cur-amt {
+            font-size: 1rem;
+            font-weight: 800;
+            margin-top: 2px;
+        }
+
+        /* ============ RESPONSIVE LAYOUT: persistent sidebar on tablet/desktop ============
+           Below 768px (phones) the sidebar stays the mobile slide-in drawer defined above.
+           At 768px and up (tablet/desktop) it's pinned open as a permanent left column, the
+           hamburger/backdrop are hidden, and the page content shifts right to sit beside it. */
+        @media (min-width: 768px) {
+            body {
+                max-width: 720px;
+                margin-left: 336px;
+                margin-right: auto;
+            }
+            .hamburger-btn, .top-bar, .sidebar-overlay {
+                display: none !important;
+            }
+            .sidebar-drawer {
+                transform: none !important;
+                box-shadow: none;
+                border-right: 1.5px solid var(--border-color);
+            }
+        }
+
         .ledger-container {
             background: var(--card-bg);
             border: 1.5px solid var(--border-color);
@@ -707,20 +755,14 @@
             <button class="sidebar-item" data-click="sidebarGo" data-target="workspace">
                 <span class="sidebar-item-icon">🏠</span> Dashboard
             </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="accounts">
+                <span class="sidebar-item-icon">🏦</span> Financial Accounts
+            </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="all-ledger">
                 <span class="sidebar-item-icon">📜</span> All Transactions
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="savings">
                 <span class="sidebar-item-icon">📊</span> Net Savings Statement
-            </button>
-
-            <div class="sidebar-divider"></div>
-            <div class="sidebar-section-label">Manage</div>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="accounts">
-                <span class="sidebar-item-icon">🏦</span> Accounts
-            </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="categories">
-                <span class="sidebar-item-icon">🏷</span> Categories
             </button>
 
             <div class="sidebar-divider"></div>
@@ -795,6 +837,11 @@
             </div>
         </header>
 
+        <div class="section-header" style="margin-top: 0;">
+            <span class="section-title">Net Worth by Currency Held</span>
+        </div>
+        <div class="currency-totals-row" id="currencyTotalsRow"></div>
+
         <div id="fdReminderContainer"></div>
 
         <div class="section-header" style="margin-top: 0;">
@@ -848,12 +895,6 @@
                 </select>
             </div>
         </div>
-
-        <div class="section-header">
-            <span class="section-title">My Financial Accounts</span>
-            <button class="text-btn" data-click="navigateToAccountsPage">🛠 Manage</button>
-        </div>
-        <div class="account-list-container" id="accountsListView"></div>
     </div>
 
 

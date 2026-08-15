@@ -465,3 +465,55 @@ it, including `popstate`/back-button handling).
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v30.
+
+## v31: persistent sidebar on tablet/desktop, dashboard net worth rework
+
+- **Responsive sidebar.** Below 768px (phones) the sidebar is still
+  the mobile slide-in drawer from v29 — hamburger button, dimmed
+  backdrop, tap-outside-to-close. At 768px and up (tablet/desktop)
+  it's pinned open as a permanent left column instead: hamburger and
+  backdrop are hidden via a `@media (min-width: 768px)` block, the
+  drawer's transform is forced off, and the page content shifts
+  right (`body { margin-left: 336px }`) to sit beside it. No JS
+  branching needed — it's the same drawer element and the same
+  `.open` class logic underneath, CSS just overrides how it's shown.
+  `updateSidebarActiveState()` is now called from `showPage()` itself
+  (not only on drawer-open), since the desktop sidebar is never
+  "opened" in the JS sense — this keeps the active-item highlight
+  correct on every device either way.
+- **Accounts → Activity now remembers where you came from.**
+  `navigateToLedgerPage(accountId, backTarget)` takes an optional
+  second argument; the Accounts page's rows pass `data-back="accounts"`
+  so tapping ← Back from an account's Activity page returns to the
+  Accounts list, not the dashboard. `handleLedgerBackClick()` grew a
+  matching `"accounts"` branch alongside its existing `"savings"` one.
+  Deleting an account from its Activity page's edit modal now also
+  lands back on the Accounts page instead of the dashboard.
+- **Sidebar restructuring:** "Categories" removed from the sidebar
+  (the dashboard's own "🏷 Categories" quick-button already reaches
+  the same page). "Accounts" renamed to "Financial Accounts" and
+  moved out of the (now-empty, removed) "Manage" section into
+  "Overview", directly under Dashboard.
+- **Dashboard's "My Financial Accounts" list removed.** It's now
+  redundant with the Financial Accounts page, which is one tap away
+  in the sidebar on every device (and always visible on
+  tablet/desktop). Its per-account balance computation didn't just
+  disappear, though — pulled out into a shared `computeAccountBalances()`
+  helper so both `renderApp()` (dashboard) and `renderAccountsPage()`
+  use the same live, transaction-derived numbers. This also fixed a
+  latent bug from v30: the Accounts page had been showing each
+  account's `initialBalance` (opening balance) rather than its actual
+  current balance after transactions.
+- **Dashboard net worth is now two rows, not one.** Row 1 (unchanged,
+  in the header) is the existing "Portfolio Net Worth" — everything
+  converted into the selected base currency. Row 2 is new: "Net Worth
+  by Currency Held" — the same total accounts, but summed *natively*
+  per currency with no conversion (e.g. "USD $12,345" / "MYR
+  RM45,000" as separate figures), so it's clear what's actually held
+  in each currency versus what it's all worth blended together.
+- No storage schema or export/import changes. Verified with
+  `node --check` plus the id/data-click/data-change cross-reference
+  script (0 missing, 0 dupes, 0 unbound handlers) after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v31.
