@@ -266,3 +266,147 @@ default payment account
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v24.
+
+## v25: account ledger view no longer silently hides transactions
+outside the dashboard's month/year filter
+
+- **Bug: an account's Activity/ledger list could show fewer
+  transactions than actually make up its balance.** The dashboard's
+  "All Months / [Year]" filter was being applied not just to the
+  Total Income/Expenses stat boxes (correct — that's period-based
+  reporting), but also to the per-account ledger view opened by
+  tapping an account row. If that filter wasn't set to "All Years",
+  any transaction dated outside the selected period still counted
+  toward the account's balance (which is always computed from the
+  FULL unfiltered transaction history) but silently disappeared from
+  that account's own Activity list — with the "[Opening Balance
+  Setup]" row still shown unconditionally at the bottom regardless.
+  So the visible list and the displayed balance could never be
+  reconciled by eye, with no indication anything was being hidden.
+  Fixed: viewing a specific account's ledger (tapping into e.g. "DBS
+  Singapore Activity") now always shows that account's complete
+  history regardless of the dashboard's month/year filter. Category
+  and Type drill-down views (tapping a category/type breakdown row)
+  intentionally keep the previous filtered behaviour, since those are
+  launched from a breakdown that was itself computed for the selected
+  period — staying scoped there is consistent, not a bug.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v25.
+
+## v26: fixed Transfers silently getting a stray expense category,
+and the dashboard losing its scroll position on back navigation
+
+- **Bug: Transfer entries (Income/Expense to another account) could
+  show a random expense category like "[Commute]"** even though
+  Transfers have no category and that field is hidden on the form.
+  Root cause: the Category `<select>` was always populated with the
+  expense category list, including for Transfers — the code that
+  built it only special-cased `type === "income"`, so `"transfer"`
+  fell into the same branch as `"expense"`. A freshly-populated
+  `<select>` auto-selects its first option, and "Commute" happens to
+  sort alphabetically first among the default expense categories, so
+  it silently became every new Transfer's hidden `cat` value — never
+  visible in the form, only on the ledger afterward. Fixed three ways,
+  matching the pattern used for the earlier stale-`dest` bug: (1)
+  `openTransactionForm()` now skips populating the Category `<select>`
+  entirely when the type is Transfer; (2)
+  `handleTransactionSubmitMobile()` now forces `record.cat = null` for
+  Transfers rather than trusting whatever the hidden field holds — with
+  one carve-out: editing an existing Transfer that already legitimately
+  carries `cat: "Fixed Deposit"` (set by the separate FD
+  maturity-resolution flow, which writes its own records directly and
+  was never affected by this bug) preserves that tag instead of wiping
+  it on a routine edit; (3) a one-time migration
+  `migrateStaleCategoryOnTransfersCleanup()` nulls out `cat` on any
+  already-saved Transfer that has one, except `"Fixed Deposit"` for the
+  same reason. Ledger rows with `cat: null` already correctly fall back
+  to showing "[Transfer]" (`t.cat || 'Transfer'`), so no display-code
+  change was needed there.
+- **Bug: returning to the dashboard always landed at the very top,
+  even if you'd scrolled down to "My Financial Accounts" before tapping
+  into an account.** The workspace, ledger, and savings pages all share
+  the browser's own window-level scroll (none of them has its own
+  scrollable container) — entering a sub-page explicitly scrolls to the
+  top (correct, so you start at the top of what you just opened), but
+  nothing was restoring the dashboard's own previous scroll position
+  when you came back to it. Fixed: `navigateToLedgerPage()`,
+  `navigateToCategoryPage()` (only when its `backTarget` is the
+  workspace, not the Savings statement), `navigateToDirectTypePage()`,
+  and `navigateToSavingsPage()` now save `window.scrollY` into
+  `workspaceScrollY` right before leaving the dashboard;
+  `navigateToWorkspace()` is now `async` and, after `renderApp()`
+  finishes rebuilding the dashboard's DOM, restores that saved
+  position with `window.scrollTo(0, workspaceScrollY)`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v26.
+
+## v27: delete moved into the Edit Ledger Entry modal
+
+- **Ledger rows no longer have their own edit-pencil/trash icons.**
+  Tapping a transaction row still opens "Edit Ledger Entry" as before
+  (that was never icon-dependent — the whole row is the tap target),
+  but the row itself now only shows the description/category/amount;
+  the `📝` pencil glyph and the per-row `🗑` trash button are gone.
+  FD status badges (🟢 Active / ⏰ Due / ✅ Closed) are unaffected.
+- **Delete now lives inside the Edit Ledger Entry modal.** A "🗑 Delete
+  Entry" button appears under "Save Changes" — only when editing an
+  existing entry (`openTransactionForm()` shows/hides `#txDeleteBtn`
+  depending on whether an id was passed in; it's hidden for a
+  brand-new entry, since there's nothing yet to delete). Wired to a
+  new `deleteTxFromEditModal()`, which confirms, deletes by the id in
+  the hidden `#txId` field, closes the modal, and re-renders — the
+  same confirm-then-delete flow the old per-row button used, just
+  relocated. The old `deleteTx(id, event)` (used only by the per-row
+  button) was removed along with the button.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v27.
+
+## v28: every ledger row now states which account it belongs to
+
+- **Ledger rows show a 🏦 account line.** Added a third line under
+  each ledger row's date/category, resolving `t.src`
+  (Income/Expense — "🏦 Maybank Malaysia") or both legs of a Transfer
+  ("🏦 Maybank Malaysia → DBS Singapore") by looking the id(s) up in
+  `accounts`. Shown everywhere a ledger row renders — a single
+  account's own Activity page (where a Transfer's *other* leg wasn't
+  previously named at all, only "[Transfer]"), and combined views like
+  a category or type breakdown (where multiple accounts can appear
+  side by side with no way to tell them apart before this). Falls back
+  to "(deleted account)" / "(unknown)" if an id no longer resolves,
+  rather than showing a blank.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v28.
+
+## v29: sidebar navigation drawer
+
+- **Added a hamburger-menu sidebar.** A ☰ button now sits at the top
+  of the dashboard header, opening a slide-in left drawer (with a
+  dimmed backdrop, tap-outside-to-close) styled with a colored header
+  block and grouped, icon-led nav items — modeled loosely after
+  common finance-app patterns (a colored brand header, sectioned list,
+  active-item highlight).
+- **Drawer sections:** *Overview* (Dashboard, All Transactions, Net
+  Savings Statement), *Manage* (Accounts, Categories, Currency & FX
+  Rates), *Data & Security* (Backup & Restore, Lock App Now). These
+  consolidate navigation and settings entry points that previously
+  only lived as scattered buttons inside the dashboard page.
+  "All Transactions" opens the existing ledger page unfiltered
+  (`navigateToLedgerPage("all")`); Accounts/Categories/Currency open
+  their existing modals directly, no page navigation required;
+  Backup & Restore returns to the dashboard (if needed) and scrolls
+  the existing export/import controls into view.
+- **Active-item highlighting.** `updateSidebarActiveState()` marks
+  whichever nav item matches the page currently on screen (Dashboard
+  / All Transactions / Net Savings) each time the drawer opens, so it
+  stays in sync even when a page switch happens from outside the
+  sidebar (e.g. tapping a stat box on the dashboard).
+- No storage schema, export/import, or CSP changes — purely additive
+  UI (new CSS block, drawer markup, and 3 new CLICK_ACTIONS entries:
+  `openSidebar`, `closeSidebar`, `sidebarGo`).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v29.

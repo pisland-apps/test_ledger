@@ -326,6 +326,128 @@
         }
         .back-btn:active { background: #f1f5f9; }
 
+        /* ================= SIDEBAR NAVIGATION DRAWER ================= */
+        .top-bar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .hamburger-btn {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        .hamburger-btn:active { background: #f1f5f9; }
+        .top-bar-title {
+            font-weight: 800;
+            font-size: 1.05rem;
+            letter-spacing: -0.01em;
+        }
+        .sidebar-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(15, 23, 42, 0.45);
+            z-index: 900;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+        .sidebar-overlay.open {
+            opacity: 1;
+            pointer-events: auto;
+        }
+        .sidebar-drawer {
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            width: 82%;
+            max-width: 320px;
+            background: var(--card-bg);
+            z-index: 901;
+            transform: translateX(-100%);
+            transition: transform 0.25s ease;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 24px rgba(15, 23, 42, 0.18);
+            overflow-y: auto;
+        }
+        .sidebar-drawer.open { transform: translateX(0); }
+        .sidebar-header {
+            background: linear-gradient(135deg, var(--primary), #4338ca);
+            color: #fff;
+            padding: 28px 20px 20px;
+            flex-shrink: 0;
+        }
+        .sidebar-header-title {
+            font-size: 1.3rem;
+            font-weight: 800;
+            letter-spacing: -0.01em;
+        }
+        .sidebar-header-sub {
+            font-size: 0.75rem;
+            font-weight: 600;
+            opacity: 0.85;
+            margin-top: 4px;
+        }
+        .sidebar-nav { padding: 10px 0 24px; }
+        .sidebar-section-label {
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            padding: 16px 20px 6px;
+        }
+        .sidebar-item {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            padding: 12px 20px;
+            font-weight: 700;
+            font-size: 0.92rem;
+            cursor: pointer;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+            color: var(--text-main);
+        }
+        .sidebar-item:active { background: #f1f5f9; }
+        .sidebar-item.active {
+            background: #eef2ff;
+            color: var(--primary);
+            position: relative;
+        }
+        .sidebar-item.active::before {
+            content: "";
+            position: absolute;
+            left: 0; top: 6px; bottom: 6px;
+            width: 4px;
+            border-radius: 0 4px 4px 0;
+            background: var(--primary);
+        }
+        .sidebar-item-icon {
+            font-size: 1.1rem;
+            width: 22px;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        .sidebar-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 8px 20px;
+        }
+
         .ledger-container {
             background: var(--card-bg);
             border: 1.5px solid var(--border-color);
@@ -539,6 +661,48 @@
          Text is filled in by ledger.js (APP_VERSION / APP_VERSION_DATE), not hardcoded here. -->
     <div id="versionBadge"></div>
 
+    <!-- ================= SIDEBAR NAVIGATION DRAWER ================= -->
+    <div class="sidebar-overlay" id="sidebarOverlay" data-click="closeSidebar"></div>
+    <div class="sidebar-drawer" id="sidebarDrawer">
+        <div class="sidebar-header">
+            <div class="sidebar-header-title">💰 Ledger</div>
+            <div class="sidebar-header-sub">Multi-Currency Financial Tracker</div>
+        </div>
+        <nav class="sidebar-nav">
+            <div class="sidebar-section-label">Overview</div>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="workspace">
+                <span class="sidebar-item-icon">🏠</span> Dashboard
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="all-ledger">
+                <span class="sidebar-item-icon">📜</span> All Transactions
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="savings">
+                <span class="sidebar-item-icon">📊</span> Net Savings Statement
+            </button>
+
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-section-label">Manage</div>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="accounts">
+                <span class="sidebar-item-icon">🏦</span> Accounts
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="categories">
+                <span class="sidebar-item-icon">🏷</span> Categories
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="currency">
+                <span class="sidebar-item-icon">💱</span> Currency &amp; FX Rates
+            </button>
+
+            <div class="sidebar-divider"></div>
+            <div class="sidebar-section-label">Data &amp; Security</div>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="backup">
+                <span class="sidebar-item-icon">💾</span> Backup &amp; Restore
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="lock">
+                <span class="sidebar-item-icon">🔒</span> Lock App Now
+            </button>
+        </nav>
+    </div>
+
     <!-- ================= APP LOCK OVERLAY (PBKDF2 + AES-GCM, blocks all app access until unlocked) ================= -->
     <div id="lockOverlay">
         <div class="lock-card">
@@ -584,6 +748,10 @@
     <!-- ================= PAGE 1: PORTFOLIO MAIN WORKSPACE ================= -->
     <div id="page-workspace" class="page">
         <header>
+            <div class="top-bar">
+                <button class="hamburger-btn" data-click="openSidebar" aria-label="Open menu">☰</button>
+                <span class="top-bar-title">Ledger</span>
+            </div>
             <div class="net-worth-container">
                 <div>
                     <h1 id="netWorthDisplay">0.00</h1>
@@ -979,6 +1147,7 @@
                 </div>
 
                 <button type="button" data-click="handleTransactionSubmitMobile" id="txSubmitBtn" class="submit-btn">Commit Entry</button>
+                <button type="button" data-click="deleteTxFromEditModal" id="txDeleteBtn" class="submit-btn" style="display:none; margin-top:10px; background:#fee2e2; color:var(--expense-color);">🗑 Delete Entry</button>
             </div>
         </div>
     </div>

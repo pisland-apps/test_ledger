@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v24";
-        const APP_VERSION_DATE = "2026-08-14";
+        const APP_VERSION = "v29";
+        const APP_VERSION_DATE = "2026-08-15";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -588,6 +588,14 @@
         let directTypeView = "all"; 
         let ledgerBackToPage = "workspace"; 
 
+        // Remembers how far down the workspace dashboard the user had scrolled (e.g. down to "My
+        // Financial Accounts") before drilling into an account/category/type ledger view. All three
+        // pages share the browser's own window-level scroll (none of them has its own scrollable
+        // container), so simply un-hiding page-workspace on the way back does not by itself restore
+        // where the user was — without this, returning always lands back at the very top of the
+        // dashboard instead of where they left off.
+        let workspaceScrollY = 0;
+
         // Pagination for the transaction list — avoids rendering thousands of DOM rows at once.
         let ledgerRenderLimit = 50;
         const LEDGER_PAGE_SIZE = 50;
@@ -844,6 +852,7 @@
 
         // --- SPA NAVIGATION PIPELINE ---
         function navigateToLedgerPage(accountId) {
+            workspaceScrollY = window.scrollY;
             activeLedgerAccountView = accountId;
             activeCategoryView = "all";
             directTypeView = "all";
@@ -858,6 +867,7 @@
         }
 
         function navigateToCategoryPage(categoryName, backTarget = "workspace") {
+            if (backTarget === "workspace") workspaceScrollY = window.scrollY;
             activeCategoryView = categoryName;
             activeLedgerAccountView = "all";
             directTypeView = "all";
@@ -872,6 +882,7 @@
         }
 
         function navigateToDirectTypePage(type) {
+            workspaceScrollY = window.scrollY;
             directTypeView = type;
             activeLedgerAccountView = "all";
             activeCategoryView = "all";
@@ -886,6 +897,7 @@
         }
 
         function navigateToSavingsPage() {
+            workspaceScrollY = window.scrollY;
             document.getElementById("page-workspace").classList.add("hidden");
             document.getElementById("page-ledger").classList.add("hidden");
             document.getElementById("page-savings").classList.remove("hidden");
@@ -894,11 +906,15 @@
             renderApp();
         }
 
-        function navigateToWorkspace() {
+        async function navigateToWorkspace() {
             document.getElementById("page-ledger").classList.add("hidden");
             document.getElementById("page-savings").classList.add("hidden");
             document.getElementById("page-workspace").classList.remove("hidden");
-            renderApp();
+            await renderApp();
+            // Restored after renderApp() finishes rebuilding the dashboard's DOM (account list,
+            // report card, etc.) — scrolling before that would target a not-yet-full-height page
+            // and land in the wrong place.
+            window.scrollTo(0, workspaceScrollY);
         }
 
         function handleLedgerBackClick() {
@@ -908,6 +924,60 @@
             } else {
                 navigateToWorkspace();
             }
+        }
+
+        // --- SIDEBAR NAVIGATION DRAWER ---
+        function openSidebar() {
+            document.getElementById("sidebarOverlay").classList.add("open");
+            document.getElementById("sidebarDrawer").classList.add("open");
+            updateSidebarActiveState();
+        }
+
+        function closeSidebar() {
+            document.getElementById("sidebarOverlay").classList.remove("open");
+            document.getElementById("sidebarDrawer").classList.remove("open");
+        }
+
+        // Highlights the sidebar item matching whichever page is currently on screen —
+        // called on open and after every sidebar-triggered navigation so the drawer stays
+        // in sync even though page switches also happen from outside the sidebar (e.g. the
+        // dashboard's own "Total Income" stat box also opens the ledger page).
+        function updateSidebarActiveState() {
+            document.querySelectorAll(".sidebar-item").forEach(i => i.classList.remove("active"));
+            const workspaceHidden = document.getElementById("page-workspace").classList.contains("hidden");
+            const savingsHidden = document.getElementById("page-savings").classList.contains("hidden");
+            const ledgerHidden = document.getElementById("page-ledger").classList.contains("hidden");
+            let target = null;
+            if (!savingsHidden) target = "savings";
+            else if (!ledgerHidden) {
+                const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
+                target = isUnfiltered ? "all-ledger" : null;
+            } else if (!workspaceHidden) target = "workspace";
+            if (target) {
+                const el = document.querySelector(`.sidebar-item[data-target="${target}"]`);
+                if (el) el.classList.add("active");
+            }
+        }
+
+        // Routes a sidebar tap to the matching page/modal. Modals (accounts/categories/currency)
+        // are their own overlay and don't require the dashboard to be the visible page underneath.
+        function sidebarGo(el) {
+            const target = el.dataset.target;
+            closeSidebar();
+            if (target === "workspace") navigateToWorkspace();
+            else if (target === "all-ledger") navigateToLedgerPage("all");
+            else if (target === "savings") navigateToSavingsPage();
+            else if (target === "accounts") openAccountsConfig();
+            else if (target === "categories") openCategoriesConfig();
+            else if (target === "currency") openCurrencyConfig();
+            else if (target === "backup") {
+                (async () => {
+                    if (document.getElementById("page-workspace").classList.contains("hidden")) {
+                        await navigateToWorkspace();
+                    }
+                    document.querySelector(".util-row")?.scrollIntoView({ behavior: "smooth", block: "center" });
+                })();
+            } else if (target === "lock") lockAppNow();
         }
 
         // --- LOCAL STORAGE DATA CALCULATION ---
@@ -1544,6 +1614,7 @@
             await syncAndLoadCategories();
             await migrateOthersCategoryRename();
             await migrateStaleDestFieldCleanup();
+            await migrateStaleCategoryOnTransfersCleanup();
         }
 
         // One-time migration: "Others" (the implicit income/expense fallback category — never a
@@ -1574,6 +1645,26 @@
             for (const t of txs) {
                 if (t.type !== "transfer" && t.dest) {
                     t.dest = null;
+                    await writeDB(STORES.TRANSACTIONS, t);
+                }
+            }
+        }
+
+        // One-time cleanup for another fixed bug: the Category <select> used to always get
+        // populated with the expense category list — including for Transfers, which have no
+        // category and hide that field entirely. A freshly-populated <select> auto-selects its
+        // first option, so every Transfer created through the standard entry form silently got
+        // saved with whatever expense category sorted alphabetically first ("Commute") as its
+        // `cat`, invisible in the form but shown on the ledger as e.g. "[Commute]" next to a
+        // transfer. Nulls out `cat` on any already-saved Transfer that has one — EXCEPT "Fixed
+        // Deposit", which the separate FD maturity-resolution flow (handleResolveFdSubmit) sets
+        // deliberately on its own transfer-type records (withdrawals/renewals) and writes directly
+        // to the DB, bypassing this bug entirely — those are left untouched.
+        async function migrateStaleCategoryOnTransfersCleanup() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            for (const t of txs) {
+                if (t.type === "transfer" && t.cat && t.cat !== "Fixed Deposit") {
+                    t.cat = null;
                     await writeDB(STORES.TRANSACTIONS, t);
                 }
             }
@@ -1614,11 +1705,18 @@
                 const currentCats = dynamicCategories.filter(c => c.type === tx.type).map(c => c.name);
                 const fallbackGroup = tx.type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
                 
-                const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
-                uniqueMerged.forEach(c => {
-                    const icon = getCategoryIcon(c, tx.type);
-                    catSelect.innerHTML += `<option value="${escapeHtml(c)}">${icon} ${escapeHtml(c)}</option>`;
-                });
+                // Transfers have no category at all (the Category row is hidden for them below) —
+                // skip populating options entirely rather than leaving the <select> holding
+                // whatever the expense list's alphabetically-first option happens to be. See the
+                // matching comment on the "new entry" branch below for how that silently corrupted
+                // Transfer records before this fix.
+                if (tx.type !== "transfer") {
+                    const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
+                    uniqueMerged.forEach(c => {
+                        const icon = getCategoryIcon(c, tx.type);
+                        catSelect.innerHTML += `<option value="${escapeHtml(c)}">${icon} ${escapeHtml(c)}</option>`;
+                    });
+                }
                 
                 document.getElementById("txCategory").value = tx.cat || "";
                 document.getElementById("destAccRow").style.display = tx.type === "transfer" ? "block" : "none";
@@ -1626,6 +1724,7 @@
 
                 document.getElementById("txModalTitle").textContent = "Edit Ledger Entry";
                 document.getElementById("txSubmitBtn").textContent = "Save Changes";
+                document.getElementById("txDeleteBtn").style.display = "block";
 
                 setTxImagePreview(tx.image || null);
 
@@ -1670,21 +1769,31 @@
                 const currentCats = dynamicCategories.filter(c => c.type === type).map(c => c.name);
                 const fallbackGroup = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
                 
-                const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
-                uniqueMerged.forEach(c => {
-                    const icon = getCategoryIcon(c, type);
-                    catSelect.innerHTML += `<option value="${escapeHtml(c)}">${icon} ${escapeHtml(c)}</option>`;
-                });
+                // Transfers have no category (the Category row is hidden for them just above) — skip
+                // populating the <select> entirely for them. Previously this always populated it
+                // with the expense list even for Transfers (the ternary above only special-cases
+                // "income", so "transfer" fell into the expense fallback too), and since a freshly
+                // populated <select> auto-selects its first option, every new Transfer silently got
+                // saved with the alphabetically-first expense category ("Commute") as its hidden
+                // `cat` — invisible in the form, but shown on the ledger as "[Commute]".
+                if (type !== "transfer") {
+                    const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
+                    uniqueMerged.forEach(c => {
+                        const icon = getCategoryIcon(c, type);
+                        catSelect.innerHTML += `<option value="${escapeHtml(c)}">${icon} ${escapeHtml(c)}</option>`;
+                    });
 
-                // Pre-select the user's chosen default category for this type, if one is set
-                // and still exists among the current options — new entries only, never editing.
-                const defaultCat = type === "income" ? defaultIncomeCategory : (type === "expense" ? defaultExpenseCategory : "");
-                if (defaultCat && uniqueMerged.includes(defaultCat)) {
-                    catSelect.value = defaultCat;
+                    // Pre-select the user's chosen default category for this type, if one is set
+                    // and still exists among the current options — new entries only, never editing.
+                    const defaultCat = type === "income" ? defaultIncomeCategory : defaultExpenseCategory;
+                    if (defaultCat && uniqueMerged.includes(defaultCat)) {
+                        catSelect.value = defaultCat;
+                    }
                 }
 
                 document.getElementById("txModalTitle").textContent = "Log Ledger Item";
                 document.getElementById("txSubmitBtn").textContent = "Commit Entry";
+                document.getElementById("txDeleteBtn").style.display = "none";
 
                 setTxImagePreview(null);
 
@@ -2154,6 +2263,18 @@
                 return;
             }
 
+            // Editing an existing Transfer that already carries the "Fixed Deposit" category (set
+            // deliberately by the FD maturity-resolution flow, not through this form) should keep
+            // it rather than losing it to the blanket "Transfers have no category" rule just below
+            // — otherwise a routine edit (e.g. fixing a typo in the description) would silently
+            // strip that tag.
+            let preservedTransferCat = null;
+            if (txIdInput !== "" && document.getElementById("txType").value === "transfer") {
+                const existingTxs = await readAllDB(STORES.TRANSACTIONS);
+                const existingTx = existingTxs.find(t => t.id === parseInt(txIdInput));
+                if (existingTx && existingTx.cat === "Fixed Deposit") preservedTransferCat = "Fixed Deposit";
+            }
+
             const record = {
                 type: document.getElementById("txType").value,
                 desc: desc,
@@ -2166,7 +2287,11 @@
                 // account's ledger too (see the isBound check in renderApp()).
                 dest: document.getElementById("txType").value === "transfer" ? document.getElementById("destAccount").value : null,
                 currency: document.getElementById("txCurrency").value,
-                cat: document.getElementById("txCategory").value,
+                // Category only applies to Income/Expense — the <select> is hidden (not cleared)
+                // for Transfers, and forced to null here rather than trusted as-is; otherwise a
+                // stale/leftover category value gets saved onto the Transfer record and shown as
+                // e.g. "[Commute]" on the ledger even though Transfers have no category.
+                cat: document.getElementById("txType").value === "transfer" ? preservedTransferCat : document.getElementById("txCategory").value,
                 date: dateVal,
                 image: currentTxImageData || null,
                 fdReferenceNo: null,
@@ -2213,17 +2338,24 @@
             renderApp();
         }
 
-        async function deleteTx(id, event) {
-            if (event) event.stopPropagation();
+        // Delete button inside the "Edit Ledger Entry" modal itself — the ledger list no longer
+        // has its own per-row delete affordance (tapping a row opens this modal instead; deleting
+        // now happens from within it). Only shown when editing an existing entry (txDeleteBtn is
+        // hidden for a brand-new entry, where there's nothing yet to delete).
+        async function deleteTxFromEditModal() {
+            const txIdInput = document.getElementById("txId").value;
+            if (!txIdInput) return;
+
             const ok = await customConfirm("Delete this transaction item?");
             if (!ok) return;
 
             try {
-                await deleteDB(STORES.TRANSACTIONS, id);
+                await deleteDB(STORES.TRANSACTIONS, parseInt(txIdInput));
             } catch (err) {
                 alert("Could not delete transaction: " + (err && err.message ? err.message : err));
                 return;
             }
+            closeModal("txModal");
             renderApp();
         }
 
@@ -2442,21 +2574,38 @@
 
             let matchedCount = 0;
 
+            // The dashboard's month/year filter is meant to scope PERIOD-based reporting — the
+            // Total Income/Expenses stat boxes above, and the category/type breakdowns drilled into
+            // via navigateToCategoryPage()/navigateToDirectTypePage() (which were themselves built
+            // from that same filtered breakdown, so staying filtered there is consistent). It was
+            // also being applied to the per-ACCOUNT ledger view, which is wrong: that page's whole
+            // job is to show the complete history behind the account's balance (itself computed
+            // above from the FULL unfiltered transaction set), so filtering it by month/year meant
+            // the visible list and the balance could never be reconciled — a transaction dated
+            // outside the selected period still counted toward the balance but silently vanished
+            // from the list, with no indication anything was hidden. Viewing a specific account
+            // (activeLedgerAccountView !== "all") now always shows its full history regardless of
+            // the dashboard filter; category/type views keep the previous filtered behaviour.
+            const showFullAccountHistory = activeLedgerAccountView !== "all" && activeCategoryView === "all" && directTypeView === "all";
+
             txs.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(t => {
                 const d = new Date(t.date);
-                if (filterM !== "all" && d.getMonth().toString() !== filterM) return;
-                if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
+                const withinPeriodFilter = (filterM === "all" || d.getMonth().toString() === filterM) && (filterY === "all" || d.getFullYear().toString() === filterY);
+                if (!withinPeriodFilter && !showFullAccountHistory) return;
 
                 const tBase = convertCurrency(t.amount, t.currency, baseCurrency);
-                if (t.type === "income") { 
-                    incBaseTotal += tBase; 
-                    if(catSummary.income[t.cat] !== undefined) catSummary.income[t.cat] += tBase;
-                    else catSummary.income[t.cat] = tBase;
-                }
-                if (t.type === "expense") { 
-                    expBaseTotal += tBase; 
-                    if(catSummary.expense[t.cat] !== undefined) catSummary.expense[t.cat] += tBase;
-                    else catSummary.expense[t.cat] = tBase;
+
+                if (withinPeriodFilter) {
+                    if (t.type === "income") { 
+                        incBaseTotal += tBase; 
+                        if(catSummary.income[t.cat] !== undefined) catSummary.income[t.cat] += tBase;
+                        else catSummary.income[t.cat] = tBase;
+                    }
+                    if (t.type === "expense") { 
+                        expBaseTotal += tBase; 
+                        if(catSummary.expense[t.cat] !== undefined) catSummary.expense[t.cat] += tBase;
+                        else catSummary.expense[t.cat] = tBase;
+                    }
                 }
 
                 let isBound = false;
@@ -2491,6 +2640,19 @@
                     : '';
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
 
+                // Which account(s) this entry touches — shown as its own line so an Income/Expense
+                // row states where the money came from/went, and a Transfer states both legs,
+                // regardless of which page it's viewed from (a single account's own Activity page,
+                // or a combined view like a category/type breakdown where the account otherwise
+                // isn't obvious at all).
+                const accountName = id => { const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(a.name) : "(deleted account)"; };
+                let accountText;
+                if (t.type === "transfer") {
+                    accountText = `🏦 ${accountName(t.src)} → ${t.dest ? accountName(t.dest) : "(unknown)"}`;
+                } else {
+                    accountText = `🏦 ${accountName(t.src)}`;
+                }
+
                 // FD placement status — shows at a glance whether a placement is still running,
                 // overdue for action, or has already been renewed/withdrawn and closed out.
                 let fdStatusBadge = '';
@@ -2508,15 +2670,15 @@
                 ledgerHTML += `
                     <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${t.id}">
                         <div class="item-left">
-                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)} 📝${fdStatusBadge}</span>
+                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${fdStatusBadge}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${receiptBadge}</span>
+                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight: bold;">
                                 ${sgn}${formatCurrency(t.amount, t.currency)}
                                 ${sub}
                             </div>
-                            <button class="trash-btn" data-click="deleteTx" data-id="${t.id}">🗑</button>
                         </div>
                     </div>
                 `;
@@ -2892,6 +3054,9 @@
         // or generated later via innerHTML, since delegation is attached to `document` once.
         // ---------------------------------------------------------------------------------
         const CLICK_ACTIONS = {
+            openSidebar: () => openSidebar(),
+            closeSidebar: () => closeSidebar(),
+            sidebarGo: (el) => sidebarGo(el),
             handleSetupPasscodeSubmit: () => handleSetupPasscodeSubmit(),
             handleUnlockSubmit: () => handleUnlockSubmit(),
             handleForgotPasscode: () => handleForgotPasscode(),
@@ -2929,7 +3094,7 @@
             openResolveFdModal: (el) => openResolveFdModal(Number(el.dataset.id)),
             navigateToLedgerPage: (el) => navigateToLedgerPage(el.dataset.id),
             openImageViewer: (el, e) => openImageViewer(el.dataset.image, e),
-            deleteTx: (el, e) => deleteTx(Number(el.dataset.id), e),
+            deleteTxFromEditModal: () => deleteTxFromEditModal(),
             navigateToCategoryPage: (el) => navigateToCategoryPage(el.dataset.category, el.dataset.back || "workspace"),
             numpadDigit: (el) => numpadDigit(el.dataset.digit),
             numpadBackspace: () => numpadBackspace(),
