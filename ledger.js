@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v31";
+        const APP_VERSION = "v32";
         const APP_VERSION_DATE = "2026-08-16";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -736,6 +736,10 @@
             const accountsPage = document.getElementById("page-accounts");
             const categoriesPage = document.getElementById("page-categories");
             const backupPage = document.getElementById("page-backup");
+            const autolockPage = document.getElementById("page-autolock");
+            const databasePage = document.getElementById("page-database");
+            const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
+            const incomeBreakdownPage = document.getElementById("page-income-breakdown");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
@@ -743,7 +747,11 @@
                 !savingsPage.classList.contains("hidden") ||
                 !accountsPage.classList.contains("hidden") ||
                 !categoriesPage.classList.contains("hidden") ||
-                !backupPage.classList.contains("hidden")
+                !backupPage.classList.contains("hidden") ||
+                !autolockPage.classList.contains("hidden") ||
+                !databasePage.classList.contains("hidden") ||
+                !spendingBreakdownPage.classList.contains("hidden") ||
+                !incomeBreakdownPage.classList.contains("hidden")
             ) {
                 navigateToWorkspace();
             }
@@ -817,6 +825,25 @@
             return (amount / fxRates[fromCurr]) * fxRates[toCurr];
         }
 
+        // Converts a transaction's own amount/currency into the base currency for reporting
+        // (dashboard totals, Spending/Income Breakdown, Net Savings Statement). If the
+        // transaction has a manual FX rate (v32 — Income/Expense only, see
+        // updateTxManualFxVisibility()), that locked rate is used for the tx-currency →
+        // account-currency leg first, then the account's currency is converted to base currency
+        // at the LIVE rate (base-currency valuation is always a live snapshot; only the leg the
+        // user actually fixed — what the account itself received/paid — is frozen). Falls back to
+        // the plain live conversion when there's no manual rate, exactly as before.
+        function convertTxAmountToBase(t, accounts) {
+            if (t.manualFxRate && t.src) {
+                const acc = accounts.find(a => a.id === t.src);
+                if (acc && acc.type !== "multi" && acc.type !== "fd" && acc.currency && acc.currency !== t.currency) {
+                    const inAccountCurrency = t.amount * t.manualFxRate;
+                    return convertCurrency(inAccountCurrency, acc.currency, baseCurrency);
+                }
+            }
+            return convertCurrency(t.amount, t.currency, baseCurrency);
+        }
+
         function openModal(id) { 
             document.getElementById(id).classList.add("active"); 
             pushVirtualState(id);
@@ -861,7 +888,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -987,11 +1014,19 @@
             const accountsHidden = document.getElementById("page-accounts").classList.contains("hidden");
             const categoriesHidden = document.getElementById("page-categories").classList.contains("hidden");
             const backupHidden = document.getElementById("page-backup").classList.contains("hidden");
+            const autolockHidden = document.getElementById("page-autolock").classList.contains("hidden");
+            const databaseHidden = document.getElementById("page-database").classList.contains("hidden");
+            const spendingHidden = document.getElementById("page-spending-breakdown").classList.contains("hidden");
+            const incomeHidden = document.getElementById("page-income-breakdown").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
             else if (!accountsHidden) target = "accounts";
             else if (!categoriesHidden) target = "categories";
             else if (!backupHidden) target = "backup";
+            else if (!autolockHidden) target = "autolock";
+            else if (!databaseHidden) target = "database";
+            else if (!spendingHidden) target = "spending-breakdown";
+            else if (!incomeHidden) target = "income-breakdown";
             else if (!ledgerHidden) {
                 const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
                 target = isUnfiltered ? "all-ledger" : null;
@@ -1002,8 +1037,9 @@
             }
         }
 
-        // Routes a sidebar tap to the matching page/modal. Backup & Restore and Accounts/Categories
-        // are now full pages (not modals) — see navigateToAccountsPage/CategoriesPage/BackupPage.
+        // Routes a sidebar tap to the matching page/modal. Backup & Restore, Accounts/Categories,
+        // Auto-Lock, App Local Database, and Spending/Income Breakdown are all full pages (not
+        // modals) — see the matching navigateTo*Page functions.
         function sidebarGo(el) {
             const target = el.dataset.target;
             closeSidebar();
@@ -1013,6 +1049,10 @@
             else if (target === "accounts") navigateToAccountsPage();
             else if (target === "categories") navigateToCategoriesPage();
             else if (target === "backup") navigateToBackupPage();
+            else if (target === "autolock") navigateToAutoLockPage();
+            else if (target === "database") navigateToDatabasePage();
+            else if (target === "spending-breakdown") navigateToSpendingBreakdownPage();
+            else if (target === "income-breakdown") navigateToIncomeBreakdownPage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -1796,6 +1836,12 @@
                 document.getElementById("destAccount").value = tx.dest || "";
                 document.getElementById("txDate").value = tx.date;
 
+                document.getElementById("txManualFxToggle").checked = !!tx.manualFxRate;
+                document.getElementById("txManualFxRate").value = tx.manualFxRate || "";
+                document.getElementById("txManualFxRateRow").style.display = tx.manualFxRate ? "block" : "none";
+                await updateTxManualFxVisibility();
+                recalcTxManualFxPreview();
+
                 const currentCats = dynamicCategories.filter(c => c.type === tx.type).map(c => c.name);
                 const fallbackGroup = tx.type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
                 
@@ -1901,6 +1947,10 @@
                 // New entry: default to "auto" Description (off) — most FD placements don't need
                 // a separate free-text description on top of their Account/Reference No.
                 document.getElementById("txFdManualDesc").checked = false;
+
+                document.getElementById("txManualFxToggle").checked = false;
+                document.getElementById("txManualFxRate").value = "";
+                document.getElementById("txManualFxRateRow").style.display = "none";
 
                 syncTransactionCurrency();
             }
@@ -2071,6 +2121,7 @@
             }
 
             updateTxFdFieldsVisibilitySync(accounts);
+            updateTxManualFxVisibility();
         }
 
         // Auto-calculates the FD placement's maturity date from commencing date + tenure, and
@@ -2098,6 +2149,76 @@
             const curr = document.getElementById("txCurrency").value;
 
             preview.textContent = `Matures ${maturityStr} — projected payout ≈ ${formatCurrency(projectedTotal, curr)} (principal + ${formatCurrency(projectedInterest, curr)} interest, simple interest estimate)`;
+
+            updateTxManualFxVisibility();
+        }
+
+        // --- MANUAL FX RATE (per-transaction override, v32) ---
+        // Only relevant for Income/Expense entries against a single-currency ("normal") account
+        // when the entry's own currency differs from that account's currency. Multi-currency and
+        // Fixed Deposit accounts keep separate per-currency baskets with no conversion, and
+        // Transfers have two account legs (src + dest currency), so a single rate would be
+        // ambiguous — out of scope here.
+        async function updateTxManualFxVisibility() {
+            const wrap = document.getElementById("txManualFxWrap");
+            const type = document.getElementById("txType").value;
+            const txCurr = document.getElementById("txCurrency").value;
+            const srcId = document.getElementById("srcAccount").value;
+
+            if (type === "transfer" || !srcId || !txCurr) {
+                wrap.style.display = "none";
+                return;
+            }
+
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const account = accounts.find(a => a.id === srcId);
+
+            if (!account || account.type === "multi" || account.type === "fd" || !account.currency || account.currency === txCurr) {
+                wrap.style.display = "none";
+                document.getElementById("txManualFxToggle").checked = false;
+                document.getElementById("txManualFxRateRow").style.display = "none";
+                return;
+            }
+
+            wrap.style.display = "block";
+            document.getElementById("txManualFxRateLabel").textContent = `Rate (1 ${txCurr} = ? ${account.currency})`;
+            const liveRate = convertCurrency(1, txCurr, account.currency);
+            document.getElementById("txManualFxAutoHint").textContent = document.getElementById("txManualFxToggle").checked
+                ? ""
+                : `Auto: currently ${liveRate.toFixed(4)} (today's rate from Currency & FX Rates). This is recalculated live — if that rate changes later, this transaction's effect on the account balance changes with it.`;
+            recalcTxManualFxPreview();
+        }
+
+        function toggleTxManualFx() {
+            const on = document.getElementById("txManualFxToggle").checked;
+            document.getElementById("txManualFxRateRow").style.display = on ? "block" : "none";
+            if (on && !document.getElementById("txManualFxRate").value) {
+                const txCurr = document.getElementById("txCurrency").value;
+                readAllDB(STORES.ACCOUNTS).then(accounts => {
+                    const account = accounts.find(a => a.id === document.getElementById("srcAccount").value);
+                    if (account) {
+                        document.getElementById("txManualFxRate").value = convertCurrency(1, txCurr, account.currency).toFixed(6);
+                        recalcTxManualFxPreview();
+                    }
+                });
+            }
+            updateTxManualFxVisibility();
+        }
+
+        async function recalcTxManualFxPreview() {
+            const preview = document.getElementById("txManualFxPreview");
+            const on = document.getElementById("txManualFxToggle").checked;
+            if (!on) { preview.textContent = ""; return; }
+
+            const amount = parseFloat(document.getElementById("txAmount").value) || 0;
+            const rate = parseFloat(document.getElementById("txManualFxRate").value) || 0;
+            const txCurr = document.getElementById("txCurrency").value;
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const account = accounts.find(a => a.id === document.getElementById("srcAccount").value);
+            if (!account) { preview.textContent = ""; return; }
+
+            const converted = amount * rate;
+            preview.textContent = `≈ ${formatCurrency(converted, account.currency)} will be applied to ${account.name}'s balance, locked at this rate regardless of future FX rate table changes.`;
         }
 
         // --- RESOLVE FIXED DEPOSIT MATURITY (renew or withdraw) ---
@@ -2357,6 +2478,14 @@
                 return;
             }
 
+            if (document.getElementById("txManualFxWrap").style.display !== "none" && document.getElementById("txManualFxToggle").checked) {
+                const manualRateVal = parseFloat(document.getElementById("txManualFxRate").value);
+                if (isNaN(manualRateVal) || manualRateVal <= 0) {
+                    alert("Please enter a valid manual FX rate greater than zero, or turn off manual FX to use the auto rate.");
+                    return;
+                }
+            }
+
             // Editing an existing Transfer that already carries the "Fixed Deposit" category (set
             // deliberately by the FD maturity-resolution flow, not through this form) should keep
             // it rather than losing it to the blanket "Transfers have no category" rule just below
@@ -2392,7 +2521,13 @@
                 fdStartDate: null,
                 fdTenureMonths: null,
                 fdInterestRate: null,
-                fdMaturityDate: null
+                fdMaturityDate: null,
+                // Manual FX rate override (v32) — only meaningful for Income/Expense against a
+                // "normal" account when the entry's currency differs from the account's currency.
+                // null means "auto": convert using the live global fxRates table, as before.
+                manualFxRate: (document.getElementById("txManualFxWrap").style.display !== "none" && document.getElementById("txManualFxToggle").checked)
+                    ? (parseFloat(document.getElementById("txManualFxRate").value) || null)
+                    : null
             };
 
             const fdFieldsVisible = document.getElementById("txFdFieldsWrap").style.display !== "none";
@@ -2497,11 +2632,17 @@
             // Applies a signed amount to an account's balance. "Normal" accounts are converted into
             // their one fixed currency (as before). Multi-Currency and Fixed Deposit accounts keep a
             // separate running balance per currency ("basket") — no conversion between baskets.
-            function applyToAccountBalance(account, amount, currency, sign) {
+            // manualFxRate (v32): when a transaction has one set (Income/Expense only — see the
+            // scoping note on updateTxManualFxVisibility()), it's used instead of the live global
+            // fxRates table for this specific leg, so a later change to those rates doesn't
+            // retroactively change what this past transaction actually did to the account balance.
+            function applyToAccountBalance(account, amount, currency, sign, manualFxRate) {
                 if (!account) return;
                 if (account.type === "multi" || account.type === "fd") {
                     const basket = nativeBalances[account.id];
                     basket[currency] = (basket[currency] || 0) + sign * amount;
+                } else if (manualFxRate && currency !== account.currency) {
+                    nativeBalances[account.id] += sign * (amount * manualFxRate);
                 } else {
                     nativeBalances[account.id] += sign * convertCurrency(amount, currency, account.currency);
                 }
@@ -2510,8 +2651,8 @@
             txs.forEach(t => {
                 const aSrc = accounts.find(a => a.id === t.src);
                 const aDest = accounts.find(a => a.id === t.dest);
-                if (t.type === "income") applyToAccountBalance(aSrc, t.amount, t.currency, +1);
-                if (t.type === "expense") applyToAccountBalance(aSrc, t.amount, t.currency, -1);
+                if (t.type === "income") applyToAccountBalance(aSrc, t.amount, t.currency, +1, t.manualFxRate);
+                if (t.type === "expense") applyToAccountBalance(aSrc, t.amount, t.currency, -1, t.manualFxRate);
                 if (t.type === "transfer") {
                     applyToAccountBalance(aSrc, t.amount, t.currency, -1);
                     applyToAccountBalance(aDest, t.amount, t.currency, +1);
@@ -2667,7 +2808,7 @@
                 const withinPeriodFilter = (filterM === "all" || d.getMonth().toString() === filterM) && (filterY === "all" || d.getFullYear().toString() === filterY);
                 if (!withinPeriodFilter && !showFullAccountHistory) return;
 
-                const tBase = convertCurrency(t.amount, t.currency, baseCurrency);
+                const tBase = convertTxAmountToBase(t, accounts);
 
                 if (withinPeriodFilter) {
                     if (t.type === "income") { 
@@ -2713,6 +2854,7 @@
                     ? `<span data-click="openImageViewer" data-image="${escapeHtml(t.image)}" style="cursor:pointer; margin-left:4px;" title="View attached photo">📎</span>`
                     : '';
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
+                const manualFxBadge = t.manualFxRate ? `<span style="font-size:0.62rem; font-weight:700; color:#c2410c; background:#ffedd5; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">✏️ Manual FX</span>` : '';
 
                 // Which account(s) this entry touches — shown as its own line so an Income/Expense
                 // row states where the money came from/went, and a Transfer states both legs,
@@ -2744,7 +2886,7 @@
                 ledgerHTML += `
                     <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${t.id}">
                         <div class="item-left">
-                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${fdStatusBadge}</span>
+                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${receiptBadge}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                         </div>
@@ -2777,24 +2919,6 @@
             document.getElementById("reportSavings").textContent = formatCurrency(savings, baseCurrency);
             document.getElementById("savingsBanner").style.background = savings >= 0 ? "#f0fdf4" : "#fef2f2";
 
-            // Spending Breakdown rendering
-            let catHTML = "";
-            Object.keys(catSummary.expense).forEach(c => {
-                const amount = catSummary.expense[c];
-                if(amount === 0) return;
-                const pct = expBaseTotal > 0 ? ((amount / expBaseTotal) * 100).toFixed(0) : 0;
-                const icon = getCategoryIcon(c, "expense");
-                catHTML += `
-                    <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" style="font-size:0.75rem; margin-top:4px;">
-                        <div style="display:flex; justify-content:space-between; margin-bottom: 2px;">
-                            <strong>${icon} ${escapeHtml(c.toUpperCase())}</strong>
-                            <span>${formatCurrency(amount, baseCurrency)} (${pct}%)</span>
-                        </div>
-                        <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%;"></div></div>
-                    </div>
-                `;
-            });
-            document.getElementById("categoryReportList").innerHTML = catHTML || '<p style="font-size: 0.75rem; text-align: center; color: var(--text-muted);">No spending categorised.</p>';
             document.getElementById("ledgerList").innerHTML = ledgerHTML || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No matches found.</p>';
 
             // The Net Savings Statement page has its own independent "All Years / Year" filter
@@ -2842,6 +2966,7 @@
 
         async function renderSavingsStatement() {
             const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
             populateSavingsYearFilterOptions(txs);
             const filterY = document.getElementById("savingsYearFilter").value;
 
@@ -2856,7 +2981,7 @@
             txs.forEach(t => {
                 if (filterY !== "all" && new Date(t.date).getFullYear().toString() !== filterY) return;
 
-                const tBase = convertCurrency(t.amount, t.currency, baseCurrency);
+                const tBase = convertTxAmountToBase(t, accounts);
                 if (t.type === "income") {
                     incBaseTotal += tBase;
                     catSummary.income[t.cat] = (catSummary.income[t.cat] || 0) + tBase;
@@ -2901,6 +3026,210 @@
             document.getElementById("savingsSurplusLabel").textContent = statementDiff >= 0 ? "Surplus Margin (Savings):" : "Deficit (Shortfall Margin):";
             document.getElementById("savingsSurplusValue").textContent = formatCurrency(statementDiff, baseCurrency);
             document.getElementById("savingsSurplusValue").style.color = statementDiff >= 0 ? "var(--income-color)" : "var(--expense-color)";
+        }
+
+        // --- SPENDING / INCOME BREAKDOWN PAGES (moved out of dashboard + Income Breakdown added, v32) ---
+
+        // Small fixed palette, cycled by category index, used by the bar/donut chart views.
+        const BREAKDOWN_CHART_COLORS = ["#6366f1", "#f97316", "#10b981", "#ef4444", "#0ea5e9", "#eab308", "#a855f7", "#14b8a6", "#ec4899", "#84cc16", "#64748b", "#f43f5e"];
+
+        // Builds the shared "List" view (category rows with a % progress bar) — the same markup
+        // the old dashboard Spending Breakdown used, now reused by both breakdown pages.
+        function buildBreakdownListHTML(entries, total, type) {
+            if (entries.length === 0) return '<p style="font-size: 0.75rem; text-align: center; color: var(--text-muted);">Nothing categorised yet.</p>';
+            return entries.map(e => {
+                const pct = total > 0 ? ((e.value / total) * 100).toFixed(0) : 0;
+                const icon = getCategoryIcon(e.label, type);
+                return `
+                    <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(e.label)}" style="font-size:0.75rem; margin-top:4px;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 2px;">
+                            <strong>${icon} ${escapeHtml(e.label.toUpperCase())}</strong>
+                            <span>${formatCurrency(e.value, baseCurrency)} (${pct}%)</span>
+                        </div>
+                        <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%; background:${e.color};"></div></div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // Simple vertical bar chart, no external chart library — plain SVG scaled to the largest
+        // category so bars are comparable at a glance.
+        function buildBreakdownBarSVG(entries) {
+            if (entries.length === 0) return "";
+            const w = 320, h = 200, padBottom = 34, padTop = 10;
+            const maxVal = Math.max(...entries.map(e => e.value), 0.01);
+            const barW = Math.min(48, (w - 20) / entries.length - 10);
+            const gap = (w - 20 - barW * entries.length) / (entries.length + 1);
+            let bars = "";
+            entries.forEach((e, i) => {
+                const barH = ((h - padBottom - padTop) * e.value) / maxVal;
+                const x = 10 + gap + i * (barW + gap);
+                const y = h - padBottom - barH;
+                bars += `
+                    <rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="4" fill="${e.color}"></rect>
+                    <text x="${(x + barW / 2).toFixed(1)}" y="${h - padBottom + 14}" font-size="9" text-anchor="middle" fill="#64748b">${escapeHtml(e.label.length > 8 ? e.label.slice(0, 7) + "…" : e.label)}</text>
+                `;
+            });
+            return `<svg viewBox="0 0 ${w} ${h}" style="width:100%; max-width:${w}px; display:block; margin:0 auto;">${bars}</svg>`;
+        }
+
+        // Donut chart via stroke-dasharray on a circle — the standard no-library technique for a
+        // simple pie/donut in raw SVG. A separate color-coded legend accompanies it since slice
+        // labels don't fit cleanly inside thin donut segments.
+        function buildBreakdownDonutSVG(entries, total) {
+            if (entries.length === 0 || total <= 0) return "";
+            const size = 200, r = 70, cx = size / 2, cy = size / 2, circumference = 2 * Math.PI * r;
+            let offset = 0;
+            let segments = "";
+            entries.forEach(e => {
+                const frac = e.value / total;
+                const dash = frac * circumference;
+                segments += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${e.color}" stroke-width="28" stroke-dasharray="${dash.toFixed(2)} ${(circumference - dash).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"></circle>`;
+                offset += dash;
+            });
+            const legend = entries.map(e => {
+                const pct = total > 0 ? ((e.value / total) * 100).toFixed(0) : 0;
+                return `<div style="display:flex; align-items:center; gap:6px; font-size:0.7rem; margin-bottom:4px;">
+                    <span style="width:10px; height:10px; border-radius:50%; background:${e.color}; flex-shrink:0;"></span>
+                    <span style="flex:1;">${escapeHtml(e.label)}</span>
+                    <span style="color:var(--text-muted);">${pct}%</span>
+                </div>`;
+            }).join("");
+            return `
+                <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; justify-content:center;">
+                    <svg viewBox="0 0 ${size} ${size}" style="width:180px; height:180px; flex-shrink:0;">${segments}</svg>
+                    <div style="min-width:140px; flex:1;">${legend}</div>
+                </div>
+            `;
+        }
+
+        function renderBreakdownChart(wrapId, chartType, entries, total, type) {
+            const wrap = document.getElementById(wrapId);
+            if (chartType === "bar") wrap.innerHTML = buildBreakdownBarSVG(entries);
+            else if (chartType === "donut") wrap.innerHTML = buildBreakdownDonutSVG(entries, total);
+            else wrap.innerHTML = ""; // "list" view has no separate chart — the list rows are the whole view
+        }
+
+        async function renderSpendingBreakdownPage() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            populateYearFilterOptionsFor("spendingYearFilter", txs, "spendingYearFilterInit");
+            const filterM = document.getElementById("spendingMonthFilter").value;
+            const filterY = document.getElementById("spendingYearFilter").value;
+            const chartType = document.getElementById("spendingChartType").value;
+
+            const catTotals = {};
+            let total = 0;
+            txs.forEach(t => {
+                if (t.type !== "expense") return;
+                const d = new Date(t.date);
+                if (filterM !== "all" && d.getMonth().toString() !== filterM) return;
+                if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
+                const tBase = convertTxAmountToBase(t, accounts);
+                const cat = t.cat || "Other Expenses";
+                catTotals[cat] = (catTotals[cat] || 0) + tBase;
+                total += tBase;
+            });
+
+            const entries = Object.keys(catTotals)
+                .filter(c => catTotals[c] > 0)
+                .sort((a, b) => catTotals[b] - catTotals[a])
+                .map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+
+            document.getElementById("spendingBreakdownTotal").textContent = formatCurrency(total, baseCurrency);
+            renderBreakdownChart("spendingBreakdownChartWrap", chartType, entries, total, "expense");
+            document.getElementById("spendingBreakdownList").innerHTML = buildBreakdownListHTML(entries, total, "expense");
+        }
+
+        async function renderIncomeBreakdownPage() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            populateYearFilterOptionsFor("incomeYearFilter", txs, "incomeYearFilterInit");
+            const filterM = document.getElementById("incomeMonthFilter").value;
+            const filterY = document.getElementById("incomeYearFilter").value;
+            const chartType = document.getElementById("incomeChartType").value;
+
+            const catTotals = {};
+            let total = 0;
+            txs.forEach(t => {
+                if (t.type !== "income") return;
+                const d = new Date(t.date);
+                if (filterM !== "all" && d.getMonth().toString() !== filterM) return;
+                if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
+                const tBase = convertTxAmountToBase(t, accounts);
+                const cat = t.cat || "Other Income";
+                catTotals[cat] = (catTotals[cat] || 0) + tBase;
+                total += tBase;
+            });
+
+            const entries = Object.keys(catTotals)
+                .filter(c => catTotals[c] > 0)
+                .sort((a, b) => catTotals[b] - catTotals[a])
+                .map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+
+            document.getElementById("incomeBreakdownTotal").textContent = formatCurrency(total, baseCurrency);
+            renderBreakdownChart("incomeBreakdownChartWrap", chartType, entries, total, "income");
+            document.getElementById("incomeBreakdownList").innerHTML = buildBreakdownListHTML(entries, total, "income");
+        }
+
+        // Generic year-filter populator (mirrors populateYearFilterOptions/populateSavingsYearFilterOptions)
+        // for the two new breakdown pages, keyed by a distinct "already initialized" flag per select
+        // so each page defaults to "All Years" on first load and preserves the user's choice after.
+        const breakdownYearFilterInit = {};
+        function populateYearFilterOptionsFor(selectId, txs, initKey) {
+            const select = document.getElementById(selectId);
+            const prevValue = select.value;
+            const currentYear = new Date().getFullYear();
+
+            const years = new Set([currentYear]);
+            txs.forEach(t => {
+                const y = new Date(t.date).getFullYear();
+                if (!isNaN(y)) years.add(y);
+            });
+
+            const sortedYears = [...years].sort((a, b) => b - a);
+            select.innerHTML = `<option value="all">All Years</option>` +
+                sortedYears.map(y => `<option value="${y}">${y}</option>`).join("");
+
+            if (!breakdownYearFilterInit[initKey]) {
+                select.value = "all";
+                breakdownYearFilterInit[initKey] = true;
+            } else if (prevValue === "all" || sortedYears.map(String).includes(prevValue)) {
+                select.value = prevValue;
+            } else {
+                select.value = "all";
+            }
+        }
+
+        function navigateToSpendingBreakdownPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-spending-breakdown");
+            window.scrollTo(0, 0);
+            pushVirtualState("spending-breakdown");
+            renderSpendingBreakdownPage();
+        }
+
+        function navigateToIncomeBreakdownPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-income-breakdown");
+            window.scrollTo(0, 0);
+            pushVirtualState("income-breakdown");
+            renderIncomeBreakdownPage();
+        }
+
+        function navigateToAutoLockPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-autolock");
+            window.scrollTo(0, 0);
+            pushVirtualState("autolock");
+        }
+
+        function navigateToDatabasePage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-database");
+            window.scrollTo(0, 0);
+            pushVirtualState("database");
+            calculateStorageMetrics();
         }
 
         async function bootstrap() {
@@ -3196,12 +3525,17 @@
             saveDefaultPaymentAccount: () => saveDefaultPaymentAccount(),
             toggleTxFdDescMode: () => toggleTxFdDescMode(),
             resetSavingsPageAndRender: () => renderSavingsStatement(),
+            toggleTxManualFx: () => toggleTxManualFx(),
+            recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
+            renderSpendingBreakdownPage: () => renderSpendingBreakdownPage(),
+            renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
         };
 
         const INPUT_ACTIONS = {
             recalcTxFdMaturity: () => recalcTxFdMaturity(),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
+            recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
         };
 
         document.addEventListener("click", (e) => {

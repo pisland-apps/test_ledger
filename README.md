@@ -517,3 +517,92 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v31.
+
+## v32: Spending/Income Breakdown moved to sidebar with chart types, sidebar
+restructuring, Auto-Lock/Database split out of Backup & Restore, manual FX
+rate entry per transaction
+
+- **Spending Breakdown moved off the dashboard.** The "Spending Breakdown"
+  section (category list with % bars) is no longer on the main
+  dashboard page. It's now its own page reached via the sidebar
+  (**Reports → Spending Breakdown**), with its own independent
+  Month/Year filter (doesn't affect or get affected by the
+  dashboard's filter, same pattern as the Net Savings Statement).
+- **New: Income Breakdown page.** Same treatment as Spending
+  Breakdown, but for income categories — **Reports → Income
+  Breakdown** in the sidebar.
+- **Chart type selector.** Both breakdown pages have a "Chart Type"
+  dropdown — *List* (the original bars + % rows), *Bar Chart* (a
+  plain SVG vertical bar chart, no external library), or *Donut
+  Chart* (SVG donut with a color-coded legend). Selection isn't
+  persisted between visits (defaults to List each time) — this can
+  be wired to `localStorage` in a follow-up if it turns out people
+  want a sticky preference.
+- **Sidebar restructuring:**
+  - "Net Savings Statement" moved up to sit directly under
+    "Dashboard" in the *Overview* section (was previously last).
+  - New *Reports* section holding Spending Breakdown and Income
+    Breakdown.
+  - *Data & Security* section grew two entries — **Auto-Lock** and
+    **App Local Database** — both split out of the Backup & Restore
+    page into their own dedicated pages/sidebar items (see below).
+    Order is now: Backup & Restore, Auto-Lock, App Local Database,
+    Lock App Now.
+- **Auto-Lock is now its own page** (`page-autolock`), holding just
+  the "⏱️ Auto-lock after inactivity" selector that used to live in
+  Backup & Restore's "Security" section. Functionally unchanged —
+  same `<select id="autoLockSelect">`, same `handleAutoLockChange()`,
+  same `localStorage` key.
+- **App Local Database is now its own page** (`page-database`),
+  holding the storage-footprint meter that used to live in Backup &
+  Restore. Functionally unchanged — same `calculateStorageMetrics()`,
+  now also called on navigating to this page directly (previously
+  only ever triggered from `renderApp()`/`navigateToBackupPage()`).
+  Backup & Restore's own "Security" section now holds only the
+  biometric quick-unlock toggle; Export/Import is unchanged.
+- **Manual FX rate entry per transaction.** Previously, spending or
+  receiving a currency different from an account's own currency
+  (e.g. logging an SGD expense against a MYR account) always
+  silently converted using whatever the *live* Currency & FX Rates
+  table says **at render time** — never a rate captured when the
+  transaction was entered. That has two consequences worth being
+  explicit about, since this shipped without a way to opt out of it
+  until now: (1) the account balance contribution from that entry
+  recalculates every time the app renders, using today's rate, not
+  the rate on the transaction's date; (2) editing the global FX
+  rate table later — for *any* reason — retroactively changes what
+  every past cross-currency transaction is computed to have done to
+  the account balance and to base-currency reports (Spending/Income
+  Breakdown, Net Savings Statement, Portfolio Net Worth). Nothing
+  was ever stored per-transaction to freeze this.
+  This version adds an opt-in fix, scoped to Income/Expense entries
+  against a single-currency ("normal") account, when the entry's
+  currency differs from the account's currency (Transfers and
+  Multi-Currency/Fixed-Deposit accounts are out of scope — see the
+  comment on `updateTxManualFxVisibility()` for why). A new
+  "✏️ Manually enter FX rate" toggle appears in the transaction form
+  in that situation, off by default (auto: unchanged live-rate
+  behaviour). Turning it on reveals a rate input (pre-filled with
+  today's live rate as a starting point, editable), with a live
+  preview of the converted amount that will hit the account. The
+  rate is stored on the transaction as `manualFxRate` and, once
+  saved, permanently overrides the live table for that specific
+  entry's effect on the account balance — future changes to Currency
+  & FX Rates no longer touch it. It also feeds into base-currency
+  reporting (`convertTxAmountToBase()`): the tx-currency→account-
+  currency leg uses the locked rate, then account-currency→base-
+  currency still converts at the live rate (base-currency valuation
+  remains a live snapshot; only the leg the user actually pinned —
+  what the account itself received/paid — is frozen). Ledger rows
+  for entries using this show a small "✏️ Manual FX" badge for
+  transparency. Editing an existing entry preserves and pre-fills
+  its manual rate if it has one.
+- No IndexedDB schema/version changes (`manualFxRate` is just a new
+  optional field on transaction records, `undefined`/`null` for all
+  existing data — treated identically to "auto" throughout). No
+  export/import format changes. Verified with `node --check` plus
+  the id/data-click/data-change cross-reference script (0 missing,
+  0 dupes, 0 unbound handlers) after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v32.
