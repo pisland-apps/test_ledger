@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v35";
+        const APP_VERSION = "v36";
         const APP_VERSION_DATE = "2026-08-16";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -30,6 +30,22 @@
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
+
+        // Account grouping (v35) — every account belongs to one of these, used to sort/section
+        // both the full Accounts page and a member's account list (group, then name). Accounts
+        // saved before this existed default to "Bank/Cash" wherever a group is read.
+        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate"];
+        const DEFAULT_ACCOUNT_GROUP = ACCOUNT_GROUPS[0];
+
+        // Sorts accounts by group (in ACCOUNT_GROUPS order) then by name — shared by the Accounts
+        // page and per-member account lists so both stay consistent.
+        function sortAccountsByGroupThenName(accounts) {
+            return [...accounts].sort((a, b) => {
+                const gi = ACCOUNT_GROUPS.indexOf(a.group || DEFAULT_ACCOUNT_GROUP) - ACCOUNT_GROUPS.indexOf(b.group || DEFAULT_ACCOUNT_GROUP);
+                if (gi !== 0) return gi;
+                return (a.name || "").localeCompare(b.name || "");
+            });
+        }
         let membersCache = [];
         // Which member/joint-group is currently being viewed on page-member, e.g.
         // { type: "member", ids: ["mem_1"] } or { type: "joint", ids: ["mem_1","mem_2"] }.
@@ -655,6 +671,8 @@
         const DEFAULT_CATEGORIES = [
             { name: "Dividend ASNB", type: "income", icon: "📈" },
             { name: "Divident EPF", type: "income", icon: "🏦" },
+            { name: "EPF Contrib.(ER)", type: "income", icon: "🏦" },
+            { name: "EPF Contrib.(EE)", type: "income", icon: "🏦" },
             { name: "FD Interest", type: "income", icon: "🏦" },
             { name: "Bank Interest", type: "income", icon: "💰" },
             { name: "Gift Received", type: "income", icon: "🎁" },
@@ -709,6 +727,8 @@
             "interest income": "💰",
             "dividend asnb": "📈",
             "divident epf": "🏦",
+            "epf contrib.(er)": "🏦",
+            "epf contrib.(ee)": "🏦",
             "fd interest": "🏦",
             "bank interest": "💰",
             "gift received": "🎁",
@@ -750,7 +770,7 @@
                 return;
             }
 
-            const activeModals = ["txModal", "accountsModal", "currencyModal", "categoriesModal", "imageViewerModal", "resolveFdModal"];
+            const activeModals = ["txModal", "accountsModal", "currencyModal", "categoriesModal", "imageViewerModal", "resolveFdModal", "memberModal"];
             let modalClosed = false;
             activeModals.forEach(id => {
                 const modal = document.getElementById(id);
@@ -848,9 +868,106 @@
             });
         }
 
+        // Dashboard "Recent Transactions" widget settings (v35) — persisted via SETTINGS store,
+        // loaded in bootstrap(). "both" for type means Income + Expense (Transfers are never
+        // included — the filter options are explicitly Expense/Income/Both, not Transfer).
+        let recentTxTypeFilter = "both"; // "both" | "income" | "expense"
+        let recentTxAccountFilter = "all"; // "all" | accountId
+        let recentTxCount = 5; // 1-14
+
+        function populateRecentTxAccountSelect(accounts) {
+            const sel = document.getElementById("recentTxAccountSelect");
+            if (!sel) return;
+            const current = recentTxAccountFilter;
+            sel.innerHTML = `<option value="all">All Accounts</option>` +
+                accounts.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("");
+            sel.value = accounts.some(a => a.id === current) ? current : "all";
+        }
+
+        function populateRecentTxCountSelect() {
+            const sel = document.getElementById("recentTxCountSelect");
+            if (!sel || sel.options.length > 0) return;
+            for (let i = 1; i <= 14; i++) {
+                sel.innerHTML += `<option value="${i}">${i} item${i === 1 ? '' : 's'}</option>`;
+            }
+        }
+
+        // Draws the compact "Recent Transactions" list on the dashboard — a small slice of
+        // Income/Expense entries (never Transfers) filtered/limited per the settings panel above it.
+        function renderRecentTransactionsWidget(accounts, txs) {
+            const list = document.getElementById("recentTxList");
+            if (!list) return;
+
+            populateRecentTxCountSelect();
+            populateRecentTxAccountSelect(accounts);
+            const typeSel = document.getElementById("recentTxTypeSelect");
+            const countSel = document.getElementById("recentTxCountSelect");
+            if (typeSel) typeSel.value = recentTxTypeFilter;
+            if (countSel) countSel.value = String(recentTxCount);
+
+            let filtered = txs.filter(t => t.type === "income" || t.type === "expense");
+            if (recentTxTypeFilter !== "both") filtered = filtered.filter(t => t.type === recentTxTypeFilter);
+            if (recentTxAccountFilter !== "all") filtered = filtered.filter(t => t.src === recentTxAccountFilter);
+
+            filtered = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, recentTxCount);
+
+            if (filtered.length === 0) {
+                list.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No matching transactions yet.</p>`;
+                return;
+            }
+
+            list.innerHTML = filtered.map(t => {
+                const col = t.type === "income" ? "income-color" : "expense-color";
+                const sgn = t.type === "income" ? "+" : "-";
+                const iconBadge = getCategoryIcon(t.cat, t.type);
+                const acc = accounts.find(a => a.id === t.src);
+                return `
+                    <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${t.id}">
+                        <div class="item-left">
+                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || '')}]</span>
+                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(acc.name) : "(deleted account)"}</span>
+                        </div>
+                        <div class="item-right">
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        function toggleRecentTxSettings() {
+            const panel = document.getElementById("recentTxSettingsPanel");
+            if (!panel) return;
+            panel.style.display = panel.style.display === "none" ? "flex" : "none";
+        }
+
+        async function handleRecentTxSettingChange() {
+            recentTxTypeFilter = document.getElementById("recentTxTypeSelect").value;
+            recentTxAccountFilter = document.getElementById("recentTxAccountSelect").value;
+            recentTxCount = parseInt(document.getElementById("recentTxCountSelect").value, 10) || 5;
+            await writeDB(STORES.SETTINGS, { key: "recentTxTypeFilter", value: recentTxTypeFilter });
+            await writeDB(STORES.SETTINGS, { key: "recentTxAccountFilter", value: recentTxAccountFilter });
+            await writeDB(STORES.SETTINGS, { key: "recentTxCount", value: recentTxCount });
+            await renderApp();
+        }
+
         function formatCurrency(amount, curr) {
             const sym = currencySymbols[curr] || curr;
             return `${sym}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+
+        // Formats a balance-type amount (net worth, account balance, member totals — anything
+        // that can legitimately sit in deficit) as HTML: negative amounts render in red,
+        // parenthesized on the absolute value (accounting convention), e.g. (S$8,648.94).
+        // Positive/zero amounts render exactly like formatCurrency. Only use this for contexts
+        // assigned via innerHTML — for a plain transaction amount (always shown with its own
+        // explicit +/- sign elsewhere), use formatCurrency instead.
+        function formatBalanceHTML(amount, curr) {
+            if (amount < 0) {
+                return `<span style="color:var(--expense-color);">(${formatCurrency(Math.abs(amount), curr)})</span>`;
+            }
+            return formatCurrency(amount, curr);
         }
 
         function convertCurrency(amount, fromCurr, toCurr) {
@@ -1021,6 +1138,7 @@
         }
 
         async function navigateToAccountsPage() {
+            closeSidebar();
             workspaceScrollY = window.scrollY;
             showPage("page-accounts");
             window.scrollTo(0, 0);
@@ -1053,6 +1171,7 @@
         // Backup & Restore / Auto-Lock / App Local Database / Lock App Now behind one bottom-of-
         // dashboard button.
         function navigateToDataSecurityPage() {
+            closeSidebar();
             workspaceScrollY = window.scrollY;
             showPage("page-datasecurity");
             window.scrollTo(0, 0);
@@ -1419,6 +1538,7 @@
             const isEditing = document.getElementById("editAccountId").value !== "";
             document.getElementById("editAccountId").value = "";
             document.getElementById("newAccName").value = "";
+            document.getElementById("newAccGroup").value = DEFAULT_ACCOUNT_GROUP;
             document.getElementById("newAccBal").value = "0";
             document.getElementById("newAccCurrency").value = baseCurrency;
             document.getElementById("accountFormHeaderTitle").textContent = "Create New Account";
@@ -1446,7 +1566,7 @@
 
             if(!name) { alert("Please enter an account name."); return; }
 
-            const record = { id, name, type, memberIds: getCheckedAccountMemberIds() };
+            const record = { id, name, type, group: document.getElementById("newAccGroup").value || DEFAULT_ACCOUNT_GROUP, memberIds: getCheckedAccountMemberIds() };
 
             if (type === "normal") {
                 const balInput = document.getElementById("newAccBal").value;
@@ -1567,11 +1687,31 @@
         // Renders the full "Accounts" page: the Default Payment Account selector plus a plain
         // list of every account (tap a row to open its Activity page — editing/deleting now
         // lives on that Activity page instead, via the ✏️ icon beside the account name).
+        // Small colored "● Name" owner tag shown under an account row (Accounts page / member
+        // account lists) — one dot+name per owner for a joint account, muted "Unassigned" if none.
+        function accountOwnerTagHTML(account) {
+            const ids = Array.isArray(account.memberIds) ? account.memberIds : [];
+            if (ids.length === 0) {
+                return `<span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">Unassigned</span>`;
+            }
+            return ids.map(id => {
+                const m = getMemberById(id);
+                return `<span style="font-size:0.7rem; font-weight:700; color:${m?.color || '#94a3b8'};">● ${escapeHtml(m?.name || 'Unknown')}</span>`;
+            }).join(" ");
+        }
+
         async function renderAccountsPage() {
             await populateDefaultPaymentAccountSelect();
             const { accounts, nativeBalances } = await computeAccountBalances();
+            const sorted = sortAccountsByGroupThenName(accounts);
             let html = "";
-            accounts.forEach(a => {
+            let lastGroup = null;
+            sorted.forEach(a => {
+                const group = a.group || DEFAULT_ACCOUNT_GROUP;
+                if (group !== lastGroup) {
+                    html += `<div class="config-list-section-label">${escapeHtml(group)}</div>`;
+                    lastGroup = group;
+                }
                 const typeBadge = a.type === "fd"
                     ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#ede9fe; color:#6d28d9; font-weight:bold;">Fixed Deposit</span>`
                     : a.type === "multi"
@@ -1584,14 +1724,17 @@
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
                         ? '<span style="color:var(--text-muted);">No funds yet</span>'
-                        : currencies.map(curr => `<strong>${formatCurrency(baskets[curr], curr)}</strong>`).join(" + ");
+                        : currencies.map(curr => `<strong>${formatBalanceHTML(baskets[curr], curr)}</strong>`).join(" + ");
                 } else {
-                    balSummary = `<strong>${formatCurrency(nativeBalances[a.id], a.currency)}</strong>`;
+                    balSummary = `<strong>${formatBalanceHTML(nativeBalances[a.id], a.currency)}</strong>`;
                 }
 
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}" data-back="accounts">
-                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}</span>
+                        <span>
+                            <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
+                            <br>${accountOwnerTagHTML(a)}
+                        </span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
             });
@@ -1611,6 +1754,7 @@
 
             document.getElementById("editAccountId").value = account.id;
             document.getElementById("newAccName").value = account.name;
+            document.getElementById("newAccGroup").value = account.group || DEFAULT_ACCOUNT_GROUP;
 
             setAccountTypeUI(account.type || "normal");
             if (!account.type || account.type === "normal") {
@@ -1666,8 +1810,7 @@
             if (wasViewingThisAccount) activeLedgerAccountView = "all";
 
             resetAccountForm();
-            const modal = document.getElementById("accountsModal");
-            if (modal.classList.contains("active")) modal.classList.remove("active");
+            closeModal("accountsModal");
 
             if (wasViewingThisAccount && !document.getElementById("page-ledger").classList.contains("hidden")) {
                 await navigateToAccountsPage();
@@ -1744,7 +1887,7 @@
                 return;
             }
 
-            document.getElementById("memberModal").classList.remove("active");
+            closeModal("memberModal");
             await afterMembersChanged();
         }
 
@@ -1773,7 +1916,7 @@
                 return;
             }
 
-            document.getElementById("memberModal").classList.remove("active");
+            closeModal("memberModal");
             await afterMembersChanged();
         }
 
@@ -1927,7 +2070,7 @@
                                 <div class="member-row-sub">${subset.length} account${subset.length === 1 ? '' : 's'}</div>
                             </div>
                         </div>
-                        <span class="member-row-amt">${formatCurrency(total, baseCurrency)}</span>
+                        <span class="member-row-amt">${formatBalanceHTML(total, baseCurrency)}</span>
                     </div>
                 `;
             });
@@ -1951,7 +2094,7 @@
                                 <div class="member-row-sub">${subset.length} account${subset.length === 1 ? '' : 's'}</div>
                             </div>
                         </div>
-                        <span class="member-row-amt">${formatCurrency(total, baseCurrency)}</span>
+                        <span class="member-row-amt">${formatBalanceHTML(total, baseCurrency)}</span>
                     </div>
                 `;
             });
@@ -1968,7 +2111,7 @@
                                 <div class="member-row-sub">${unassigned.length} account${unassigned.length === 1 ? '' : 's'} — tap an account to assign an owner</div>
                             </div>
                         </div>
-                        <span class="member-row-amt">${formatCurrency(total, baseCurrency)}</span>
+                        <span class="member-row-amt">${formatBalanceHTML(total, baseCurrency)}</span>
                     </div>
                 `;
             }
@@ -1993,7 +2136,7 @@
                 titleEl.innerHTML = `${ids.map(id => `<span class="member-color-dot" style="background:${getMemberById(id)?.color || '#94a3b8'};"></span>`).join("")} ${escapeHtml(memberNamesForIds(ids))} (Joint)`;
             }
 
-            document.getElementById("memberPageNetWorthDisplay").textContent = formatCurrency(total, baseCurrency);
+            document.getElementById("memberPageNetWorthDisplay").innerHTML = formatBalanceHTML(total, baseCurrency);
 
             const currencyCount = Object.keys(currencyTotals).length;
             const card = document.getElementById("memberPageNetWorthCard");
@@ -2006,12 +2149,12 @@
                 .map(([curr, amt]) => `
                     <div class="currency-total-chip">
                         <div class="cur-code">${escapeHtml(curr)}</div>
-                        <div class="cur-amt">${formatCurrency(amt, curr)}</div>
+                        <div class="cur-amt">${formatBalanceHTML(amt, curr)}</div>
                     </div>
                 `).join("");
 
             let html = "";
-            subset.forEach(a => {
+            sortAccountsByGroupThenName(subset).forEach(a => {
                 const typeBadge = a.type === "fd"
                     ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#ede9fe; color:#6d28d9; font-weight:bold;">Fixed Deposit</span>`
                     : a.type === "multi"
@@ -2024,18 +2167,28 @@
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
                         ? '<span style="color:var(--text-muted);">No funds yet</span>'
-                        : currencies.map(curr => `<strong>${formatCurrency(baskets[curr], curr)}</strong>`).join(" + ");
+                        : currencies.map(curr => `<strong>${formatBalanceHTML(baskets[curr], curr)}</strong>`).join(" + ");
                 } else {
-                    balSummary = `<strong>${formatCurrency(nativeBalances[a.id], a.currency)}</strong>`;
+                    balSummary = `<strong>${formatBalanceHTML(nativeBalances[a.id], a.currency)}</strong>`;
                 }
 
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}" data-back="member">
-                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}</span>
+                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span></span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
             });
             document.getElementById("memberPageAccountsList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts tagged to this member yet.</p>`;
+        }
+
+        // Wired to the "+" button on a member's Accounts page — opens the Add Account modal
+        // fresh, pre-checking the member(s) currently being viewed as the new account's owner(s)
+        // so the account is tagged correctly without extra taps.
+        function openAddAccountForMember() {
+            if (!activeMemberFilter) return;
+            resetAccountForm();
+            renderAccountMemberCheckboxes(activeMemberFilter.ids);
+            openModal("accountsModal");
         }
 
         function toggleMemberPageCurrencyBreakdown() {
@@ -3317,13 +3470,14 @@
                     currencyTotals[a.currency] = (currencyTotals[a.currency] || 0) + nativeBalances[a.id];
                 }
             });
-            document.getElementById("netWorthDisplay").textContent = formatCurrency(globalBaseNetWorth, baseCurrency);
+            document.getElementById("netWorthDisplay").innerHTML = formatBalanceHTML(globalBaseNetWorth, baseCurrency);
 
             // "Net Worth by Member" rows (replaces the old single "Net Worth by Currency Held"
             // row, v34): one row per member (their solo-owned accounts only), one row per distinct
             // joint-owned account group, and — only if any exist — one row for unassigned accounts,
             // so the breakdown always ties out to the grand total above.
             renderMemberNetWorthRows(accounts, nativeBalances);
+            renderRecentTransactionsWidget(accounts, txs);
 
             // --- Fixed Deposit maturity reminders ---
             // FD terms now live on the individual deposit transaction (each "placement"), not the
@@ -3411,11 +3565,11 @@
                         const currencies = Object.keys(baskets);
                         balSummary = currencies.length === 0
                             ? "No funds yet"
-                            : currencies.map(curr => formatCurrency(baskets[curr], curr)).join(" + ");
+                            : currencies.map(curr => formatBalanceHTML(baskets[curr], curr)).join(" + ");
                     } else {
-                        balSummary = formatCurrency(nativeBalances[viewingAcc.id], viewingAcc.currency);
+                        balSummary = formatBalanceHTML(nativeBalances[viewingAcc.id], viewingAcc.currency);
                     }
-                    document.getElementById("ledgerCurrentBalanceValue").textContent = balSummary;
+                    document.getElementById("ledgerCurrentBalanceValue").innerHTML = balSummary;
                     balanceBanner.style.display = "block";
                 } else {
                     balanceBanner.style.display = "none";
@@ -4084,6 +4238,15 @@
             const storedDefaultPaymentAcc = await readKeyDB("settings", "defaultPaymentAccount");
             if (storedDefaultPaymentAcc) defaultPaymentAccount = storedDefaultPaymentAcc.value || "";
 
+            const storedRecentTxType = await readKeyDB("settings", "recentTxTypeFilter");
+            if (storedRecentTxType) recentTxTypeFilter = storedRecentTxType.value || "both";
+
+            const storedRecentTxAccount = await readKeyDB("settings", "recentTxAccountFilter");
+            if (storedRecentTxAccount) recentTxAccountFilter = storedRecentTxAccount.value || "all";
+
+            const storedRecentTxCount = await readKeyDB("settings", "recentTxCount");
+            if (storedRecentTxCount) recentTxCount = storedRecentTxCount.value || 5;
+
             await syncAndLoadCategories();
             await ensureDefaultCategories();
 
@@ -4320,6 +4483,8 @@
             handleCreateMemberMobile: () => handleCreateMemberMobile(),
             deleteMemberFromForm: () => deleteMemberFromForm(),
             editMember: (el) => editMember(el.dataset.id),
+            openAddAccountForMember: () => openAddAccountForMember(),
+            toggleRecentTxSettings: () => toggleRecentTxSettings(),
             selectMemberColor: (el) => selectMemberColor(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
@@ -4388,6 +4553,7 @@
             renderSpendingBreakdownPage: () => renderSpendingBreakdownPage(),
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
+            handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
         };
 
         const INPUT_ACTIONS = {

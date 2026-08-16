@@ -400,6 +400,14 @@
             margin-top: 4px;
         }
         .sidebar-nav { padding: 10px 0 24px; }
+        .config-list-section-label {
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            padding: 14px 4px 6px;
+        }
         .sidebar-section-label {
             font-size: 0.7rem;
             font-weight: 800;
@@ -544,15 +552,15 @@
         .member-networth-row .member-row-amt { font-weight: 800; font-size: 0.95rem; flex-shrink: 0; }
         .member-color-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; border: 1.5px solid rgba(0,0,0,0.08); }
 
-        /* Bottom "More" action buttons on the dashboard */
-        .dashboard-bottom-actions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+        /* Bottom "More" action buttons on the dashboard — icon-only, one row */
+        .dashboard-bottom-actions { display: flex; flex-direction: row; gap: 10px; margin-bottom: 8px; }
         .dash-bottom-btn {
-            display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+            display: flex; align-items: center; justify-content: center; flex: 1;
             background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
-            padding: 14px 16px; font-size: 0.88rem; font-weight: 700; color: var(--text-main); cursor: pointer;
+            padding: 14px 0; cursor: pointer;
         }
         .dash-bottom-btn:active { background: #f1f5f9; }
-        .dash-bottom-btn-icon { font-size: 1.1rem; width: 22px; text-align: center; flex-shrink: 0; }
+        .dash-bottom-btn-icon { font-size: 1.3rem; }
 
         /* Sidebar member rows */
         .sidebar-member-item {
@@ -827,6 +835,9 @@
             <button class="sidebar-item" data-click="sidebarGo" data-target="workspace">
                 <span class="sidebar-item-icon">🏠</span> Dashboard
             </button>
+            <button class="sidebar-item" data-click="navigateToAccountsPage">
+                <span class="sidebar-item-icon">🏦</span> Financial Accounts
+            </button>
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
@@ -842,6 +853,11 @@
             <div id="sidebarMembersSection"></div>
             <button class="sidebar-item" data-click="navigateToMembersPage">
                 <span class="sidebar-item-icon">👪</span> Manage Members
+            </button>
+
+            <div class="sidebar-divider"></div>
+            <button class="sidebar-item" data-click="navigateToDataSecurityPage">
+                <span class="sidebar-item-icon">🔐</span> Data Security
             </button>
         </nav>
     </div>
@@ -964,17 +980,43 @@
         </div>
 
         <div class="section-header">
+            <span class="section-title">Recent Transactions</span>
+            <button class="text-btn" data-click="toggleRecentTxSettings">⚙ Settings</button>
+        </div>
+        <div id="recentTxSettingsPanel" style="display:none; flex-direction:column; gap:8px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+            <div class="form-row" style="margin-bottom:0;">
+                <label>Show</label>
+                <select id="recentTxTypeSelect" data-change="handleRecentTxSettingChange">
+                    <option value="both">Income + Expense</option>
+                    <option value="income">Income Only</option>
+                    <option value="expense">Expense Only</option>
+                </select>
+            </div>
+            <div class="form-row" style="margin-bottom:0;">
+                <label>Account</label>
+                <select id="recentTxAccountSelect" data-change="handleRecentTxSettingChange">
+                    <option value="all">All Accounts</option>
+                </select>
+            </div>
+            <div class="form-row" style="margin-bottom:0;">
+                <label>Number of items</label>
+                <select id="recentTxCountSelect" data-change="handleRecentTxSettingChange"></select>
+            </div>
+        </div>
+        <div class="ledger-container" id="recentTxList"></div>
+
+        <div class="section-header">
             <span class="section-title">More</span>
         </div>
         <div class="dashboard-bottom-actions">
-            <button class="dash-bottom-btn" data-click="navigateToAccountsPage">
-                <span class="dash-bottom-btn-icon">🏦</span> Financial Accounts
+            <button class="dash-bottom-btn" data-click="navigateToAccountsPage" title="Financial Accounts" aria-label="Financial Accounts">
+                <span class="dash-bottom-btn-icon">🏦</span>
             </button>
-            <button class="dash-bottom-btn" data-click="navigateToAllLedgerPage">
-                <span class="dash-bottom-btn-icon">📜</span> All Transactions
+            <button class="dash-bottom-btn" data-click="navigateToAllLedgerPage" title="All Transactions" aria-label="All Transactions">
+                <span class="dash-bottom-btn-icon">📜</span>
             </button>
-            <button class="dash-bottom-btn" data-click="navigateToDataSecurityPage">
-                <span class="dash-bottom-btn-icon">🔐</span> Data Security
+            <button class="dash-bottom-btn" data-click="navigateToDataSecurityPage" title="Data Security" aria-label="Data Security">
+                <span class="dash-bottom-btn-icon">🔐</span>
             </button>
         </div>
     </div>
@@ -1356,6 +1398,7 @@
 
         <div class="section-header" style="margin-top:0;">
             <span class="section-title">Accounts</span>
+            <button class="text-btn" data-click="openAddAccountForMember">+ Add Account</button>
         </div>
         <div class="config-list" id="memberPageAccountsList" style="padding-bottom:24px;"></div>
     </div>
@@ -1410,6 +1453,16 @@
                 <div class="form-row">
                     <label>Account Name</label>
                     <input type="text" id="newAccName" placeholder="e.g. DBS Bank, Cash Wallet" required>
+                </div>
+
+                <div class="form-row">
+                    <label>Group</label>
+                    <select id="newAccGroup" class="form-input">
+                        <option value="Bank/Cash">🏦 Bank/Cash</option>
+                        <option value="Credit Card">💳 Credit Card</option>
+                        <option value="Investment">📈 Investment</option>
+                        <option value="Real Estate">🏠 Real Estate</option>
+                    </select>
                 </div>
 
                 <!-- Currency + Opening Balance — only applicable to "Normal" (single-currency) accounts. -->

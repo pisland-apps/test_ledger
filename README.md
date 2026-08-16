@@ -723,3 +723,79 @@ Current Balance banner, simplified two-way Transfer conversion fields
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v34.
+
+## v35→v36: bug fix, EPF categories, deficit formatting, account groups,
+## recent-transactions widget, sidebar reorg
+
+- **Fixed: "X" close button on Edit Member did nothing.** Root cause —
+  the app's modal-close mechanism (`closeModal()`) works by calling
+  `history.back()` and letting the single `popstate` listener remove
+  the `active` class; that listener only does this for modals listed
+  in its `activeModals` array, and `memberModal` was never added to
+  that list. So clicking X called `history.back()`, `popstate` fired,
+  found nothing it recognized as an open modal, and fell through to
+  page-level back navigation — leaving the modal visibly stuck open.
+  Fixed by adding `memberModal` to `activeModals`. Also found (and
+  fixed) two other spots — `handleCreateMemberMobile()` and
+  `removeMember()` — that bypassed this mechanism entirely by calling
+  `classList.remove("active")` directly instead of `closeModal()`,
+  which left a stale, never-popped history entry behind (a latent bug
+  that wouldn't misbehave immediately but could desync history on a
+  later modal open/close). Same bypass fixed in `removeAccount()` for
+  `accountsModal`. `imports/exports`/schema unaffected.
+- **New income categories.** `EPF Contrib.(ER)` and `EPF Contrib.(EE)`
+  added to `DEFAULT_CATEGORIES` (auto-provisioned for existing users
+  via the existing idempotent `ensureDefaultCategories()`) and to
+  `fallbackIcons`.
+- **Deficit amounts shown in red brackets.** New `formatBalanceHTML()`
+  helper: renders a negative balance as `(S$1,234.56)` in red
+  (accounting convention) instead of `-S$1,234.56`, for any
+  HTML-rendered balance-style figure. Applied to: dashboard Portfolio
+  Net Worth, Net Worth by Member rows (solo/joint/unassigned), the
+  member detail page's net worth figure and per-currency chips, the
+  Financial Accounts list, a member's account list, and the Account
+  Activity "Current Balance" banner. Plain transaction amounts
+  (which already carry their own explicit +/− sign) are untouched —
+  `formatCurrency()` itself is unchanged.
+- **Account owner tag + quick "+ Add Account".** Every row in the
+  Financial Accounts list now shows a small colored "● Name" tag per
+  owner underneath it (or "Unassigned" in muted gray) via
+  `accountOwnerTagHTML()`. A member's own Accounts page (Sidebar ▸ a
+  member) gained a "+ Add Account" button that opens the Add Account
+  modal with that member pre-checked as owner
+  (`openAddAccountForMember()`).
+- **Account Groups.** New `ACCOUNT_GROUPS` = Bank/Cash, Credit Card,
+  Investment, Real Estate (`DEFAULT_ACCOUNT_GROUP` = Bank/Cash for
+  older accounts saved before this existed). A Group selector was
+  added to the Add/Edit Account modal and is persisted on the account
+  record (`account.group`). Both the Financial Accounts page (now
+  with group section headers) and a member's account list are sorted
+  via the shared `sortAccountsByGroupThenName()` — group order first
+  (per `ACCOUNT_GROUPS`), then name.
+- **Dashboard "Recent Transactions" widget.** New section between
+  Financial Report Card and "More": a short list of recent Income/
+  Expense entries (Transfers are intentionally excluded — the filter
+  is Expense/Income/Both, not Transfer), with a collapsible settings
+  panel (⚙) controlling: Show (Income + Expense / Income Only /
+  Expense Only), Account (All Accounts or one specific account), and
+  Number of items (1–14). Settings persist across sessions via the
+  SETTINGS store (`recentTxTypeFilter`, `recentTxAccountFilter`,
+  `recentTxCount`, loaded in `bootstrap()`, default Both / All / 5).
+- **Dashboard "More" row → icon-only, one row.** The three buttons
+  (Financial Accounts, All Transactions, Data Security) dropped their
+  text labels and now sit side-by-side as icon-only buttons
+  (`title`/`aria-label` kept for accessibility/tooltips).
+- **Sidebar reorganized.** "Financial Accounts" added under Dashboard
+  in the Overview section; "Data Security" added as its own item at
+  the very bottom of the sidebar (below Manage Members). Both remain
+  reachable from the dashboard's "More" row too — this is additive,
+  not a replacement. Both new sidebar entries close the sidebar drawer
+  on tap, matching the existing "Manage Members" behavior.
+- No IndexedDB schema/version changes (accounts simply gain an
+  optional `group` field, defaulted wherever absent — no migration
+  needed). No export/import format changes. Verified with
+  `node --check` plus an id/data-click/data-change cross-reference
+  (0 missing handlers, 0 duplicate ids) after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v36.
