@@ -922,6 +922,11 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
             </div>
         </div>
+        <div id="ledgerYearNav" style="display:none; align-items:center; justify-content:center; gap:16px; padding:10px 0 14px;">
+            <button type="button" class="btn-util" id="ledgerYearPrevBtn" data-click="ledgerYearPrev" style="padding:6px 14px; font-size:1rem;">&lt;</button>
+            <span id="ledgerYearLabel" style="font-weight:800; font-size:1.1rem; min-width:52px; text-align:center;">2026</span>
+            <button type="button" class="btn-util" id="ledgerYearNextBtn" data-click="ledgerYearNext" style="padding:6px 14px; font-size:1rem;">&gt;</button>
+        </div>
         <div class="ledger-container" id="ledgerList"></div>
     </div>
 
@@ -1337,6 +1342,43 @@
                 </div>
                 <div class="form-row" id="srcAccRow"><label id="srcAccLabel">Account</label><select id="srcAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
                 <div class="form-row" id="destAccRow" style="display:none;"><label>To Account</label><select id="destAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
+
+                <!-- Shown only for Transfers between two single-currency ("normal") accounts whose
+                     currencies differ — e.g. transferring S$ out of a SGD account into a MYR
+                     account. Off by default (auto: the received amount is computed live using
+                     Currency & FX Rates, same as before — not stored, so it can drift if the
+                     global rate table changes later). On: locks in the actual conversion that
+                     happened, entered either as a rate (received amount auto-calculated) or as
+                     the received amount itself (effective rate auto-calculated back). -->
+                <div id="txTransferFxWrap" style="display:none; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px; margin-bottom:10px;">
+                    <p style="font-size:0.7rem; font-weight:700; text-transform:uppercase; color:#1d4ed8; margin-bottom:8px;">🔁 Currency Conversion</p>
+                    <div class="toggle-switch-row" style="margin:0 0 8px;">
+                        <span class="toggle-switch-label" style="font-size:0.75rem;">✏️ Manually set conversion</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="txTransferFxToggle" data-change="toggleTxTransferFx">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div id="txTransferFxManualFields" style="display:none;">
+                        <div class="form-row" style="margin-bottom:8px;">
+                            <label>Enter By</label>
+                            <select id="txTransferFxMode" class="form-input" data-change="handleTransferFxModeChange">
+                                <option value="rate">Exchange Rate</option>
+                                <option value="destAmount">Amount Received</option>
+                            </select>
+                        </div>
+                        <div class="form-row" id="txTransferRateRow" style="margin-bottom:6px;">
+                            <label id="txTransferRateLabel">Rate</label>
+                            <input type="number" id="txTransferRate" step="0.000001" min="0" data-input="recalcTransferFxPreview" data-change="recalcTransferFxPreview">
+                        </div>
+                        <div class="form-row" id="txTransferDestAmountRow" style="display:none; margin-bottom:6px;">
+                            <label id="txTransferDestAmountLabel">Amount Received</label>
+                            <input type="number" id="txTransferDestAmount" step="0.01" min="0" data-input="recalcTransferFxPreview" data-change="recalcTransferFxPreview">
+                        </div>
+                        <p id="txTransferFxPreview" style="font-size:0.7rem; color:var(--text-muted); margin:0;"></p>
+                    </div>
+                    <p id="txTransferFxAutoHint" style="font-size:0.7rem; color:var(--text-muted); margin:0;"></p>
+                </div>
 
                 <!-- Shown only for Income/Expense on a single-currency ("normal") account when the
                      entry's currency differs from that account's own currency — e.g. spending SGD

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v32";
+        const APP_VERSION = "v33";
         const APP_VERSION_DATE = "2026-08-16";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -586,6 +586,12 @@
         let activeLedgerAccountView = "all";
         let activeCategoryView = "all";
         let directTypeView = "all"; 
+        // Per-account "Account Activity" year navigation (v33) — which year is currently shown,
+        // and the sorted list of years that actually have a transaction for that account (used to
+        // skip empty years when paging with the </> controls). Reset whenever a fresh account view
+        // is opened via navigateToLedgerPage(); recomputed every renderApp().
+        let accountLedgerYear = null;
+        let accountLedgerYearsCache = [];
         let ledgerBackToPage = "workspace"; 
 
         // Remembers how far down the workspace dashboard the user had scrolled (e.g. down to "My
@@ -904,12 +910,23 @@
             activeLedgerAccountView = accountId;
             activeCategoryView = "all";
             directTypeView = "all";
+            accountLedgerYear = null; // fresh account view — default to its latest year with data
             ledgerBackToPage = backTarget;
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
             showPage("page-ledger");
             window.scrollTo(0,0);
             pushVirtualState("ledger");
             renderApp();
+        }
+
+        function ledgerYearPrev() {
+            const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
+            if (idx > 0) { accountLedgerYear = accountLedgerYearsCache[idx - 1]; renderApp(); }
+        }
+
+        function ledgerYearNext() {
+            const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
+            if (idx >= 0 && idx < accountLedgerYearsCache.length - 1) { accountLedgerYear = accountLedgerYearsCache[idx + 1]; renderApp(); }
         }
 
         function navigateToCategoryPage(categoryName, backTarget = "workspace") {
@@ -1842,6 +1859,19 @@
                 await updateTxManualFxVisibility();
                 recalcTxManualFxPreview();
 
+                // Transfer conversion (v33): destAmount is the ground truth stored value when
+                // present, so editing always reflects it via the "Amount Received" mode — the
+                // rate field is left for the user to switch to if they'd rather adjust by rate.
+                document.getElementById("txTransferFxToggle").checked = tx.destAmount != null;
+                document.getElementById("txTransferFxMode").value = tx.destAmount != null ? "destAmount" : "rate";
+                document.getElementById("txTransferDestAmount").value = tx.destAmount != null ? tx.destAmount : "";
+                document.getElementById("txTransferRate").value = (tx.destAmount != null && tx.amount) ? (tx.destAmount / tx.amount).toFixed(6) : "";
+                document.getElementById("txTransferFxManualFields").style.display = tx.destAmount != null ? "block" : "none";
+                document.getElementById("txTransferRateRow").style.display = tx.destAmount != null ? "none" : "block";
+                document.getElementById("txTransferDestAmountRow").style.display = tx.destAmount != null ? "block" : "none";
+                await updateTxTransferFxVisibility();
+                recalcTransferFxPreview();
+
                 const currentCats = dynamicCategories.filter(c => c.type === tx.type).map(c => c.name);
                 const fallbackGroup = tx.type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
                 
@@ -1951,6 +1981,14 @@
                 document.getElementById("txManualFxToggle").checked = false;
                 document.getElementById("txManualFxRate").value = "";
                 document.getElementById("txManualFxRateRow").style.display = "none";
+
+                document.getElementById("txTransferFxToggle").checked = false;
+                document.getElementById("txTransferFxMode").value = "rate";
+                document.getElementById("txTransferRate").value = "";
+                document.getElementById("txTransferDestAmount").value = "";
+                document.getElementById("txTransferFxManualFields").style.display = "none";
+                document.getElementById("txTransferRateRow").style.display = "block";
+                document.getElementById("txTransferDestAmountRow").style.display = "none";
 
                 syncTransactionCurrency();
             }
@@ -2122,6 +2160,7 @@
 
             updateTxFdFieldsVisibilitySync(accounts);
             updateTxManualFxVisibility();
+            updateTxTransferFxVisibility();
         }
 
         // Auto-calculates the FD placement's maturity date from commencing date + tenure, and
@@ -2219,6 +2258,91 @@
 
             const converted = amount * rate;
             preview.textContent = `≈ ${formatCurrency(converted, account.currency)} will be applied to ${account.name}'s balance, locked at this rate regardless of future FX rate table changes.`;
+        }
+
+        // --- MANUAL FX / RECEIVED AMOUNT FOR TRANSFERS (v33) ---
+        // Only relevant for Transfers between two single-currency ("normal") accounts whose
+        // currencies differ. Multi-currency and Fixed Deposit accounts hold per-currency baskets
+        // (a transfer into one just credits that basket in the transaction's own currency — no
+        // conversion happens at all, so there's nothing to fix there).
+        async function updateTxTransferFxVisibility() {
+            const wrap = document.getElementById("txTransferFxWrap");
+            const type = document.getElementById("txType").value;
+            const srcId = document.getElementById("srcAccount").value;
+            const destId = document.getElementById("destAccount").value;
+
+            if (type !== "transfer" || !srcId || !destId) {
+                wrap.style.display = "none";
+                return;
+            }
+
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const srcAcc = accounts.find(a => a.id === srcId);
+            const destAcc = accounts.find(a => a.id === destId);
+
+            if (!srcAcc || !destAcc || srcAcc.type === "multi" || srcAcc.type === "fd" || destAcc.type === "multi" || destAcc.type === "fd" || srcAcc.currency === destAcc.currency) {
+                wrap.style.display = "none";
+                document.getElementById("txTransferFxToggle").checked = false;
+                document.getElementById("txTransferFxManualFields").style.display = "none";
+                return;
+            }
+
+            wrap.style.display = "block";
+            document.getElementById("txTransferRateLabel").textContent = `Rate (1 ${srcAcc.currency} = ? ${destAcc.currency})`;
+            document.getElementById("txTransferDestAmountLabel").textContent = `Amount Received (${destAcc.currency})`;
+
+            const liveRate = convertCurrency(1, srcAcc.currency, destAcc.currency);
+            document.getElementById("txTransferFxAutoHint").textContent = document.getElementById("txTransferFxToggle").checked
+                ? ""
+                : `Auto: currently ${liveRate.toFixed(4)} (today's rate from Currency & FX Rates). This is recalculated live — if that rate changes later, the received amount recorded for this transfer changes with it.`;
+            recalcTransferFxPreview();
+        }
+
+        function toggleTxTransferFx() {
+            const on = document.getElementById("txTransferFxToggle").checked;
+            document.getElementById("txTransferFxManualFields").style.display = on ? "block" : "none";
+            if (on) {
+                readAllDB(STORES.ACCOUNTS).then(accounts => {
+                    const srcAcc = accounts.find(a => a.id === document.getElementById("srcAccount").value);
+                    const destAcc = accounts.find(a => a.id === document.getElementById("destAccount").value);
+                    if (srcAcc && destAcc && !document.getElementById("txTransferRate").value) {
+                        document.getElementById("txTransferRate").value = convertCurrency(1, srcAcc.currency, destAcc.currency).toFixed(6);
+                    }
+                    recalcTransferFxPreview();
+                });
+            }
+            updateTxTransferFxVisibility();
+        }
+
+        function handleTransferFxModeChange() {
+            const mode = document.getElementById("txTransferFxMode").value;
+            document.getElementById("txTransferRateRow").style.display = mode === "rate" ? "block" : "none";
+            document.getElementById("txTransferDestAmountRow").style.display = mode === "destAmount" ? "block" : "none";
+            recalcTransferFxPreview();
+        }
+
+        async function recalcTransferFxPreview() {
+            const preview = document.getElementById("txTransferFxPreview");
+            const on = document.getElementById("txTransferFxToggle").checked;
+            if (!on) { preview.textContent = ""; return; }
+
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const srcAcc = accounts.find(a => a.id === document.getElementById("srcAccount").value);
+            const destAcc = accounts.find(a => a.id === document.getElementById("destAccount").value);
+            if (!srcAcc || !destAcc) { preview.textContent = ""; return; }
+
+            const amount = parseFloat(document.getElementById("txAmount").value) || 0;
+            const mode = document.getElementById("txTransferFxMode").value;
+
+            if (mode === "rate") {
+                const rate = parseFloat(document.getElementById("txTransferRate").value) || 0;
+                const destAmount = amount * rate;
+                preview.textContent = `${destAcc.name} receives ≈ ${formatCurrency(destAmount, destAcc.currency)}, locked at this rate regardless of future FX rate table changes.`;
+            } else {
+                const destAmount = parseFloat(document.getElementById("txTransferDestAmount").value) || 0;
+                const effectiveRate = amount > 0 ? destAmount / amount : 0;
+                preview.textContent = `Effective rate ≈ ${effectiveRate.toFixed(4)} (1 ${srcAcc.currency} = ${effectiveRate.toFixed(4)} ${destAcc.currency}), locked in for this transfer.`;
+            }
         }
 
         // --- RESOLVE FIXED DEPOSIT MATURITY (renew or withdraw) ---
@@ -2486,6 +2610,27 @@
                 }
             }
 
+            // Transfer conversion (v33) — validate whichever field the user is entering by.
+            let transferDestAmountOverride = null;
+            if (document.getElementById("txTransferFxWrap").style.display !== "none" && document.getElementById("txTransferFxToggle").checked) {
+                const mode = document.getElementById("txTransferFxMode").value;
+                if (mode === "rate") {
+                    const rateVal = parseFloat(document.getElementById("txTransferRate").value);
+                    if (isNaN(rateVal) || rateVal <= 0) {
+                        alert("Please enter a valid exchange rate greater than zero, or turn off manual conversion to use the auto rate.");
+                        return;
+                    }
+                    transferDestAmountOverride = parsedAmount * rateVal;
+                } else {
+                    const destAmountVal = parseFloat(document.getElementById("txTransferDestAmount").value);
+                    if (isNaN(destAmountVal) || destAmountVal <= 0) {
+                        alert("Please enter a valid amount received greater than zero, or turn off manual conversion to use the auto rate.");
+                        return;
+                    }
+                    transferDestAmountOverride = destAmountVal;
+                }
+            }
+
             // Editing an existing Transfer that already carries the "Fixed Deposit" category (set
             // deliberately by the FD maturity-resolution flow, not through this form) should keep
             // it rather than losing it to the blanket "Transfers have no category" rule just below
@@ -2527,7 +2672,12 @@
                 // null means "auto": convert using the live global fxRates table, as before.
                 manualFxRate: (document.getElementById("txManualFxWrap").style.display !== "none" && document.getElementById("txManualFxToggle").checked)
                     ? (parseFloat(document.getElementById("txManualFxRate").value) || null)
-                    : null
+                    : null,
+                // Transfer received-amount override (v33) — only meaningful for a Transfer
+                // between two "normal" accounts with different currencies. null means "auto":
+                // the destination account is credited via a live currency conversion each time
+                // the app renders, as before (see computeAccountBalances()/applyToAccountBalance()).
+                destAmount: transferDestAmountOverride
             };
 
             const fdFieldsVisible = document.getElementById("txFdFieldsWrap").style.display !== "none";
@@ -2636,11 +2786,16 @@
             // scoping note on updateTxManualFxVisibility()), it's used instead of the live global
             // fxRates table for this specific leg, so a later change to those rates doesn't
             // retroactively change what this past transaction actually did to the account balance.
-            function applyToAccountBalance(account, amount, currency, sign, manualFxRate) {
+            // directAmountOverride (v33): for a Transfer's destination leg, the exact received
+            // amount in the destination account's own currency (see updateTxTransferFxVisibility())
+            // — bypasses conversion entirely rather than deriving it from a rate.
+            function applyToAccountBalance(account, amount, currency, sign, manualFxRate, directAmountOverride) {
                 if (!account) return;
                 if (account.type === "multi" || account.type === "fd") {
                     const basket = nativeBalances[account.id];
                     basket[currency] = (basket[currency] || 0) + sign * amount;
+                } else if (directAmountOverride != null) {
+                    nativeBalances[account.id] += sign * directAmountOverride;
                 } else if (manualFxRate && currency !== account.currency) {
                     nativeBalances[account.id] += sign * (amount * manualFxRate);
                 } else {
@@ -2655,7 +2810,7 @@
                 if (t.type === "expense") applyToAccountBalance(aSrc, t.amount, t.currency, -1, t.manualFxRate);
                 if (t.type === "transfer") {
                     applyToAccountBalance(aSrc, t.amount, t.currency, -1);
-                    applyToAccountBalance(aDest, t.amount, t.currency, +1);
+                    applyToAccountBalance(aDest, t.amount, t.currency, +1, null, t.destAmount);
                 }
             });
 
@@ -2732,6 +2887,42 @@
             });
             document.getElementById("fdReminderContainer").innerHTML = reminderHTML;
 
+            // --- Per-account "Account Activity" year navigation (v33) ---
+            // Only meaningful when viewing one specific account with no category/type filter
+            // layered on top (the same scope as showFullAccountHistory just below). Restricts the
+            // list to one year at a time, moving only between years that actually contain a
+            // transaction for this account (years with nothing logged are skipped entirely).
+            const showFullAccountHistory = activeLedgerAccountView !== "all" && activeCategoryView === "all" && directTypeView === "all";
+            accountLedgerYearsCache = [];
+            if (showFullAccountHistory) {
+                const acctId = activeLedgerAccountView;
+                accountLedgerYearsCache = [...new Set(
+                    txs.filter(t => t.src === acctId || t.dest === acctId).map(t => new Date(t.date).getFullYear())
+                )].sort((a, b) => a - b);
+
+                if (accountLedgerYearsCache.length > 0) {
+                    if (accountLedgerYear === null || !accountLedgerYearsCache.includes(accountLedgerYear)) {
+                        accountLedgerYear = accountLedgerYearsCache[accountLedgerYearsCache.length - 1];
+                    }
+                } else {
+                    accountLedgerYear = null;
+                }
+            } else {
+                accountLedgerYear = null;
+            }
+
+            const yearNavEl = document.getElementById("ledgerYearNav");
+            let accountYearIdx = -1;
+            if (showFullAccountHistory && accountLedgerYearsCache.length > 0) {
+                accountYearIdx = accountLedgerYearsCache.indexOf(accountLedgerYear);
+                yearNavEl.style.display = "flex";
+                document.getElementById("ledgerYearLabel").textContent = accountLedgerYear;
+                document.getElementById("ledgerYearPrevBtn").disabled = accountYearIdx <= 0;
+                document.getElementById("ledgerYearNextBtn").disabled = accountYearIdx >= accountLedgerYearsCache.length - 1;
+            } else {
+                yearNavEl.style.display = "none";
+            }
+
             // Compute structural titles
             if (activeCategoryView !== "all") {
                 const icon = getCategoryIcon(activeCategoryView);
@@ -2761,12 +2952,37 @@
 
             let ledgerHTML = "";
 
-            // The "Opening Balance Setup" pseudo-entry represents the account's earliest
-            // starting point, so it's built here but appended AFTER the transaction list
-            // below (not before) — it belongs at the bottom/last position, underneath every
-            // real transaction, rather than pinned above them regardless of date sort.
+            // Helper for Balance B/F & C/F (v33): the native (own-currency) balance of a single
+            // "normal" account counting only transactions dated strictly before cutoffMs, plus its
+            // initial balance. Mirrors computeAccountBalances()'s per-transaction conversion rules
+            // (manualFxRate for Income/Expense, explicit destAmount for Transfers) so these rows
+            // tie out exactly with the running balance shown elsewhere.
+            function computeAccountBalanceAsOf(account, cutoffMs) {
+                let bal = account.initialBalance || 0;
+                txs.forEach(t => {
+                    const tMs = new Date(t.date + "T00:00:00").getTime();
+                    if (tMs >= cutoffMs) return;
+                    if (t.type === "income" && t.src === account.id) {
+                        bal += (t.manualFxRate && t.currency !== account.currency) ? (t.amount * t.manualFxRate) : convertCurrency(t.amount, t.currency, account.currency);
+                    } else if (t.type === "expense" && t.src === account.id) {
+                        bal -= (t.manualFxRate && t.currency !== account.currency) ? (t.amount * t.manualFxRate) : convertCurrency(t.amount, t.currency, account.currency);
+                    } else if (t.type === "transfer") {
+                        if (t.src === account.id) bal -= convertCurrency(t.amount, t.currency, account.currency);
+                        if (t.dest === account.id) bal += (t.destAmount != null) ? t.destAmount : convertCurrency(t.amount, t.currency, account.currency);
+                    }
+                });
+                return bal;
+            }
+
+            // The "Opening Balance Setup" pseudo-entry represents the account's earliest starting
+            // point, so it's built here but appended AFTER the transaction list below (not before)
+            // — it belongs at the bottom/last position, underneath every real transaction, rather
+            // than pinned above them regardless of date sort. Only shown on the earliest year that
+            // has data (or, if the account has no transactions at all, on every visit) — later
+            // years show "Balance B/F" instead (see below), so the two never both appear together.
             let openingBalanceHTML = "";
-            if (activeLedgerAccountView !== "all" && activeCategoryView === "all" && directTypeView === "all") {
+            const isEarliestYear = accountYearIdx <= 0;
+            if (showFullAccountHistory && isEarliestYear) {
                 const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
                 if (viewingAcc && viewingAcc.type !== "multi" && viewingAcc.type !== "fd" && viewingAcc.initialBalance) {
                     const subText = viewingAcc.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(viewingAcc.initialBalance, viewingAcc.currency, baseCurrency), baseCurrency)}</span>` : '';
@@ -2787,6 +3003,59 @@
                 }
             }
 
+            // Balance B/F (bottom of the list, below every real transaction for the selected
+            // year) and Balance C/F (top, above every real transaction) — only for a specific
+            // "normal" account's year-scoped Activity view. B/F is skipped on the earliest year
+            // with data (the Opening Balance Setup row above already covers that origin point);
+            // C/F is skipped on the latest year with data (there's nothing further to carry into).
+            let balanceBfHTML = "", balanceCfHTML = "";
+            if (showFullAccountHistory && accountLedgerYearsCache.length > 0 && accountLedgerYear !== null) {
+                const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
+                if (viewingAcc && viewingAcc.type !== "multi" && viewingAcc.type !== "fd") {
+                    const isLatestYear = accountYearIdx >= accountLedgerYearsCache.length - 1;
+
+                    if (!isEarliestYear) {
+                        const yearStartMs = new Date(accountLedgerYear + "-01-01T00:00:00").getTime();
+                        const bf = computeAccountBalanceAsOf(viewingAcc, yearStartMs);
+                        const subText = viewingAcc.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(bf, viewingAcc.currency, baseCurrency), baseCurrency)}</span>` : '';
+                        balanceBfHTML = `
+                            <div class="ledger-item" style="background-color: #fafbfd; border-left: 4px solid var(--primary); cursor: default;">
+                                <div class="item-left">
+                                    <span class="item-name" style="font-style: italic;">↩️ Balance B/F</span>
+                                    <span class="item-meta">Brought forward from ${accountLedgerYearsCache[accountYearIdx - 1]}</span>
+                                </div>
+                                <div class="item-right">
+                                    <div class="item-value" style="color: var(--text-main);">
+                                        ${formatCurrency(bf, viewingAcc.currency)}
+                                        ${subText}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    if (!isLatestYear) {
+                        const yearEndExclusiveMs = new Date((accountLedgerYear + 1) + "-01-01T00:00:00").getTime();
+                        const cf = computeAccountBalanceAsOf(viewingAcc, yearEndExclusiveMs);
+                        const subText = viewingAcc.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(cf, viewingAcc.currency, baseCurrency), baseCurrency)}</span>` : '';
+                        balanceCfHTML = `
+                            <div class="ledger-item" style="background-color: #fafbfd; border-left: 4px solid var(--primary); cursor: default;">
+                                <div class="item-left">
+                                    <span class="item-name" style="font-style: italic;">↪️ Balance C/F</span>
+                                    <span class="item-meta">Carried forward to ${accountLedgerYearsCache[accountYearIdx + 1]}</span>
+                                </div>
+                                <div class="item-right">
+                                    <div class="item-value" style="color: var(--text-main);">
+                                        ${formatCurrency(cf, viewingAcc.currency)}
+                                        ${subText}
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+                    }
+                }
+            }
+
             let matchedCount = 0;
 
             // The dashboard's month/year filter is meant to scope PERIOD-based reporting — the
@@ -2800,8 +3069,8 @@
             // outside the selected period still counted toward the balance but silently vanished
             // from the list, with no indication anything was hidden. Viewing a specific account
             // (activeLedgerAccountView !== "all") now always shows its full history regardless of
-            // the dashboard filter; category/type views keep the previous filtered behaviour.
-            const showFullAccountHistory = activeLedgerAccountView !== "all" && activeCategoryView === "all" && directTypeView === "all";
+            // the dashboard filter (scoped to one year at a time via the year nav above); category/
+            // type views keep the previous filtered behaviour.
 
             txs.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(t => {
                 const d = new Date(t.date);
@@ -2828,8 +3097,13 @@
                     isBound = t.cat === activeCategoryView;
                 } else if (directTypeView !== "all") {
                     isBound = t.type === directTypeView;
+                } else if (activeLedgerAccountView !== "all") {
+                    // Year-scoped Account Activity view (v33) — only this account's transactions
+                    // dated within the currently selected year (accountLedgerYear).
+                    isBound = (t.src === activeLedgerAccountView || t.dest === activeLedgerAccountView)
+                        && (accountLedgerYear === null || d.getFullYear() === accountLedgerYear);
                 } else {
-                    isBound = activeLedgerAccountView === "all" || t.src === activeLedgerAccountView || t.dest === activeLedgerAccountView;
+                    isBound = true;
                 }
 
                 if (!isBound) return;
@@ -2854,7 +3128,27 @@
                     ? `<span data-click="openImageViewer" data-image="${escapeHtml(t.image)}" style="cursor:pointer; margin-left:4px;" title="View attached photo">📎</span>`
                     : '';
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
-                const manualFxBadge = t.manualFxRate ? `<span style="font-size:0.62rem; font-weight:700; color:#c2410c; background:#ffedd5; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">✏️ Manual FX</span>` : '';
+                const manualFxBadge = (t.manualFxRate || (t.type === "transfer" && t.destAmount != null))
+                    ? `<span style="font-size:0.62rem; font-weight:700; color:#c2410c; background:#ffedd5; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">✏️ Manual FX</span>`
+                    : '';
+
+                // What to show as the headline amount for this row. For a cross-currency Transfer
+                // viewed from its destination account specifically, showing the source amount/
+                // currency (e.g. "S$500" on a MYR account's own Activity page) doesn't match what
+                // that account actually shows as credited — so it's swapped for the destination-
+                // side figure instead: the locked destAmount when one was entered, or (matching
+                // what computeAccountBalances() actually applies) a live-converted estimate
+                // otherwise, clearly marked "≈" since it isn't fixed.
+                let displayAmountHTML = `${sgn}${formatCurrency(t.amount, t.currency)}`;
+                if (t.type === "transfer" && activeLedgerAccountView === t.dest) {
+                    const destAcc = accounts.find(a => a.id === t.dest);
+                    const srcAcc = accounts.find(a => a.id === t.src);
+                    if (destAcc && srcAcc && destAcc.type !== "multi" && destAcc.type !== "fd" && destAcc.currency !== t.currency) {
+                        const shown = t.destAmount != null ? t.destAmount : convertCurrency(t.amount, t.currency, destAcc.currency);
+                        const prefix = t.destAmount != null ? "" : "≈ ";
+                        displayAmountHTML = `${sgn}${prefix}${formatCurrency(shown, destAcc.currency)}`;
+                    }
+                }
 
                 // Which account(s) this entry touches — shown as its own line so an Income/Expense
                 // row states where the money came from/went, and a Transfer states both legs,
@@ -2892,7 +3186,7 @@
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight: bold;">
-                                ${sgn}${formatCurrency(t.amount, t.currency)}
+                                ${displayAmountHTML}
                                 ${sub}
                             </div>
                         </div>
@@ -2909,8 +3203,11 @@
                 `;
             }
 
-            // Appended last so it always sits at the bottom of the list, beneath every
-            // transaction currently rendered (see the comment where it's built above).
+            // Balance C/F goes above every transaction rendered above it, then B/F and Opening
+            // Balance Setup go below — prepend/append accordingly so both sit outside the real
+            // transaction list regardless of the "Load more" button that may sit just above them.
+            ledgerHTML = balanceCfHTML + ledgerHTML;
+            ledgerHTML += balanceBfHTML;
             ledgerHTML += openingBalanceHTML;
 
             document.getElementById("reportIncome").textContent = formatCurrency(incBaseTotal, baseCurrency);
@@ -3469,6 +3766,8 @@
             navigateToAccountsPage: () => navigateToAccountsPage(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
             navigateToBackupPage: () => navigateToBackupPage(),
+            ledgerYearPrev: () => ledgerYearPrev(),
+            ledgerYearNext: () => ledgerYearNext(),
             openAccountFormModal: () => openAccountFormModal(),
             openCategoryFormModal: () => openCategoryFormModal(),
             deleteAccountFromForm: () => deleteAccountFromForm(),
@@ -3529,6 +3828,9 @@
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
             renderSpendingBreakdownPage: () => renderSpendingBreakdownPage(),
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
+            toggleTxTransferFx: () => toggleTxTransferFx(),
+            handleTransferFxModeChange: () => handleTransferFxModeChange(),
+            recalcTransferFxPreview: () => recalcTransferFxPreview(),
         };
 
         const INPUT_ACTIONS = {
@@ -3536,6 +3838,7 @@
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
+            recalcTransferFxPreview: () => recalcTransferFxPreview(),
         };
 
         document.addEventListener("click", (e) => {

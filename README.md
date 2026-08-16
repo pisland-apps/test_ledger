@@ -606,3 +606,66 @@ rate entry per transaction
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v32.
+
+## v33: Manual conversion for cross-currency Transfers, Account Activity
+year navigation with Balance B/F & C/F
+
+- **Transfer conversion (S$ ⇄ MYR etc.).** Transfers between two
+  single-currency accounts of different currencies previously always
+  converted the sent amount into the destination account's currency
+  using the *live* Currency & FX Rates table, recalculated on every
+  render — nothing was stored. A new "🔁 Currency Conversion" block
+  appears in the transaction form for exactly this situation (Transfer
+  type, source and destination both "normal" accounts, currencies
+  differ). Off by default (auto, unchanged live-rate behaviour).
+  Turning it on offers two entry modes:
+  - **Exchange Rate** — key in the rate; the amount received in the
+    destination account's currency is calculated and previewed
+    automatically.
+  - **Amount Received** — key in the actual MYR (or other) amount
+    that landed in the destination account; the effective rate is
+    derived and previewed automatically.
+  Whichever mode is used, the resulting received amount is stored on
+  the transaction as `destAmount` and, once saved, is used directly
+  for that transfer's effect on the destination account's balance —
+  no further conversion, and immune to later changes in the FX rate
+  table. `computeAccountBalances()`'s `applyToAccountBalance()` now
+  takes an optional `directAmountOverride` for exactly this. Editing
+  an existing transfer pre-fills from its stored `destAmount`. Ledger
+  rows for the destination account now show the actual destination-
+  currency figure (locked `destAmount`, or a live-converted "≈"
+  estimate when auto) instead of the source-currency amount, which
+  was confusing to read on the receiving account's own Activity page.
+  A "✏️ Manual FX" badge marks transfers using a locked `destAmount`,
+  same badge as the existing per-transaction manual FX feature.
+- **Account Activity now pages by year.** Viewing a specific account
+  (Financial Accounts → an account → its Activity page) now shows a
+  "< YEAR >" control at the top. The `<`/`>` buttons only step between
+  years that actually contain a transaction for that account — years
+  with nothing logged are skipped entirely (e.g. from 2026 back to
+  2020 in one click, if 2021–2025 are empty for that account).
+  Defaults to the account's most recent year with data on first
+  visit; the selection persists while editing entries and returning,
+  and resets to "most recent" the next time the account is opened
+  fresh via the sidebar/Financial Accounts list.
+- **Balance B/F and Balance C/F rows.** For any year besides the
+  account's very first year with data, a "↩️ Balance B/F" row now
+  appears at the bottom of the list (below every real transaction for
+  that year) showing the balance brought forward from the prior year
+  with data. For any year besides the most recent, a "↪️ Balance C/F"
+  row appears at the top showing the balance carried forward into the
+  next year with data. The original "[Opening Balance Setup]" row
+  still appears (bottom position) on the account's very first year
+  with data — B/F and Opening Balance Setup never both show on the
+  same year. Both new rows are computed with the same per-transaction
+  conversion rules as the running balance itself (manual FX rate,
+  transfer `destAmount`), via a new `computeAccountBalanceAsOf()`
+  helper, so they always tie out exactly.
+- No IndexedDB schema/version changes (`destAmount` is a new optional
+  field on transfer records, `undefined`/`null` for all existing data
+  and non-transfer types). No export/import format changes. Verified
+  with `node --check` plus the id/data-click/data-change cross-
+  reference script (0 missing, 0 dupes, 0 unbound handlers).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v33.
