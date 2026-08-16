@@ -669,3 +669,57 @@ year navigation with Balance B/F & C/F
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v33.
+
+## v34: Lock screen Enter-key fix, "+" quick-add on Account Activity,
+Current Balance banner, simplified two-way Transfer conversion fields
+
+- **Lock screen: Enter key now always submits.** Neither the passcode
+  setup fields nor the unlock field were ever wired to a keyboard
+  Enter/Return — there's no `<form>` around them for the browser to
+  submit implicitly, and no `keydown` listener existed anywhere in the
+  app to catch it. That's why it could seem to work once and then stop:
+  it never reliably worked at all. A single `keydown` listener,
+  registered once at script load (so it survives the full page reload
+  `lockAppNow()` does on every lock), now calls the same submit
+  handler as the on-screen button whenever Enter is pressed in any of
+  the three passcode fields (setup, confirm, unlock).
+- **"+" quick-add on Account Activity.** A floating "+" button now
+  appears on an account's own Activity page (only there — not on "All
+  Transactions" or a category/type drill-down) and opens a small
+  Income / Expense / Transfer picker. Whichever type is chosen opens
+  the usual entry form with that account pre-selected as the source,
+  via a new optional third argument on `openTransactionForm(type,
+  existingTxId, presetSrcAccountId)`. Deliberately built as a plain
+  show/hide popover rather than routed through the app's history-
+  backed modal system (`openModal()`/`closeModal()`), since it only
+  ever leads into `openTransactionForm()`, which already pushes its
+  own history entry for `txModal` — avoiding a doubled-up back-button
+  step.
+- **Current Balance banner.** Account Activity now shows the
+  account's actual up-to-date balance in a banner just below the nav
+  header, visible regardless of which year is currently selected —
+  distinct from Balance B/F and Balance C/F (v33), which are specific
+  to the selected year's boundaries and only appear on some years.
+  Multi-Currency/Fixed Deposit accounts show their per-currency
+  basket totals here the same way the Financial Accounts list does.
+- **Transfer currency conversion, simplified.** The "Enter By"
+  mode dropdown from v33 is gone. Both fields — **Exchange Rate** and
+  **Amount Received** — are now shown together whenever "✏️ Manually
+  set conversion" is on; typing in either one recalculates the other
+  automatically (`recalcTransferFxFromRate()` /
+  `recalcTransferFxFromDestAmount()`), so entering the actual received
+  amount (e.g. the real MYR credited for an S$ transfer) derives the
+  effective rate on its own, with no mode to pick first. Changing the
+  transaction's own Amount field while manual conversion is on also
+  re-syncs Amount Received from whatever Rate is currently entered
+  (`syncTransferFxOnAmountChange()`). Storage format (`destAmount` on
+  the transaction) and everything downstream of it — account balance
+  calculation, base-currency reporting, the ledger row display, the
+  "✏️ Manual FX" badge — is unchanged from v33.
+- No IndexedDB schema/version changes. No export/import format
+  changes. Verified with `node --check` plus the id/data-click/data-
+  change cross-reference script (0 missing, 0 dupes, 0 unbound
+  handlers) after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v34.

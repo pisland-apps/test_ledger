@@ -471,6 +471,26 @@
         }
         .fab-btn:active { background: #4f46e5; }
 
+        /* Quick-add type picker used on the Account Activity page's "+" FAB (v34). A lightweight
+           popover, not a full history-tracked modal — avoids the modal system's history-stack
+           bookkeeping since it only ever leads into openTransactionForm(), which pushes its own
+           state for txModal. */
+        .quick-add-sheet {
+            position: fixed;
+            right: 20px;
+            bottom: 90px;
+            width: 160px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            z-index: 51;
+        }
+        .quick-add-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 49;
+        }
+
         /* Small icon-only button beside the account name on its Activity page */
         .icon-edit-btn {
             background: none;
@@ -922,12 +942,25 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
             </div>
         </div>
+        <div id="ledgerCurrentBalanceBanner" class="net-savings-banner" style="display:none; background:#eef2ff;">
+            Current Balance: <span id="ledgerCurrentBalanceValue">0.00</span>
+        </div>
         <div id="ledgerYearNav" style="display:none; align-items:center; justify-content:center; gap:16px; padding:10px 0 14px;">
             <button type="button" class="btn-util" id="ledgerYearPrevBtn" data-click="ledgerYearPrev" style="padding:6px 14px; font-size:1rem;">&lt;</button>
             <span id="ledgerYearLabel" style="font-weight:800; font-size:1.1rem; min-width:52px; text-align:center;">2026</span>
             <button type="button" class="btn-util" id="ledgerYearNextBtn" data-click="ledgerYearNext" style="padding:6px 14px; font-size:1rem;">&gt;</button>
         </div>
         <div class="ledger-container" id="ledgerList"></div>
+
+        <!-- Quick-add type picker (v34) — lets a new Income/Expense/Transfer entry be logged
+             straight from an account's own Activity page, pre-selecting that account. -->
+        <div id="ledgerQuickAddBackdrop" class="quick-add-backdrop" style="display:none;" data-click="closeLedgerQuickAddSheet"></div>
+        <div id="ledgerQuickAddSheet" class="quick-add-sheet" style="display:none;">
+            <button class="action-btn btn-income" data-click="quickAddChooseType" data-type="income"><span>🟢 Income</span></button>
+            <button class="action-btn btn-expense" data-click="quickAddChooseType" data-type="expense"><span>🔴 Expense</span></button>
+            <button class="action-btn btn-transfer" data-click="quickAddChooseType" data-type="transfer"><span>🔄 Transfer</span></button>
+        </div>
+        <button class="fab-btn" data-click="toggleLedgerQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
     </div>
 
     <!-- ================= PAGE 4: ALL ACCOUNTS ================= -->
@@ -1360,20 +1393,14 @@
                         </label>
                     </div>
                     <div id="txTransferFxManualFields" style="display:none;">
-                        <div class="form-row" style="margin-bottom:8px;">
-                            <label>Enter By</label>
-                            <select id="txTransferFxMode" class="form-input" data-change="handleTransferFxModeChange">
-                                <option value="rate">Exchange Rate</option>
-                                <option value="destAmount">Amount Received</option>
-                            </select>
+                        <p style="font-size:0.68rem; color:var(--text-muted); margin:0 0 8px;">Enter either field — the other calculates automatically from it.</p>
+                        <div class="form-row" id="txTransferRateRow" style="margin-bottom:8px;">
+                            <label id="txTransferRateLabel">Exchange Rate</label>
+                            <input type="number" id="txTransferRate" step="0.000001" min="0" data-input="recalcTransferFxFromRate">
                         </div>
-                        <div class="form-row" id="txTransferRateRow" style="margin-bottom:6px;">
-                            <label id="txTransferRateLabel">Rate</label>
-                            <input type="number" id="txTransferRate" step="0.000001" min="0" data-input="recalcTransferFxPreview" data-change="recalcTransferFxPreview">
-                        </div>
-                        <div class="form-row" id="txTransferDestAmountRow" style="display:none; margin-bottom:6px;">
+                        <div class="form-row" id="txTransferDestAmountRow" style="margin-bottom:6px;">
                             <label id="txTransferDestAmountLabel">Amount Received</label>
-                            <input type="number" id="txTransferDestAmount" step="0.01" min="0" data-input="recalcTransferFxPreview" data-change="recalcTransferFxPreview">
+                            <input type="number" id="txTransferDestAmount" step="0.01" min="0" data-input="recalcTransferFxFromDestAmount">
                         </div>
                         <p id="txTransferFxPreview" style="font-size:0.7rem; color:var(--text-muted); margin:0;"></p>
                     </div>

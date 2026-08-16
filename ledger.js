@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v33";
+        const APP_VERSION = "v34";
         const APP_VERSION_DATE = "2026-08-16";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -234,6 +234,23 @@
 
         function handleSetupPasscodeSubmit() { if (window._resolveLockFlow) window._resolveLockFlow(); }
         function handleUnlockSubmit() { if (window._resolveLockFlow) window._resolveLockFlow(); }
+
+        // Pressing Enter in any of the three passcode fields submits, same as tapping the
+        // button below it (v34). None of these inputs sit inside a <form>, so the browser has no
+        // built-in "Enter submits" behaviour to rely on here — without this listener, Enter does
+        // nothing on some browsers/keyboards and inconsistently works on others (e.g. only ever
+        // the very first time, right after the overlay's inputs first got focus). Registered once
+        // at script load (not inside runLockFlow()) so it keeps working across every lock/unlock
+        // cycle, including the full page reload that lockAppNow() triggers.
+        const PASSCODE_ENTER_SUBMIT_IDS = ["setupPasscodeInput", "setupPasscodeConfirmInput", "unlockPasscodeInput"];
+        document.addEventListener("keydown", (e) => {
+            if (e.key !== "Enter") return;
+            const id = e.target && e.target.id;
+            if (!PASSCODE_ENTER_SUBMIT_IDS.includes(id)) return;
+            e.preventDefault();
+            if (id === "unlockPasscodeInput") handleUnlockSubmit();
+            else handleSetupPasscodeSubmit();
+        });
 
         // On-screen number pad for the unlock passcode field — appends/removes digits from
         // #unlockPasscodeInput. Purely an input aid alongside the physical/OS keyboard, not a
@@ -927,6 +944,27 @@
         function ledgerYearNext() {
             const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
             if (idx >= 0 && idx < accountLedgerYearsCache.length - 1) { accountLedgerYear = accountLedgerYearsCache[idx + 1]; renderApp(); }
+        }
+
+        // Quick-add type picker (v34) — the "+" FAB on an account's own Activity page.
+        function toggleLedgerQuickAddSheet() {
+            const sheet = document.getElementById("ledgerQuickAddSheet");
+            const isOpen = sheet.style.display === "flex";
+            sheet.style.display = isOpen ? "none" : "flex";
+            document.getElementById("ledgerQuickAddBackdrop").style.display = isOpen ? "none" : "block";
+        }
+
+        function closeLedgerQuickAddSheet() {
+            document.getElementById("ledgerQuickAddSheet").style.display = "none";
+            document.getElementById("ledgerQuickAddBackdrop").style.display = "none";
+        }
+
+        function quickAddChooseType(el) {
+            closeLedgerQuickAddSheet();
+            // Preset the src account to whichever account this Activity page belongs to, so the
+            // form opens ready to log against it rather than the stored default payment account.
+            const presetAccountId = activeLedgerAccountView !== "all" ? activeLedgerAccountView : null;
+            openTransactionForm(el.dataset.type, null, presetAccountId);
         }
 
         function navigateToCategoryPage(categoryName, backTarget = "workspace") {
@@ -1822,7 +1860,7 @@
         }
 
         // --- TRANSACTION CREATION / EDITOR CORE ---
-        async function openTransactionForm(type, existingTxId = null) {
+        async function openTransactionForm(type, existingTxId = null, presetSrcAccountId = null) {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             if(accounts.length === 0) { alert("Add an account first!"); return; }
 
@@ -1859,18 +1897,19 @@
                 await updateTxManualFxVisibility();
                 recalcTxManualFxPreview();
 
-                // Transfer conversion (v33): destAmount is the ground truth stored value when
-                // present, so editing always reflects it via the "Amount Received" mode — the
-                // rate field is left for the user to switch to if they'd rather adjust by rate.
+                // Transfer conversion (v33, redesigned v34): destAmount is the ground truth
+                // stored value — both fields are shown together, so editing just pre-fills each
+                // from what was saved (the rate is re-derived for display).
                 document.getElementById("txTransferFxToggle").checked = tx.destAmount != null;
-                document.getElementById("txTransferFxMode").value = tx.destAmount != null ? "destAmount" : "rate";
                 document.getElementById("txTransferDestAmount").value = tx.destAmount != null ? tx.destAmount : "";
                 document.getElementById("txTransferRate").value = (tx.destAmount != null && tx.amount) ? (tx.destAmount / tx.amount).toFixed(6) : "";
                 document.getElementById("txTransferFxManualFields").style.display = tx.destAmount != null ? "block" : "none";
-                document.getElementById("txTransferRateRow").style.display = tx.destAmount != null ? "none" : "block";
-                document.getElementById("txTransferDestAmountRow").style.display = tx.destAmount != null ? "block" : "none";
                 await updateTxTransferFxVisibility();
-                recalcTransferFxPreview();
+                if (tx.destAmount != null) {
+                    const transferSrcAcc = accounts.find(a => a.id === tx.src);
+                    const transferDestAcc = accounts.find(a => a.id === tx.dest);
+                    if (transferSrcAcc && transferDestAcc) updateTransferFxPreview(transferSrcAcc, transferDestAcc);
+                }
 
                 const currentCats = dynamicCategories.filter(c => c.type === tx.type).map(c => c.name);
                 const fallbackGroup = tx.type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
@@ -1918,9 +1957,14 @@
                 document.getElementById("txAmount").value = "";
 
                 // Pre-select the user's default payment account, if one is set and still exists —
-                // new entries only, never when editing (handled above via tx.src).
+                // new entries only, never when editing (handled above via tx.src). A preset
+                // account passed in (e.g. opening this form via the "+" FAB on that account's own
+                // Activity page — see quickAddChooseType()) takes priority over the stored default.
                 if (defaultPaymentAccount && accounts.some(a => a.id === defaultPaymentAccount)) {
                     srcSelect.value = defaultPaymentAccount;
+                }
+                if (presetSrcAccountId && accounts.some(a => a.id === presetSrcAccountId)) {
+                    srcSelect.value = presetSrcAccountId;
                 }
 
                 document.getElementById("destAccRow").style.display = type === "transfer" ? "block" : "none";
@@ -1983,12 +2027,9 @@
                 document.getElementById("txManualFxRateRow").style.display = "none";
 
                 document.getElementById("txTransferFxToggle").checked = false;
-                document.getElementById("txTransferFxMode").value = "rate";
                 document.getElementById("txTransferRate").value = "";
                 document.getElementById("txTransferDestAmount").value = "";
                 document.getElementById("txTransferFxManualFields").style.display = "none";
-                document.getElementById("txTransferRateRow").style.display = "block";
-                document.getElementById("txTransferDestAmountRow").style.display = "none";
 
                 syncTransactionCurrency();
             }
@@ -2260,7 +2301,7 @@
             preview.textContent = `≈ ${formatCurrency(converted, account.currency)} will be applied to ${account.name}'s balance, locked at this rate regardless of future FX rate table changes.`;
         }
 
-        // --- MANUAL FX / RECEIVED AMOUNT FOR TRANSFERS (v33) ---
+        // --- MANUAL FX / RECEIVED AMOUNT FOR TRANSFERS (v33, redesigned v34) ---
         // Only relevant for Transfers between two single-currency ("normal") accounts whose
         // currencies differ. Multi-currency and Fixed Deposit accounts hold per-currency baskets
         // (a transfer into one just credits that basket in the transaction's own currency — no
@@ -2288,14 +2329,13 @@
             }
 
             wrap.style.display = "block";
-            document.getElementById("txTransferRateLabel").textContent = `Rate (1 ${srcAcc.currency} = ? ${destAcc.currency})`;
+            document.getElementById("txTransferRateLabel").textContent = `Exchange Rate (1 ${srcAcc.currency} = ? ${destAcc.currency})`;
             document.getElementById("txTransferDestAmountLabel").textContent = `Amount Received (${destAcc.currency})`;
 
             const liveRate = convertCurrency(1, srcAcc.currency, destAcc.currency);
             document.getElementById("txTransferFxAutoHint").textContent = document.getElementById("txTransferFxToggle").checked
                 ? ""
                 : `Auto: currently ${liveRate.toFixed(4)} (today's rate from Currency & FX Rates). This is recalculated live — if that rate changes later, the received amount recorded for this transfer changes with it.`;
-            recalcTransferFxPreview();
         }
 
         function toggleTxTransferFx() {
@@ -2306,43 +2346,63 @@
                     const srcAcc = accounts.find(a => a.id === document.getElementById("srcAccount").value);
                     const destAcc = accounts.find(a => a.id === document.getElementById("destAccount").value);
                     if (srcAcc && destAcc && !document.getElementById("txTransferRate").value) {
-                        document.getElementById("txTransferRate").value = convertCurrency(1, srcAcc.currency, destAcc.currency).toFixed(6);
+                        // Prefill both fields from today's live rate as a starting point — either
+                        // one can then be overwritten to recalculate the other (see the two recalc
+                        // functions below).
+                        const rate = convertCurrency(1, srcAcc.currency, destAcc.currency);
+                        const amount = parseFloat(document.getElementById("txAmount").value) || 0;
+                        document.getElementById("txTransferRate").value = rate.toFixed(6);
+                        document.getElementById("txTransferDestAmount").value = amount > 0 ? (amount * rate).toFixed(2) : "";
                     }
-                    recalcTransferFxPreview();
+                    updateTransferFxPreview(srcAcc, destAcc);
                 });
             }
             updateTxTransferFxVisibility();
         }
 
-        function handleTransferFxModeChange() {
-            const mode = document.getElementById("txTransferFxMode").value;
-            document.getElementById("txTransferRateRow").style.display = mode === "rate" ? "block" : "none";
-            document.getElementById("txTransferDestAmountRow").style.display = mode === "destAmount" ? "block" : "none";
-            recalcTransferFxPreview();
-        }
-
-        async function recalcTransferFxPreview() {
-            const preview = document.getElementById("txTransferFxPreview");
-            const on = document.getElementById("txTransferFxToggle").checked;
-            if (!on) { preview.textContent = ""; return; }
-
+        // Typing in the Rate field recalculates Amount Received — the field the user isn't
+        // actively editing always reflects whichever one they last touched.
+        async function recalcTransferFxFromRate() {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const srcAcc = accounts.find(a => a.id === document.getElementById("srcAccount").value);
             const destAcc = accounts.find(a => a.id === document.getElementById("destAccount").value);
-            if (!srcAcc || !destAcc) { preview.textContent = ""; return; }
+            if (!srcAcc || !destAcc) return;
 
             const amount = parseFloat(document.getElementById("txAmount").value) || 0;
-            const mode = document.getElementById("txTransferFxMode").value;
+            const rate = parseFloat(document.getElementById("txTransferRate").value) || 0;
+            document.getElementById("txTransferDestAmount").value = amount > 0 && rate > 0 ? (amount * rate).toFixed(2) : "";
+            updateTransferFxPreview(srcAcc, destAcc);
+        }
 
-            if (mode === "rate") {
-                const rate = parseFloat(document.getElementById("txTransferRate").value) || 0;
-                const destAmount = amount * rate;
-                preview.textContent = `${destAcc.name} receives ≈ ${formatCurrency(destAmount, destAcc.currency)}, locked at this rate regardless of future FX rate table changes.`;
-            } else {
-                const destAmount = parseFloat(document.getElementById("txTransferDestAmount").value) || 0;
-                const effectiveRate = amount > 0 ? destAmount / amount : 0;
-                preview.textContent = `Effective rate ≈ ${effectiveRate.toFixed(4)} (1 ${srcAcc.currency} = ${effectiveRate.toFixed(4)} ${destAcc.currency}), locked in for this transfer.`;
-            }
+        // Typing in the Amount Received field recalculates the effective Rate.
+        async function recalcTransferFxFromDestAmount() {
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const srcAcc = accounts.find(a => a.id === document.getElementById("srcAccount").value);
+            const destAcc = accounts.find(a => a.id === document.getElementById("destAccount").value);
+            if (!srcAcc || !destAcc) return;
+
+            const amount = parseFloat(document.getElementById("txAmount").value) || 0;
+            const destAmount = parseFloat(document.getElementById("txTransferDestAmount").value) || 0;
+            document.getElementById("txTransferRate").value = amount > 0 && destAmount > 0 ? (destAmount / amount).toFixed(6) : "";
+            updateTransferFxPreview(srcAcc, destAcc);
+        }
+
+        function updateTransferFxPreview(srcAcc, destAcc) {
+            const preview = document.getElementById("txTransferFxPreview");
+            if (!document.getElementById("txTransferFxToggle").checked) { preview.textContent = ""; return; }
+            const destAmount = parseFloat(document.getElementById("txTransferDestAmount").value) || 0;
+            const rate = parseFloat(document.getElementById("txTransferRate").value) || 0;
+            if (!destAmount || !rate) { preview.textContent = ""; return; }
+            preview.textContent = `${destAcc.name} receives ${formatCurrency(destAmount, destAcc.currency)} at rate ${rate.toFixed(4)} — locked in for this transfer regardless of future FX rate table changes.`;
+        }
+
+        // Also keeps the two conversion fields in sync when the base transaction Amount itself
+        // changes while manual conversion is on (recalcTxFdMaturity is already wired to txAmount's
+        // input event) — recomputes Amount Received from whatever Rate is currently entered.
+        async function syncTransferFxOnAmountChange() {
+            if (document.getElementById("txTransferFxWrap").style.display === "none") return;
+            if (!document.getElementById("txTransferFxToggle").checked) return;
+            recalcTransferFxFromRate();
         }
 
         // --- RESOLVE FIXED DEPOSIT MATURITY (renew or withdraw) ---
@@ -2610,25 +2670,17 @@
                 }
             }
 
-            // Transfer conversion (v33) — validate whichever field the user is entering by.
+            // Transfer conversion (v33, redesigned v34) — both fields stay in sync with each
+            // other as the user types (see recalcTransferFxFromRate/FromDestAmount), so by submit
+            // time the Amount Received field already holds the number to store either way.
             let transferDestAmountOverride = null;
             if (document.getElementById("txTransferFxWrap").style.display !== "none" && document.getElementById("txTransferFxToggle").checked) {
-                const mode = document.getElementById("txTransferFxMode").value;
-                if (mode === "rate") {
-                    const rateVal = parseFloat(document.getElementById("txTransferRate").value);
-                    if (isNaN(rateVal) || rateVal <= 0) {
-                        alert("Please enter a valid exchange rate greater than zero, or turn off manual conversion to use the auto rate.");
-                        return;
-                    }
-                    transferDestAmountOverride = parsedAmount * rateVal;
-                } else {
-                    const destAmountVal = parseFloat(document.getElementById("txTransferDestAmount").value);
-                    if (isNaN(destAmountVal) || destAmountVal <= 0) {
-                        alert("Please enter a valid amount received greater than zero, or turn off manual conversion to use the auto rate.");
-                        return;
-                    }
-                    transferDestAmountOverride = destAmountVal;
+                const destAmountVal = parseFloat(document.getElementById("txTransferDestAmount").value);
+                if (isNaN(destAmountVal) || destAmountVal <= 0) {
+                    alert("Please enter a valid exchange rate or amount received (greater than zero), or turn off manual conversion to use the auto rate.");
+                    return;
                 }
+                transferDestAmountOverride = destAmountVal;
             }
 
             // Editing an existing Transfer that already carries the "Fixed Deposit" category (set
@@ -2921,6 +2973,36 @@
                 document.getElementById("ledgerYearNextBtn").disabled = accountYearIdx >= accountLedgerYearsCache.length - 1;
             } else {
                 yearNavEl.style.display = "none";
+            }
+
+            // "+" quick-add FAB (v34) — only on a specific account's own Activity page.
+            document.querySelector("#page-ledger .fab-btn").style.display = showFullAccountHistory ? "flex" : "none";
+            closeLedgerQuickAddSheet();
+
+            // Current Balance banner (v34) — the account's actual up-to-date balance, shown
+            // regardless of which year is currently selected (unlike Balance B/F & C/F below,
+            // which are specific to the selected year's boundaries).
+            const balanceBanner = document.getElementById("ledgerCurrentBalanceBanner");
+            if (showFullAccountHistory) {
+                const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
+                if (viewingAcc) {
+                    let balSummary;
+                    if (viewingAcc.type === "fd" || viewingAcc.type === "multi") {
+                        const baskets = nativeBalances[viewingAcc.id];
+                        const currencies = Object.keys(baskets);
+                        balSummary = currencies.length === 0
+                            ? "No funds yet"
+                            : currencies.map(curr => formatCurrency(baskets[curr], curr)).join(" + ");
+                    } else {
+                        balSummary = formatCurrency(nativeBalances[viewingAcc.id], viewingAcc.currency);
+                    }
+                    document.getElementById("ledgerCurrentBalanceValue").textContent = balSummary;
+                    balanceBanner.style.display = "block";
+                } else {
+                    balanceBanner.style.display = "none";
+                }
+            } else {
+                balanceBanner.style.display = "none";
             }
 
             // Compute structural titles
@@ -3768,6 +3850,9 @@
             navigateToBackupPage: () => navigateToBackupPage(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
+            toggleLedgerQuickAddSheet: () => toggleLedgerQuickAddSheet(),
+            closeLedgerQuickAddSheet: () => closeLedgerQuickAddSheet(),
+            quickAddChooseType: (el) => quickAddChooseType(el),
             openAccountFormModal: () => openAccountFormModal(),
             openCategoryFormModal: () => openCategoryFormModal(),
             deleteAccountFromForm: () => deleteAccountFromForm(),
@@ -3829,16 +3914,15 @@
             renderSpendingBreakdownPage: () => renderSpendingBreakdownPage(),
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
-            handleTransferFxModeChange: () => handleTransferFxModeChange(),
-            recalcTransferFxPreview: () => recalcTransferFxPreview(),
         };
 
         const INPUT_ACTIONS = {
-            recalcTxFdMaturity: () => recalcTxFdMaturity(),
+            recalcTxFdMaturity: () => { recalcTxFdMaturity(); syncTransferFxOnAmountChange(); },
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
-            recalcTransferFxPreview: () => recalcTransferFxPreview(),
+            recalcTransferFxFromRate: () => recalcTransferFxFromRate(),
+            recalcTransferFxFromDestAmount: () => recalcTransferFxFromDestAmount(),
         };
 
         document.addEventListener("click", (e) => {
