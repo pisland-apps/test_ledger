@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v34";
+        const APP_VERSION = "v35";
         const APP_VERSION_DATE = "2026-08-16";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -21,12 +21,19 @@
         if (versionBadgeEl) versionBadgeEl.textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
         const DB_NAME = "EnterpriseMultiCurrencyLedgerDB_v4";
-        const DB_VERSION = 2;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories" };
+        const DB_VERSION = 3;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id" };
+
+        // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
+        const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
+        let membersCache = [];
+        // Which member/joint-group is currently being viewed on page-member, e.g.
+        // { type: "member", ids: ["mem_1"] } or { type: "joint", ids: ["mem_1","mem_2"] }.
+        let activeMemberFilter = null;
         let db;
 
         // Escapes a value for safe insertion into HTML text content or a double-quoted HTML
@@ -798,6 +805,9 @@
                     if (!database.objectStoreNames.contains(STORES.CATEGORIES)) {
                         database.createObjectStore(STORES.CATEGORIES, { keyPath: "id" });
                     }
+                    if (!database.objectStoreNames.contains(STORES.MEMBERS)) {
+                        database.createObjectStore(STORES.MEMBERS, { keyPath: "id" });
+                    }
                 };
                 request.onerror = (e) => reject(e.target.error);
             });
@@ -911,7 +921,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -1034,12 +1044,53 @@
             calculateStorageMetrics();
         }
 
+        // "All Transactions" — used to be a sidebar item, now a bottom-of-dashboard button (v34).
+        function navigateToAllLedgerPage() {
+            navigateToLedgerPage("all");
+        }
+
+        // "Data Security" hub — replaces the old sidebar "Data & Security" section; groups
+        // Backup & Restore / Auto-Lock / App Local Database / Lock App Now behind one bottom-of-
+        // dashboard button.
+        function navigateToDataSecurityPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-datasecurity");
+            window.scrollTo(0, 0);
+            pushVirtualState("datasecurity");
+        }
+
+        function navigateToMembersPage() {
+            closeSidebar();
+            workspaceScrollY = window.scrollY;
+            showPage("page-members");
+            window.scrollTo(0, 0);
+            pushVirtualState("members");
+            renderMembersPage();
+        }
+
+        // Opens the filtered member/joint-account view. filterKey is "m:<memberId>" for a single
+        // member (their solo-owned accounts only) or "j:<id1>,<id2>,..." for a joint account group
+        // (memberIds sorted so the same group always resolves to the same key).
+        function navigateToMemberPage(filterKey) {
+            closeSidebar();
+            workspaceScrollY = window.scrollY;
+            const [kind, idsStr] = filterKey.split(":");
+            activeMemberFilter = { type: kind === "j" ? "joint" : "member", ids: idsStr.split(",") };
+            showPage("page-member");
+            window.scrollTo(0, 0);
+            pushVirtualState("member");
+            renderMemberPage();
+        }
+
         function handleLedgerBackClick() {
             if (ledgerBackToPage === "savings") {
                 showPage("page-savings");
             } else if (ledgerBackToPage === "accounts") {
                 showPage("page-accounts");
                 renderAccountsPage();
+            } else if (ledgerBackToPage === "member") {
+                showPage("page-member");
+                renderMemberPage();
             } else {
                 navigateToWorkspace();
             }
@@ -1195,6 +1246,7 @@
             Object.keys(fxRates).forEach(c => { select.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
             select.value = baseCurrency;
             resetAccountForm();
+            renderAccountMemberCheckboxes([]);
             openModal("accountsModal");
         }
 
@@ -1376,6 +1428,7 @@
 
             document.getElementById("multiOpeningRows").innerHTML = "";
             document.getElementById("fdOpeningRows").innerHTML = "";
+            renderAccountMemberCheckboxes([]);
 
             setAccountTypeUI("normal");
 
@@ -1393,7 +1446,7 @@
 
             if(!name) { alert("Please enter an account name."); return; }
 
-            const record = { id, name, type };
+            const record = { id, name, type, memberIds: getCheckedAccountMemberIds() };
 
             if (type === "normal") {
                 const balInput = document.getElementById("newAccBal").value;
@@ -1502,8 +1555,12 @@
         // account create/edit/delete so whichever view the user is looking at stays current.
         async function refreshAfterAccountChange() {
             await renderApp();
+            renderSidebarMembers();
             if (!document.getElementById("page-accounts").classList.contains("hidden")) {
                 await renderAccountsPage();
+            }
+            if (!document.getElementById("page-member").classList.contains("hidden") && activeMemberFilter) {
+                await renderMemberPage();
             }
         }
 
@@ -1560,6 +1617,7 @@
                 document.getElementById("newAccBal").value = account.initialBalance;
                 document.getElementById("newAccCurrency").value = account.currency;
             }
+            renderAccountMemberCheckboxes(Array.isArray(account.memberIds) ? account.memberIds : []);
 
             document.getElementById("accountFormHeaderTitle").textContent = "Edit Account Credentials";
             document.getElementById("accFormSubmitBtn").textContent = "Save Changes";
@@ -1616,6 +1674,374 @@
             } else {
                 await refreshAfterAccountChange();
             }
+        }
+
+        // --- HOUSEHOLD MEMBERS SUBSYSTEM (v34) ---
+        // Members tag accounts as belonging to a person (or several people, for a joint account).
+        // membersCache is refreshed after every create/edit/delete and used to draw the Sidebar's
+        // "Members" section, the account form's Owner(s) checkboxes, and the Manage Members page.
+
+        async function loadMembersCache() {
+            membersCache = await readAllDB(STORES.MEMBERS);
+            return membersCache;
+        }
+
+        function getMemberById(id) {
+            return membersCache.find(m => m.id === id);
+        }
+
+        function memberNamesForIds(ids) {
+            return ids.map(id => getMemberById(id)?.name || "Unknown").join(" + ");
+        }
+
+        // Builds the round color-swatch picker used inside the Add/Edit Member modal.
+        function buildMemberColorSwatchGrid(selectedColor) {
+            const grid = document.getElementById("memberColorSwatchGrid");
+            grid.innerHTML = MEMBER_COLORS.map(c => `
+                <span class="color-swatch${c === selectedColor ? ' selected' : ''}" style="background:${c};" data-click="selectMemberColor" data-color="${c}"></span>
+            `).join("");
+            document.getElementById("newMemberColor").value = selectedColor;
+        }
+
+        function selectMemberColor(el) {
+            document.getElementById("newMemberColor").value = el.dataset.color;
+            document.querySelectorAll("#memberColorSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.color === el.dataset.color));
+        }
+
+        function openMemberFormModal() {
+            document.getElementById("editMemberId").value = "";
+            document.getElementById("newMemberName").value = "";
+            document.getElementById("memberFormHeaderTitle").textContent = "Add Member";
+            document.getElementById("memberFormSubmitBtn").textContent = "Add Member";
+            document.getElementById("memberFormDeleteBtn").style.display = "none";
+            const nextColor = MEMBER_COLORS[membersCache.length % MEMBER_COLORS.length];
+            buildMemberColorSwatchGrid(nextColor);
+            openModal("memberModal");
+        }
+
+        async function editMember(id) {
+            const member = getMemberById(id);
+            if (!member) return;
+            document.getElementById("editMemberId").value = member.id;
+            document.getElementById("newMemberName").value = member.name;
+            document.getElementById("memberFormHeaderTitle").textContent = "Edit Member";
+            document.getElementById("memberFormSubmitBtn").textContent = "Save Changes";
+            document.getElementById("memberFormDeleteBtn").style.display = "block";
+            buildMemberColorSwatchGrid(member.color || MEMBER_COLORS[0]);
+            openModal("memberModal");
+        }
+
+        async function handleCreateMemberMobile() {
+            const name = document.getElementById("newMemberName").value.trim();
+            if (!name) { alert("Please enter a member name."); return; }
+            const color = document.getElementById("newMemberColor").value || MEMBER_COLORS[0];
+            const id = document.getElementById("editMemberId").value || "mem_" + Date.now();
+
+            try {
+                await writeDB(STORES.MEMBERS, { id, name, color });
+            } catch (err) {
+                alert("Could not save member: " + (err && err.message ? err.message : err));
+                return;
+            }
+
+            document.getElementById("memberModal").classList.remove("active");
+            await afterMembersChanged();
+        }
+
+        function deleteMemberFromForm() {
+            const id = document.getElementById("editMemberId").value;
+            if (id) removeMember(id);
+        }
+
+        async function removeMember(id) {
+            const ok = await customConfirm("Remove this member? Any accounts tagged to them will become unassigned (their transactions are kept).");
+            if (!ok) return;
+
+            try {
+                // Strip this member from every account that referenced them, rather than deleting
+                // those accounts — losing a household member shouldn't delete anyone's transactions.
+                const accounts = await readAllDB(STORES.ACCOUNTS);
+                for (const acc of accounts) {
+                    if (Array.isArray(acc.memberIds) && acc.memberIds.includes(id)) {
+                        acc.memberIds = acc.memberIds.filter(m => m !== id);
+                        await writeDB(STORES.ACCOUNTS, acc);
+                    }
+                }
+                await deleteDB(STORES.MEMBERS, id);
+            } catch (err) {
+                alert("Could not remove member: " + (err && err.message ? err.message : err));
+                return;
+            }
+
+            document.getElementById("memberModal").classList.remove("active");
+            await afterMembersChanged();
+        }
+
+        // Refreshes everything that depends on the member list/account ownership after any
+        // member create/edit/delete: the cache itself, the sidebar, whichever page is on screen,
+        // and the dashboard's per-member net worth rows.
+        async function afterMembersChanged() {
+            await loadMembersCache();
+            renderSidebarMembers();
+            if (!document.getElementById("page-members").classList.contains("hidden")) {
+                await renderMembersPage();
+            }
+            if (!document.getElementById("page-workspace").classList.contains("hidden")) {
+                await renderApp();
+            }
+        }
+
+        async function renderMembersPage() {
+            await loadMembersCache();
+            const html = membersCache.map(m => `
+                <div class="config-item" style="cursor:pointer;" data-click="editMember" data-id="${m.id}">
+                    <span style="display:flex; align-items:center; gap:10px;">
+                        <span class="member-color-dot" style="background:${m.color};"></span>
+                        <strong>${escapeHtml(m.name)}</strong>
+                    </span>
+                    <span style="color:var(--text-muted);">✏️</span>
+                </div>
+            `).join("");
+            document.getElementById("membersPageList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No members yet — tap + to add husband, wife, kids, etc.</p>`;
+        }
+
+        // Draws the checkbox list inside the Accounts modal for tagging Owner(s). Called whenever
+        // the modal opens (create or edit) so it always reflects the latest member list.
+        function renderAccountMemberCheckboxes(selectedIds) {
+            const wrap = document.getElementById("accountMemberCheckboxes");
+            const selected = selectedIds || [];
+            if (membersCache.length === 0) {
+                wrap.innerHTML = `<p style="font-size:0.75rem; color:var(--text-muted);">No members yet — add one via Sidebar ▸ Manage Members to tag this account.</p>`;
+                return;
+            }
+            wrap.innerHTML = membersCache.map(m => `
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; font-weight:600; cursor:pointer;">
+                    <input type="checkbox" class="acc-member-checkbox" value="${m.id}" ${selected.includes(m.id) ? "checked" : ""}>
+                    <span class="member-color-dot" style="background:${m.color};"></span>
+                    ${escapeHtml(m.name)}
+                </label>
+            `).join("");
+        }
+
+        function getCheckedAccountMemberIds() {
+            return Array.from(document.querySelectorAll(".acc-member-checkbox:checked")).map(cb => cb.value);
+        }
+
+        // --- SIDEBAR: MEMBERS SECTION ---
+        // Renders each member as its own row (colored dot + name → their solo accounts + net
+        // worth), followed by one row per distinct joint-owned account group (e.g. "Husband +
+        // Wife"), discovered by scanning every account's memberIds.
+        async function renderSidebarMembers() {
+            const wrap = document.getElementById("sidebarMembersSection");
+            if (!wrap) return;
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+
+            let html = "";
+            membersCache.forEach(m => {
+                html += `
+                    <button class="sidebar-member-item" data-click="sidebarGoMember" data-key="m:${m.id}">
+                        <span class="member-color-dot" style="background:${m.color};"></span>
+                        <span class="member-row-name">${escapeHtml(m.name)}</span>
+                    </button>
+                `;
+            });
+
+            const jointGroups = {};
+            accounts.forEach(a => {
+                if (Array.isArray(a.memberIds) && a.memberIds.length > 1) {
+                    const key = [...a.memberIds].sort().join(",");
+                    jointGroups[key] = true;
+                }
+            });
+            Object.keys(jointGroups).forEach(key => {
+                const ids = key.split(",");
+                html += `
+                    <button class="sidebar-member-item" data-click="sidebarGoMember" data-key="j:${key}">
+                        <span style="display:flex;">${ids.map(id => `<span class="member-color-dot" style="background:${getMemberById(id)?.color || '#94a3b8'}; margin-left:-4px;"></span>`).join("")}</span>
+                        <span class="member-row-name">${escapeHtml(memberNamesForIds(ids))}</span>
+                    </button>
+                `;
+            });
+
+            wrap.innerHTML = html || `<p class="sidebar-empty-hint">No members yet.</p>`;
+        }
+
+        function sidebarGoMember(el) {
+            navigateToMemberPage(el.dataset.key);
+        }
+
+        // --- FILTERED NET WORTH HELPERS (shared by the dashboard's per-member rows and the
+        // member/joint filtered page) ---
+
+        // Returns the subset of accounts belonging to a member (solo-owned only, i.e. memberIds
+        // is exactly [id]) or a joint group (memberIds, sorted, exactly matches ids).
+        function filterAccountsByOwnership(accounts, type, ids) {
+            const sortedIds = [...ids].sort();
+            return accounts.filter(a => {
+                const owners = Array.isArray(a.memberIds) ? [...a.memberIds].sort() : [];
+                if (type === "member") return owners.length === 1 && owners[0] === sortedIds[0];
+                return owners.length > 1 && owners.length === sortedIds.length && owners.every((o, i) => o === sortedIds[i]);
+            });
+        }
+
+        // Sums a subset of accounts into { total (in baseCurrency), currencyTotals { CODE: nativeAmt } }
+        function summarizeAccountsNetWorth(accountsSubset, nativeBalances) {
+            let total = 0;
+            const currencyTotals = {};
+            accountsSubset.forEach(a => {
+                if (a.type === "multi" || a.type === "fd") {
+                    Object.entries(nativeBalances[a.id] || {}).forEach(([curr, amt]) => {
+                        total += convertCurrency(amt, curr, baseCurrency);
+                        currencyTotals[curr] = (currencyTotals[curr] || 0) + amt;
+                    });
+                } else {
+                    total += convertCurrency(nativeBalances[a.id] || 0, a.currency, baseCurrency);
+                    currencyTotals[a.currency] = (currencyTotals[a.currency] || 0) + (nativeBalances[a.id] || 0);
+                }
+            });
+            return { total, currencyTotals };
+        }
+
+        // Draws the dashboard's "Net Worth by Member" report: one row per member (solo-owned
+        // accounts only), one row per distinct joint-owned account group, and — only if any exist
+        // — a final "Unassigned" row so the breakdown always ties out to the grand total above it.
+        function renderMemberNetWorthRows(accounts, nativeBalances) {
+            const wrap = document.getElementById("memberNetWorthRows");
+            if (!wrap) return;
+
+            if (membersCache.length === 0) {
+                wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem;">No members yet — add one via Sidebar ▸ Manage Members to break this down by person.</p>`;
+                return;
+            }
+
+            let html = "";
+            membersCache.forEach(m => {
+                const subset = filterAccountsByOwnership(accounts, "member", [m.id]);
+                const { total } = summarizeAccountsNetWorth(subset, nativeBalances);
+                html += `
+                    <div class="member-networth-row" data-click="sidebarGoMember" data-key="m:${m.id}">
+                        <div class="member-row-left">
+                            <span class="member-color-dot" style="background:${m.color};"></span>
+                            <div>
+                                <div class="member-row-name">${escapeHtml(m.name)}</div>
+                                <div class="member-row-sub">${subset.length} account${subset.length === 1 ? '' : 's'}</div>
+                            </div>
+                        </div>
+                        <span class="member-row-amt">${formatCurrency(total, baseCurrency)}</span>
+                    </div>
+                `;
+            });
+
+            const jointGroups = {};
+            accounts.forEach(a => {
+                if (Array.isArray(a.memberIds) && a.memberIds.length > 1) {
+                    jointGroups[[...a.memberIds].sort().join(",")] = true;
+                }
+            });
+            Object.keys(jointGroups).forEach(key => {
+                const ids = key.split(",");
+                const subset = filterAccountsByOwnership(accounts, "joint", ids);
+                const { total } = summarizeAccountsNetWorth(subset, nativeBalances);
+                html += `
+                    <div class="member-networth-row" data-click="sidebarGoMember" data-key="j:${key}">
+                        <div class="member-row-left">
+                            <span style="display:flex;">${ids.map(id => `<span class="member-color-dot" style="background:${getMemberById(id)?.color || '#94a3b8'}; margin-left:-4px;"></span>`).join("")}</span>
+                            <div>
+                                <div class="member-row-name">${escapeHtml(memberNamesForIds(ids))} (Joint)</div>
+                                <div class="member-row-sub">${subset.length} account${subset.length === 1 ? '' : 's'}</div>
+                            </div>
+                        </div>
+                        <span class="member-row-amt">${formatCurrency(total, baseCurrency)}</span>
+                    </div>
+                `;
+            });
+
+            const unassigned = accounts.filter(a => !Array.isArray(a.memberIds) || a.memberIds.length === 0);
+            if (unassigned.length > 0) {
+                const { total } = summarizeAccountsNetWorth(unassigned, nativeBalances);
+                html += `
+                    <div class="member-networth-row" style="cursor:default;">
+                        <div class="member-row-left">
+                            <span class="member-color-dot" style="background:#cbd5e1;"></span>
+                            <div>
+                                <div class="member-row-name">Unassigned</div>
+                                <div class="member-row-sub">${unassigned.length} account${unassigned.length === 1 ? '' : 's'} — tap an account to assign an owner</div>
+                            </div>
+                        </div>
+                        <span class="member-row-amt">${formatCurrency(total, baseCurrency)}</span>
+                    </div>
+                `;
+            }
+
+            wrap.innerHTML = html;
+        }
+
+        // Renders page-member: the filtered net worth card (with an optional per-currency
+        // breakdown reveal) plus the list of accounts owned by that member/joint group.
+        async function renderMemberPage() {
+            if (!activeMemberFilter) return;
+            const { type, ids } = activeMemberFilter;
+            const { accounts, nativeBalances } = await computeAccountBalances();
+            const subset = filterAccountsByOwnership(accounts, type, ids);
+            const { total, currencyTotals } = summarizeAccountsNetWorth(subset, nativeBalances);
+
+            const titleEl = document.getElementById("memberPageTitle");
+            if (type === "member") {
+                const m = getMemberById(ids[0]);
+                titleEl.innerHTML = `<span class="member-color-dot" style="background:${m?.color || '#94a3b8'};"></span> ${escapeHtml(m?.name || "Member")}`;
+            } else {
+                titleEl.innerHTML = `${ids.map(id => `<span class="member-color-dot" style="background:${getMemberById(id)?.color || '#94a3b8'};"></span>`).join("")} ${escapeHtml(memberNamesForIds(ids))} (Joint)`;
+            }
+
+            document.getElementById("memberPageNetWorthDisplay").textContent = formatCurrency(total, baseCurrency);
+
+            const currencyCount = Object.keys(currencyTotals).length;
+            const card = document.getElementById("memberPageNetWorthCard");
+            const hint = document.getElementById("memberPageCurrencyHint");
+            card.classList.toggle("no-toggle", currencyCount <= 1);
+            hint.style.display = currencyCount > 1 ? "block" : "none";
+            document.getElementById("memberPageCurrencyRow").style.display = "none";
+            document.getElementById("memberPageCurrencyRow").innerHTML = Object.entries(currencyTotals)
+                .sort((a, b) => b[1] - a[1])
+                .map(([curr, amt]) => `
+                    <div class="currency-total-chip">
+                        <div class="cur-code">${escapeHtml(curr)}</div>
+                        <div class="cur-amt">${formatCurrency(amt, curr)}</div>
+                    </div>
+                `).join("");
+
+            let html = "";
+            subset.forEach(a => {
+                const typeBadge = a.type === "fd"
+                    ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#ede9fe; color:#6d28d9; font-weight:bold;">Fixed Deposit</span>`
+                    : a.type === "multi"
+                        ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e0f2fe; color:#0369a1; font-weight:bold;">Multi-Currency</span>`
+                        : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${a.currency}</span>`;
+
+                let balSummary;
+                if (a.type === "fd" || a.type === "multi") {
+                    const baskets = nativeBalances[a.id];
+                    const currencies = Object.keys(baskets);
+                    balSummary = currencies.length === 0
+                        ? '<span style="color:var(--text-muted);">No funds yet</span>'
+                        : currencies.map(curr => `<strong>${formatCurrency(baskets[curr], curr)}</strong>`).join(" + ");
+                } else {
+                    balSummary = `<strong>${formatCurrency(nativeBalances[a.id], a.currency)}</strong>`;
+                }
+
+                html += `
+                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}" data-back="member">
+                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}</span>
+                        <span style="color:var(--text-muted);">›</span>
+                    </div>`;
+            });
+            document.getElementById("memberPageAccountsList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts tagged to this member yet.</p>`;
+        }
+
+        function toggleMemberPageCurrencyBreakdown() {
+            const row = document.getElementById("memberPageCurrencyRow");
+            if (document.getElementById("memberPageCurrencyHint").style.display === "none") return; // only 1 currency — nothing to reveal
+            row.style.display = row.style.display === "none" ? "flex" : "none";
         }
 
         // --- CATEGORIES SYSTEM WORKSPACE DESIGNER ---
@@ -2893,18 +3319,11 @@
             });
             document.getElementById("netWorthDisplay").textContent = formatCurrency(globalBaseNetWorth, baseCurrency);
 
-            // Row 2 of the dashboard's net worth summary: what's actually held, per currency,
-            // with no conversion applied — a companion picture to Row 1's single converted total.
-            const currencyTotalsHTML = Object.entries(currencyTotals)
-                .sort((a, b) => b[1] - a[1])
-                .map(([curr, amt]) => `
-                    <div class="currency-total-chip">
-                        <div class="cur-code">${escapeHtml(curr)}</div>
-                        <div class="cur-amt">${formatCurrency(amt, curr)}</div>
-                    </div>
-                `).join("");
-            document.getElementById("currencyTotalsRow").innerHTML = currencyTotalsHTML
-                || `<p style="color:var(--text-muted); font-size:0.85rem;">No balances yet.</p>`;
+            // "Net Worth by Member" rows (replaces the old single "Net Worth by Currency Held"
+            // row, v34): one row per member (their solo-owned accounts only), one row per distinct
+            // joint-owned account group, and — only if any exist — one row for unassigned accounts,
+            // so the breakdown always ties out to the grand total above.
+            renderMemberNetWorthRows(accounts, nativeBalances);
 
             // --- Fixed Deposit maturity reminders ---
             // FD terms now live on the individual deposit transaction (each "placement"), not the
@@ -3489,18 +3908,39 @@
             else wrap.innerHTML = ""; // "list" view has no separate chart — the list rows are the whole view
         }
 
+        // Fills a breakdown page's "Member" filter dropdown with every member. "All Members"
+        // (default) includes everyone plus joint accounts; picking one member restricts to that
+        // member's solo-owned accounts only (joint accounts are excluded), per spec.
+        function populateBreakdownMemberFilter(selectId) {
+            const select = document.getElementById(selectId);
+            const prevValue = select.value || "all";
+            select.innerHTML = `<option value="all">All Members (everyone, incl. joint)</option>` +
+                membersCache.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("");
+            select.value = membersCache.some(m => m.id === prevValue) ? prevValue : "all";
+        }
+
+        // Returns the set of account IDs solo-owned by a given member — used to scope the
+        // Spending/Income Breakdown pages when a specific member is selected.
+        function accountIdsForMember(accounts, memberId) {
+            return new Set(accounts.filter(a => Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberId).map(a => a.id));
+        }
+
         async function renderSpendingBreakdownPage() {
             const txs = await readAllDB(STORES.TRANSACTIONS);
             const accounts = await readAllDB(STORES.ACCOUNTS);
             populateYearFilterOptionsFor("spendingYearFilter", txs, "spendingYearFilterInit");
+            populateBreakdownMemberFilter("spendingMemberFilter");
             const filterM = document.getElementById("spendingMonthFilter").value;
             const filterY = document.getElementById("spendingYearFilter").value;
+            const filterMember = document.getElementById("spendingMemberFilter").value;
             const chartType = document.getElementById("spendingChartType").value;
+            const memberAccountIds = filterMember !== "all" ? accountIdsForMember(accounts, filterMember) : null;
 
             const catTotals = {};
             let total = 0;
             txs.forEach(t => {
                 if (t.type !== "expense") return;
+                if (memberAccountIds && !memberAccountIds.has(t.src)) return;
                 const d = new Date(t.date);
                 if (filterM !== "all" && d.getMonth().toString() !== filterM) return;
                 if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
@@ -3524,14 +3964,18 @@
             const txs = await readAllDB(STORES.TRANSACTIONS);
             const accounts = await readAllDB(STORES.ACCOUNTS);
             populateYearFilterOptionsFor("incomeYearFilter", txs, "incomeYearFilterInit");
+            populateBreakdownMemberFilter("incomeMemberFilter");
             const filterM = document.getElementById("incomeMonthFilter").value;
             const filterY = document.getElementById("incomeYearFilter").value;
+            const filterMember = document.getElementById("incomeMemberFilter").value;
             const chartType = document.getElementById("incomeChartType").value;
+            const memberAccountIds = filterMember !== "all" ? accountIdsForMember(accounts, filterMember) : null;
 
             const catTotals = {};
             let total = 0;
             txs.forEach(t => {
                 if (t.type !== "income") return;
+                if (memberAccountIds && !memberAccountIds.has(t.src)) return;
                 const d = new Date(t.date);
                 if (filterM !== "all" && d.getMonth().toString() !== filterM) return;
                 if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
@@ -3645,11 +4089,22 @@
 
             const accs = await readAllDB(STORES.ACCOUNTS);
             if(accs.length === 0) {
-                await writeDB(STORES.ACCOUNTS, { id: "usd_w", name: "US Dollar Wallet", initialBalance: 2500, currency: "USD", type: "normal" });
-                await writeDB(STORES.ACCOUNTS, { id: "sgd_w", name: "DBS Singapore", initialBalance: 1200, currency: "SGD", type: "normal" });
-                await writeDB(STORES.ACCOUNTS, { id: "myr_w", name: "Maybank Malaysia", initialBalance: 3400, currency: "MYR", type: "normal" });
+                await writeDB(STORES.ACCOUNTS, { id: "usd_w", name: "US Dollar Wallet", initialBalance: 2500, currency: "USD", type: "normal", memberIds: [] });
+                await writeDB(STORES.ACCOUNTS, { id: "sgd_w", name: "DBS Singapore", initialBalance: 1200, currency: "SGD", type: "normal", memberIds: [] });
+                await writeDB(STORES.ACCOUNTS, { id: "myr_w", name: "Maybank Malaysia", initialBalance: 3400, currency: "MYR", type: "normal", memberIds: [] });
             }
-            
+
+            // Seed a friendly starting set of household members (fully editable/removable) so the
+            // Sidebar's Members feature isn't empty on first run.
+            const existingMembers = await readAllDB(STORES.MEMBERS);
+            if (existingMembers.length === 0) {
+                await writeDB(STORES.MEMBERS, { id: "mem_husband", name: "Husband", color: MEMBER_COLORS[0] });
+                await writeDB(STORES.MEMBERS, { id: "mem_wife", name: "Wife", color: MEMBER_COLORS[1] });
+                await writeDB(STORES.MEMBERS, { id: "mem_kid", name: "Kid", color: MEMBER_COLORS[2] });
+            }
+            await loadMembersCache();
+            renderSidebarMembers();
+
             window.history.replaceState({ view: "workspace" }, "");
             
             initAutoLock();
@@ -3676,6 +4131,7 @@
                 accounts: await readAllDB(STORES.ACCOUNTS),
                 transactions: await readAllDB(STORES.TRANSACTIONS),
                 categories: await readAllDB(STORES.CATEGORIES),
+                members: await readAllDB(STORES.MEMBERS),
                 baseCurrency: baseCurrency,
                 fxRates: fxRates
             };
@@ -3801,6 +4257,9 @@
                     if (db.objectStoreNames.contains(STORES.CATEGORIES)) {
                         await clearStoreDB(STORES.CATEGORIES);
                     }
+                    if (db.objectStoreNames.contains(STORES.MEMBERS)) {
+                        await clearStoreDB(STORES.MEMBERS);
+                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -3813,8 +4272,13 @@
                     if (bundle.categories) {
                         for (const cat of bundle.categories) await writeDB(STORES.CATEGORIES, cat);
                     }
+                    if (bundle.members) {
+                        for (const mem of bundle.members) await writeDB(STORES.MEMBERS, mem);
+                    }
 
                     await syncAndLoadCategories();
+                    await loadMembersCache();
+                    renderSidebarMembers();
                     renderApp();
                     alert("Backup imported successfully.");
                 } catch (err) {
@@ -3848,6 +4312,16 @@
             navigateToAccountsPage: () => navigateToAccountsPage(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
             navigateToBackupPage: () => navigateToBackupPage(),
+            navigateToAllLedgerPage: () => navigateToAllLedgerPage(),
+            navigateToDataSecurityPage: () => navigateToDataSecurityPage(),
+            navigateToMembersPage: () => navigateToMembersPage(),
+            sidebarGoMember: (el) => sidebarGoMember(el),
+            openMemberFormModal: () => openMemberFormModal(),
+            handleCreateMemberMobile: () => handleCreateMemberMobile(),
+            deleteMemberFromForm: () => deleteMemberFromForm(),
+            editMember: (el) => editMember(el.dataset.id),
+            selectMemberColor: (el) => selectMemberColor(el),
+            toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
             toggleLedgerQuickAddSheet: () => toggleLedgerQuickAddSheet(),

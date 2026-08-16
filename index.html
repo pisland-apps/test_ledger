@@ -530,6 +530,58 @@
             margin-top: 2px;
         }
 
+        /* Dashboard "Net Worth by Member" report rows */
+        .member-networth-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+        .member-networth-row {
+            display: flex; align-items: center; justify-content: space-between; gap: 10px;
+            background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
+            padding: 12px 14px; cursor: pointer; transition: opacity 0.15s;
+        }
+        .member-networth-row:active { opacity: 0.75; }
+        .member-networth-row .member-row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+        .member-networth-row .member-row-name { font-weight: 700; font-size: 0.88rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .member-networth-row .member-row-sub { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; }
+        .member-networth-row .member-row-amt { font-weight: 800; font-size: 0.95rem; flex-shrink: 0; }
+        .member-color-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; border: 1.5px solid rgba(0,0,0,0.08); }
+
+        /* Bottom "More" action buttons on the dashboard */
+        .dashboard-bottom-actions { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+        .dash-bottom-btn {
+            display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+            background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
+            padding: 14px 16px; font-size: 0.88rem; font-weight: 700; color: var(--text-main); cursor: pointer;
+        }
+        .dash-bottom-btn:active { background: #f1f5f9; }
+        .dash-bottom-btn-icon { font-size: 1.1rem; width: 22px; text-align: center; flex-shrink: 0; }
+
+        /* Sidebar member rows */
+        .sidebar-member-item {
+            display: flex; align-items: center; gap: 12px; padding: 10px 20px; font-weight: 700;
+            font-size: 0.88rem; cursor: pointer; border: none; background: none; width: 100%;
+            text-align: left; color: var(--text-main);
+        }
+        .sidebar-member-item:active { background: #f1f5f9; }
+        .sidebar-member-item.active { background: #eef2ff; color: var(--primary); }
+        .sidebar-member-item .member-row-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .sidebar-empty-hint { padding: 6px 20px 10px; font-size: 0.72rem; color: var(--text-muted); font-weight: 600; }
+
+        /* Color swatch picker (member form) */
+        .color-swatch-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 4px; }
+        .color-swatch {
+            width: 32px; height: 32px; border-radius: 50%; cursor: pointer; border: 3px solid transparent;
+            box-shadow: 0 0 0 1px rgba(0,0,0,0.08) inset;
+        }
+        .color-swatch.selected { border-color: var(--text-main); }
+
+        /* Net worth card on a member/joint filtered page */
+        .member-page-networth-card {
+            background: var(--card-bg); border-radius: 16px; border: 1.5px solid var(--border-color);
+            padding: 18px; text-align: center; margin-bottom: 16px; cursor: pointer;
+        }
+        .member-page-networth-card.no-toggle { cursor: default; }
+        .member-page-networth-card h1 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; }
+        .member-page-networth-hint { font-size: 0.7rem; color: var(--primary); font-weight: 700; margin-top: 6px; }
+
         /* ============ RESPONSIVE LAYOUT: persistent sidebar on tablet/desktop ============
            Below 768px (phones) the sidebar stays the mobile slide-in drawer defined above.
            At 768px and up (tablet/desktop) it's pinned open as a permanent left column, the
@@ -775,15 +827,6 @@
             <button class="sidebar-item" data-click="sidebarGo" data-target="workspace">
                 <span class="sidebar-item-icon">🏠</span> Dashboard
             </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="savings">
-                <span class="sidebar-item-icon">📊</span> Net Savings Statement
-            </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="accounts">
-                <span class="sidebar-item-icon">🏦</span> Financial Accounts
-            </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="all-ledger">
-                <span class="sidebar-item-icon">📜</span> All Transactions
-            </button>
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
@@ -795,18 +838,10 @@
             </button>
 
             <div class="sidebar-divider"></div>
-            <div class="sidebar-section-label">Data &amp; Security</div>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="backup">
-                <span class="sidebar-item-icon">💾</span> Backup &amp; Restore
-            </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="autolock">
-                <span class="sidebar-item-icon">⏱️</span> Auto-Lock
-            </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="database">
-                <span class="sidebar-item-icon">🗄️</span> App Local Database
-            </button>
-            <button class="sidebar-item" data-click="sidebarGo" data-target="lock">
-                <span class="sidebar-item-icon">🔒</span> Lock App Now
+            <div class="sidebar-section-label">Members</div>
+            <div id="sidebarMembersSection"></div>
+            <button class="sidebar-item" data-click="navigateToMembersPage">
+                <span class="sidebar-item-icon">👪</span> Manage Members
             </button>
         </nav>
     </div>
@@ -873,9 +908,9 @@
         </header>
 
         <div class="section-header" style="margin-top: 0;">
-            <span class="section-title">Net Worth by Currency Held</span>
+            <span class="section-title">Net Worth by Member</span>
         </div>
-        <div class="currency-totals-row" id="currencyTotalsRow"></div>
+        <div class="member-networth-rows" id="memberNetWorthRows"></div>
 
         <div id="fdReminderContainer"></div>
 
@@ -926,6 +961,21 @@
                     <option value="all">All Years</option>
                 </select>
             </div>
+        </div>
+
+        <div class="section-header">
+            <span class="section-title">More</span>
+        </div>
+        <div class="dashboard-bottom-actions">
+            <button class="dash-bottom-btn" data-click="navigateToAccountsPage">
+                <span class="dash-bottom-btn-icon">🏦</span> Financial Accounts
+            </button>
+            <button class="dash-bottom-btn" data-click="navigateToAllLedgerPage">
+                <span class="dash-bottom-btn-icon">📜</span> All Transactions
+            </button>
+            <button class="dash-bottom-btn" data-click="navigateToDataSecurityPage">
+                <span class="dash-bottom-btn-icon">🔐</span> Data Security
+            </button>
         </div>
     </div>
 
@@ -1028,7 +1078,7 @@
     <!-- ================= PAGE 6: BACKUP & RESTORE ================= -->
     <div id="page-backup" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">Backup &amp; Restore</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Export &amp; import your data</p>
@@ -1067,7 +1117,7 @@
     <!-- ================= PAGE: AUTO-LOCK (split out of Backup & Restore, v32) ================= -->
     <div id="page-autolock" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">Auto-Lock</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Lock the app automatically after inactivity</p>
@@ -1087,13 +1137,13 @@
                 <option value="30">30 min</option>
             </select>
         </div>
-        <p style="font-size:0.75rem; color:var(--text-muted);">Resets on any tap, click, keystroke, or scroll while unlocked. Choosing "Never" disables idle auto-lock entirely — you can still lock the app manually any time via the 🔒 header button or "Lock App Now" in the sidebar.</p>
+        <p style="font-size:0.75rem; color:var(--text-muted);">Resets on any tap, click, keystroke, or scroll while unlocked. Choosing "Never" disables idle auto-lock entirely — you can still lock the app manually any time via the 🔒 header button.</p>
     </div>
 
     <!-- ================= PAGE: APP LOCAL DATABASE (split out of Backup & Restore, v32) ================= -->
     <div id="page-database" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">App Local Database</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">On-device storage footprint</p>
@@ -1130,6 +1180,12 @@
             </select>
             <select id="spendingYearFilter" data-change="renderSpendingBreakdownPage">
                 <option value="all">All Years</option>
+            </select>
+        </div>
+        <div class="form-row" style="margin-bottom:12px;">
+            <label>Member</label>
+            <select id="spendingMemberFilter" class="form-input" data-change="renderSpendingBreakdownPage">
+                <option value="all">All Members (everyone, incl. joint)</option>
             </select>
         </div>
         <div class="form-row" style="margin-bottom:14px;">
@@ -1170,6 +1226,12 @@
             </select>
             <select id="incomeYearFilter" data-change="renderIncomeBreakdownPage">
                 <option value="all">All Years</option>
+            </select>
+        </div>
+        <div class="form-row" style="margin-bottom:12px;">
+            <label>Member</label>
+            <select id="incomeMemberFilter" class="form-input" data-change="renderIncomeBreakdownPage">
+                <option value="all">All Members (everyone, incl. joint)</option>
             </select>
         </div>
         <div class="form-row" style="margin-bottom:14px;">
@@ -1231,6 +1293,71 @@
                 <span id="savingsSurplusValue">0.00</span>
             </div>
         </div>
+    </div>
+
+    <!-- ================= PAGE: DATA SECURITY HUB (replaces sidebar "Data & Security" section) ================= -->
+    <div id="page-datasecurity" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Data Security</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Backups, auto-lock &amp; storage</p>
+            </div>
+        </div>
+        <div class="config-list">
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="backup">
+                <span>💾 <strong>Backup &amp; Restore</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="autolock">
+                <span>⏱️ <strong>Auto-Lock</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="database">
+                <span>🗄️ <strong>App Local Database</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="lockAppNow">
+                <span>🔒 <strong>Lock App Now</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= PAGE: MANAGE MEMBERS (add/edit/remove household members) ================= -->
+    <div id="page-members" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Manage Members</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Tag accounts to a member — husband, wife, kids, etc.</p>
+            </div>
+        </div>
+        <div class="config-list" id="membersPageList" style="padding-bottom:88px;"></div>
+        <button class="fab-btn" data-click="openMemberFormModal" aria-label="Add member" title="Add member">+</button>
+    </div>
+
+    <!-- ================= PAGE: MEMBER / JOINT FILTERED VIEW ================= -->
+    <div id="page-member" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 id="memberPageTitle" style="font-weight:800; font-size:1.2rem; display:flex; align-items:center; gap:8px;">Member</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Accounts owned by this member</p>
+            </div>
+        </div>
+
+        <div class="member-page-networth-card" id="memberPageNetWorthCard" data-click="toggleMemberPageCurrencyBreakdown">
+            <h1 id="memberPageNetWorthDisplay">0.00</h1>
+            <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Portfolio Net Worth</p>
+            <p class="member-page-networth-hint" id="memberPageCurrencyHint" style="display:none;">Tap to see Net Worth by Currency Held</p>
+        </div>
+        <div class="currency-totals-row" id="memberPageCurrencyRow" style="display:none;"></div>
+
+        <div class="section-header" style="margin-top:0;">
+            <span class="section-title">Accounts</span>
+        </div>
+        <div class="config-list" id="memberPageAccountsList" style="padding-bottom:24px;"></div>
     </div>
 
     <!-- ================= SYSTEM MODALS ================= -->
@@ -1313,11 +1440,40 @@
                     <button type="button" data-click="addFdPlacementRow" class="submit-btn" style="margin-top:2px; margin-bottom:14px; background:#ede9fe; color:#6d28d9;">+ Add Placement</button>
                 </div>
 
+                <!-- Owner(s): tag this account to one member (individual) or several (joint) — used to
+                     group accounts under Sidebar members and per-member Portfolio Net Worth reports. -->
+                <div class="form-row">
+                    <label>Owner(s) — select one for an individual account, or several for a joint account</label>
+                    <div id="accountMemberCheckboxes" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
+                </div>
+
                 <!-- Action handlers changed to button onclick to bypass Android keyboard/form intercept bugs -->
                 <button type="button" id="accFormSubmitBtn" data-click="handleCreateAccountMobile" class="submit-btn" style="background: var(--transfer-color);">Create Account</button>
                 <button type="button" id="accFormCancelBtn" class="submit-btn" data-click="resetAccountForm" style="background:#64748b; margin-top:6px; display:none;">Cancel Edit</button>
                 <button type="button" id="accFormDeleteBtn" data-click="deleteAccountFromForm" class="submit-btn" style="background:#fee2e2; color:var(--expense-color); margin-top:6px; display:none;">🗑 Delete Account</button>
             </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Add / Edit Household Member -->
+    <div class="modal" id="memberModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 id="memberFormHeaderTitle" style="font-weight: 800;">Add Member</h3>
+                <button data-click="closeModal" data-modal="memberModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <input type="hidden" id="editMemberId">
+            <div class="form-row">
+                <label>Name</label>
+                <input type="text" id="newMemberName" placeholder="e.g. Husband, Wife, Alex" required>
+            </div>
+            <div class="form-row">
+                <label>Color</label>
+                <div class="color-swatch-grid" id="memberColorSwatchGrid"></div>
+                <input type="hidden" id="newMemberColor">
+            </div>
+            <button type="button" id="memberFormSubmitBtn" data-click="handleCreateMemberMobile" class="submit-btn" style="background: var(--transfer-color);">Add Member</button>
+            <button type="button" id="memberFormDeleteBtn" data-click="deleteMemberFromForm" class="submit-btn" style="background:#fee2e2; color:var(--expense-color); margin-top:6px; display:none;">🗑 Delete Member</button>
         </div>
     </div>
 
