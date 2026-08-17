@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v36";
-        const APP_VERSION_DATE = "2026-08-16";
+        const APP_VERSION = "v39";
+        const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -21,12 +21,12 @@
         if (versionBadgeEl) versionBadgeEl.textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
         const DB_NAME = "EnterpriseMultiCurrencyLedgerDB_v4";
-        const DB_VERSION = 3;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members" };
+        const DB_VERSION = 4;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -37,12 +37,27 @@
         const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate"];
         const DEFAULT_ACCOUNT_GROUP = ACCOUNT_GROUPS[0];
 
+        // Sub-groups (v39) — optional, per-Group breakdown so e.g. "Investment" can be split
+        // into Fixed Deposit / KWSP / ASNB / Unit Trust rather than one flat list. A group with
+        // no entry here (or an account left on "(No Sub-Group)") just isn't sub-divided. Purely
+        // organizational — doesn't affect account.type (Normal/Multi-Currency/Fixed
+        // Deposit/Unit Trust), just where it's filed on the Accounts page.
+        const ACCOUNT_SUBGROUPS = {
+            "Investment": ["Fixed Deposit", "KWSP", "ASNB", "Unit Trust"],
+        };
+        function subgroupsForGroup(group) {
+            return ACCOUNT_SUBGROUPS[group] || [];
+        }
+
         // Sorts accounts by group (in ACCOUNT_GROUPS order) then by name — shared by the Accounts
         // page and per-member account lists so both stay consistent.
         function sortAccountsByGroupThenName(accounts) {
             return [...accounts].sort((a, b) => {
                 const gi = ACCOUNT_GROUPS.indexOf(a.group || DEFAULT_ACCOUNT_GROUP) - ACCOUNT_GROUPS.indexOf(b.group || DEFAULT_ACCOUNT_GROUP);
                 if (gi !== 0) return gi;
+                const subList = subgroupsForGroup(a.group || DEFAULT_ACCOUNT_GROUP);
+                const si = subList.indexOf(a.subgroup || "") - subList.indexOf(b.subgroup || "");
+                if (si !== 0) return si;
                 return (a.name || "").localeCompare(b.name || "");
             });
         }
@@ -630,7 +645,7 @@
         // and the sorted list of years that actually have a transaction for that account (used to
         // skip empty years when paging with the </> controls). Reset whenever a fresh account view
         // is opened via navigateToLedgerPage(); recomputed every renderApp().
-        let accountLedgerYear = null;
+        let accountLedgerYear = "__fresh__"; // "__fresh__" = not yet initialized for this account view; null = user explicitly chose "All Years"; a number = one specific year
         let accountLedgerYearsCache = [];
         let ledgerBackToPage = "workspace"; 
 
@@ -649,8 +664,36 @@
         // Holds the compressed base64 image (if any) currently attached in the open transaction form.
         let currentTxImageData = null;
 
-        let baseCurrency = "USD";
-        let fxRates = { USD: 1.0, EUR: 0.92, GBP: 0.78, SGD: 1.34, MYR: 4.42 };
+        // Default currency set (v39) — the 10 currencies the user actually holds. Rates are
+        // approximate starting points only (per 1 MYR) — the user edits real values via
+        // Currency Settings ▸ Save FX Values; this just avoids a blank/wrong first run.
+        let baseCurrency = "MYR";
+        let fxRates = {
+            MYR: 1.0, SGD: 0.3025, USD: 0.225, HKD: 1.755, CNY: 1.615,
+            TWD: 7.15, THB: 7.65, KRW: 305.0, JPY: 33.3, BND: 0.3025
+        };
+        // Currencies a fresh v39+ install (or an existing install missing some) should have —
+        // merged additively into fxRates on load (mergeInDefaultCurrencies below) so an existing
+        // user's own custom rates for currencies they already had are never overwritten, while
+        // any of these 10 they don't yet have are added with the placeholder rate above.
+        const HELD_CURRENCIES = ["MYR", "SGD", "USD", "HKD", "CNY", "TWD", "THB", "KRW", "JPY", "BND"];
+        const DEFAULT_FX_RATES_BY_CURRENCY = { MYR: 1.0, SGD: 0.3025, USD: 0.225, HKD: 1.755, CNY: 1.615, TWD: 7.15, THB: 7.65, KRW: 305.0, JPY: 33.3, BND: 0.3025 };
+
+        // Adds any of HELD_CURRENCIES missing from the current fxRates table (e.g. an existing
+        // install upgrading to v39) using the placeholder default rate, converted into whatever
+        // base currency is actually active — never touches a currency the user already has.
+        function mergeInDefaultCurrencies() {
+            let changed = false;
+            const basePlaceholder = DEFAULT_FX_RATES_BY_CURRENCY[baseCurrency] || 1.0;
+            HELD_CURRENCIES.forEach(c => {
+                if (fxRates[c] === undefined) {
+                    const perMyr = DEFAULT_FX_RATES_BY_CURRENCY[c] || 1.0;
+                    fxRates[c] = perMyr / basePlaceholder;
+                    changed = true;
+                }
+            });
+            return changed;
+        }
         const currencySymbols = { USD: "$", EUR: "€", GBP: "£", SGD: "S$", MYR: "RM" };
         
         // Dynamic category registry
@@ -678,6 +721,7 @@
             { name: "Gift Received", type: "income", icon: "🎁" },
             { name: "Rebate", type: "income", icon: "💸" },
             { name: "Grants", type: "income", icon: "🎓" },
+            { name: "Dividend Unit Trust", type: "income", icon: "🧺" },
             { name: "Bank Charges", type: "expense", icon: "💳" },
             { name: "Education", type: "expense", icon: "🎓" },
             { name: "Family", type: "expense", icon: "👨‍👩‍👧‍👦" },
@@ -828,6 +872,9 @@
                     if (!database.objectStoreNames.contains(STORES.MEMBERS)) {
                         database.createObjectStore(STORES.MEMBERS, { keyPath: "id" });
                     }
+                    if (!database.objectStoreNames.contains(STORES.FUNDS)) {
+                        database.createObjectStore(STORES.FUNDS, { keyPath: "id" });
+                    }
                 };
                 request.onerror = (e) => reject(e.target.error);
             });
@@ -880,7 +927,7 @@
             if (!sel) return;
             const current = recentTxAccountFilter;
             sel.innerHTML = `<option value="all">All Accounts</option>` +
-                accounts.map(a => `<option value="${a.id}">${escapeHtml(a.name)}</option>`).join("");
+                accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))}</option>`).join("");
             sel.value = accounts.some(a => a.id === current) ? current : "all";
         }
 
@@ -922,7 +969,7 @@
                 const iconBadge = getCategoryIcon(t.cat, t.type);
                 const acc = accounts.find(a => a.id === t.src);
                 return `
-                    <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${t.id}">
+                    <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(t.cat || '')}]</span>
@@ -1054,7 +1101,7 @@
             activeLedgerAccountView = accountId;
             activeCategoryView = "all";
             directTypeView = "all";
-            accountLedgerYear = null; // fresh account view — default to its latest year with data
+            accountLedgerYear = "__fresh__"; // fresh account view — default to its latest year with data
             ledgerBackToPage = backTarget;
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
             showPage("page-ledger");
@@ -1071,6 +1118,15 @@
         function ledgerYearNext() {
             const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
             if (idx >= 0 && idx < accountLedgerYearsCache.length - 1) { accountLedgerYear = accountLedgerYearsCache[idx + 1]; renderApp(); }
+        }
+
+        // Fired when the year <select> (which replaced the old plain "< 2019 >" label) changes —
+        // lets the user jump straight to any year with data, or to "All Years" (accountLedgerYear
+        // = null) to see the account's complete transaction history on one page.
+        function ledgerYearSelectChange() {
+            const val = document.getElementById("ledgerYearLabel").value;
+            accountLedgerYear = val === "all" ? null : parseInt(val, 10);
+            renderApp();
         }
 
         // Quick-add type picker (v34) — the "+" FAB on an account's own Activity page.
@@ -1302,7 +1358,9 @@
 
         // --- CURRENCY SETTINGS CONTROLS ---
         function openCurrencyConfig() {
-            document.getElementById("baseCurrencySelect").value = baseCurrency;
+            const baseSelect = document.getElementById("baseCurrencySelect");
+            baseSelect.innerHTML = Object.keys(fxRates).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+            baseSelect.value = baseCurrency;
             renderFxRatesInputs();
             openModal("currencyModal");
         }
@@ -1374,7 +1432,7 @@
         async function populateDefaultPaymentAccountSelect() {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const select = document.getElementById("defaultPaymentAccountSelect");
-            select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)} (${escapeHtml(a.currency || a.type)})</option>`).join("");
+            select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))} (${escapeHtml(a.currency || a.type)})</option>`).join("");
             select.value = accounts.some(a => a.id === defaultPaymentAccount) ? defaultPaymentAccount : "";
         }
 
@@ -1391,19 +1449,22 @@
             const normalBtn = document.getElementById("accTypeBtnNormal");
             const multiBtn = document.getElementById("accTypeBtnMulti");
             const fdBtn = document.getElementById("accTypeBtnFd");
+            const utBtn = document.getElementById("accTypeBtnUt");
             const balCurrRow = document.getElementById("newAccBalCurrRow");
             const multiWrap = document.getElementById("multiOpeningWrap");
             const fdWrap = document.getElementById("fdOpeningWrap");
+            const utWrap = document.getElementById("utInfoWrap");
             const hint = document.getElementById("accTypeHint");
             const isEditing = document.getElementById("editAccountId").value !== "";
 
-            [normalBtn, multiBtn, fdBtn].forEach(btn => {
+            [normalBtn, multiBtn, fdBtn, utBtn].forEach(btn => {
                 btn.style.background = "#e2e8f0"; btn.style.color = "var(--text-main)";
             });
 
             balCurrRow.style.display = "none";
             multiWrap.style.display = "none";
             fdWrap.style.display = "none";
+            utWrap.style.display = "none";
 
             if (type === "normal") {
                 normalBtn.style.background = "var(--transfer-color)"; normalBtn.style.color = "white";
@@ -1425,6 +1486,10 @@
                     fdWrap.style.display = "block";
                     if (document.getElementById("fdOpeningRows").children.length === 0) addFdPlacementRow();
                 }
+            } else if (type === "unittrust") {
+                utBtn.style.background = "var(--transfer-color)"; utBtn.style.color = "white";
+                hint.textContent = "Holds one or more unit trust funds. Just choose the type and name here — add each fund, then log Buy/Sell/Dividend/Contribution transactions against it, from this account's own page.";
+                utWrap.style.display = "block";
             }
         }
 
@@ -1534,11 +1599,29 @@
             preview.textContent = `Matures ${maturityStr} — projected payout ≈ ${formatCurrency(projectedTotal, curr)}`;
         }
 
+        // Populates the Sub-Group select for whichever Group is currently chosen, and shows/hides
+        // the row entirely when that Group has no configured sub-groups (see ACCOUNT_SUBGROUPS).
+        function handleAccGroupChange(preselectSubgroup) {
+            const group = document.getElementById("newAccGroup").value;
+            const list = subgroupsForGroup(group);
+            const row = document.getElementById("newAccSubgroupRow");
+            const sel = document.getElementById("newAccSubgroup");
+            if (list.length === 0) {
+                row.style.display = "none";
+                sel.innerHTML = "";
+                return;
+            }
+            row.style.display = "flex";
+            sel.innerHTML = `<option value="">(No Sub-Group)</option>` + list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+            sel.value = (preselectSubgroup && list.includes(preselectSubgroup)) ? preselectSubgroup : "";
+        }
+
         function resetAccountForm() {
             const isEditing = document.getElementById("editAccountId").value !== "";
             document.getElementById("editAccountId").value = "";
             document.getElementById("newAccName").value = "";
             document.getElementById("newAccGroup").value = DEFAULT_ACCOUNT_GROUP;
+            handleAccGroupChange();
             document.getElementById("newAccBal").value = "0";
             document.getElementById("newAccCurrency").value = baseCurrency;
             document.getElementById("accountFormHeaderTitle").textContent = "Create New Account";
@@ -1566,7 +1649,7 @@
 
             if(!name) { alert("Please enter an account name."); return; }
 
-            const record = { id, name, type, group: document.getElementById("newAccGroup").value || DEFAULT_ACCOUNT_GROUP, memberIds: getCheckedAccountMemberIds() };
+            const record = { id, name, type, group: document.getElementById("newAccGroup").value || DEFAULT_ACCOUNT_GROUP, subgroup: document.getElementById("newAccSubgroup").value || "", memberIds: getCheckedAccountMemberIds() };
 
             if (type === "normal") {
                 const balInput = document.getElementById("newAccBal").value;
@@ -1689,6 +1772,20 @@
         // lives on that Activity page instead, via the ✏️ icon beside the account name).
         // Small colored "● Name" owner tag shown under an account row (Accounts page / member
         // account lists) — one dot+name per owner for a joint account, muted "Unassigned" if none.
+        // Plain-text "Name (Member1, Member2)" / "Name (Unassigned)" label for an account —
+        // used anywhere an account shows up inside a <select><option> or other plain-text
+        // context, so accounts sharing the same name (e.g. two "KWSP (MYR)" accounts, one per
+        // household member) can still be told apart. For rich HTML contexts (list rows) use
+        // accountOwnerTagHTML instead, which colors each member's tag.
+        function accountOwnerNamesText(account) {
+            const ids = Array.isArray(account.memberIds) ? account.memberIds : [];
+            if (ids.length === 0) return "Unassigned";
+            return ids.map(id => getMemberById(id)?.name || "Unknown").join(", ");
+        }
+        function accountOptionLabel(a) {
+            return `${a.name} (${accountOwnerNamesText(a)})`;
+        }
+
         function accountOwnerTagHTML(account) {
             const ids = Array.isArray(account.memberIds) ? account.memberIds : [];
             if (ids.length === 0) {
@@ -1700,26 +1797,69 @@
             }).join(" ");
         }
 
+        // Converts any account's current balance (scalar for Normal, or a currency-basket sum
+        // for Multi-Currency/Fixed Deposit/Unit Trust) into base currency — used for the
+        // Group/Sub-Group subtotal rows on the Accounts page.
+        function accountBaseValue(a, nativeBalances) {
+            if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
+                const baskets = nativeBalances[a.id] || {};
+                return Object.keys(baskets).reduce((sum, curr) => sum + convertCurrency(baskets[curr], curr, baseCurrency), 0);
+            }
+            return convertCurrency(nativeBalances[a.id] || 0, a.currency, baseCurrency);
+        }
+
         async function renderAccountsPage() {
             await populateDefaultPaymentAccountSelect();
             const { accounts, nativeBalances } = await computeAccountBalances();
             const sorted = sortAccountsByGroupThenName(accounts);
             let html = "";
             let lastGroup = null;
+            let lastSubgroup = undefined;
+            let groupTotal = 0, subgroupTotal = 0;
+
+            // Flushes the pending sub-group subtotal (only when that group actually has
+            // sub-groups configured — plain groups with no sub-division never show one).
+            function flushSubgroupTotal() {
+                if (lastSubgroup) {
+                    html += `<div class="config-list-subtotal">Sub-Total · ${escapeHtml(lastSubgroup)}: <strong>${formatBalanceHTML(subgroupTotal, baseCurrency)}</strong></div>`;
+                }
+                subgroupTotal = 0;
+            }
+            function flushGroupTotal() {
+                if (lastGroup !== null) {
+                    html += `<div class="config-list-grouptotal">Group Total · ${escapeHtml(lastGroup)}: <strong>${formatBalanceHTML(groupTotal, baseCurrency)}</strong></div>`;
+                }
+                groupTotal = 0;
+            }
+
             sorted.forEach(a => {
                 const group = a.group || DEFAULT_ACCOUNT_GROUP;
+                const subgroup = a.subgroup || "";
                 if (group !== lastGroup) {
+                    flushSubgroupTotal();
+                    flushGroupTotal();
                     html += `<div class="config-list-section-label">${escapeHtml(group)}</div>`;
                     lastGroup = group;
+                    lastSubgroup = undefined;
                 }
+                if (subgroup !== lastSubgroup) {
+                    flushSubgroupTotal();
+                    if (subgroup) {
+                        html += `<div class="config-list-subgroup-label">↳ ${escapeHtml(subgroup)}</div>`;
+                    }
+                    lastSubgroup = subgroup;
+                }
+
                 const typeBadge = a.type === "fd"
                     ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#ede9fe; color:#6d28d9; font-weight:bold;">Fixed Deposit</span>`
                     : a.type === "multi"
                         ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e0f2fe; color:#0369a1; font-weight:bold;">Multi-Currency</span>`
-                        : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${a.currency}</span>`;
+                        : a.type === "unittrust"
+                            ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:bold;">Unit Trust</span>`
+                            : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
 
                 let balSummary;
-                if (a.type === "fd" || a.type === "multi") {
+                if (a.type === "fd" || a.type === "multi" || a.type === "unittrust") {
                     const baskets = nativeBalances[a.id];
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
@@ -1729,8 +1869,12 @@
                     balSummary = `<strong>${formatBalanceHTML(nativeBalances[a.id], a.currency)}</strong>`;
                 }
 
+                const baseVal = accountBaseValue(a, nativeBalances);
+                groupTotal += baseVal;
+                subgroupTotal += baseVal;
+
                 html += `
-                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}" data-back="accounts">
+                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
                         <span>
                             <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
                             <br>${accountOwnerTagHTML(a)}
@@ -1738,6 +1882,8 @@
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
             });
+            flushSubgroupTotal();
+            flushGroupTotal();
             document.getElementById("accountsPageList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts yet — tap + to add one.</p>`;
         }
 
@@ -1755,6 +1901,7 @@
             document.getElementById("editAccountId").value = account.id;
             document.getElementById("newAccName").value = account.name;
             document.getElementById("newAccGroup").value = account.group || DEFAULT_ACCOUNT_GROUP;
+            handleAccGroupChange(account.subgroup || "");
 
             setAccountTypeUI(account.type || "normal");
             if (!account.type || account.type === "normal") {
@@ -1783,6 +1930,334 @@
             if (activeLedgerAccountView !== "all") editAccount(activeLedgerAccountView);
         }
 
+        // ================= UNIT TRUST: Funds subsystem (v39) =================
+        // A "fund" is one holding filed under a Unit Trust account (see FUNDS store). Buy/Sell
+        // transactions are ordinary Transfers between a cash account and the Unit Trust account
+        // (so the account's basket balance reflects cash actually invested/withdrawn); Dividend
+        // (Reinvest) and Contribution are ordinary Income transactions credited to the Unit Trust
+        // account itself (mirroring how this app already treats KWSP-style dividends/employer
+        // contributions as income directly on the holding account); Dividend (Cheque Payout) is
+        // an ordinary Income transaction on whichever cash account the user names, since that
+        // money leaves the fund entirely. Every one of these is a REAL row in STORES.TRANSACTIONS
+        // (tagged with fundId + fundTxType so it can also be reconciled back to a specific fund),
+        // so they automatically get year filtering, member ownership, category reporting, and
+        // backup/restore for free — see saveFundTransaction() below for exactly how each type maps.
+        // fund.units is the running unit balance, adjusted directly whenever a fund transaction
+        // is saved or deleted; fund.currentNav is a manually-maintained price (edit the fund to
+        // update it) used only for the live valuation shown in the Fund Holdings table.
+
+        async function getFundsForAccount(accountId) {
+            const all = await readAllDB(STORES.FUNDS);
+            return all.filter(f => f.accountId === accountId);
+        }
+
+        function openAddFundModal() {
+            const accountId = activeLedgerAccountView;
+            if (accountId === "all") return;
+            document.getElementById("fundModalTitle").textContent = "Add Fund";
+            document.getElementById("fundId").value = "";
+            document.getElementById("fundAccountId").value = accountId;
+            document.getElementById("fundName").value = "";
+            document.getElementById("fundCode").value = "";
+            document.getElementById("fundCategory").value = "Equity";
+            const currSel = document.getElementById("fundCurrency");
+            currSel.innerHTML = Object.keys(fxRates).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+            currSel.value = baseCurrency;
+            document.getElementById("fundNav").value = "1.0000";
+            document.getElementById("fundDeleteBtn").style.display = "none";
+            renderFundOwnerCheckboxes([]);
+            openModal("fundModal");
+        }
+
+        async function editFund(fundId) {
+            const all = await readAllDB(STORES.FUNDS);
+            const fund = all.find(f => f.id === fundId);
+            if (!fund) return;
+            document.getElementById("fundModalTitle").textContent = "Edit Fund";
+            document.getElementById("fundId").value = fund.id;
+            document.getElementById("fundAccountId").value = fund.accountId;
+            document.getElementById("fundName").value = fund.name;
+            document.getElementById("fundCode").value = fund.code || "";
+            document.getElementById("fundCategory").value = fund.category || "Equity";
+            const currSel = document.getElementById("fundCurrency");
+            currSel.innerHTML = Object.keys(fxRates).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+            currSel.value = fund.currency || baseCurrency;
+            document.getElementById("fundNav").value = fund.currentNav;
+            document.getElementById("fundDeleteBtn").style.display = "block";
+            renderFundOwnerCheckboxes(Array.isArray(fund.ownerMemberIds) ? fund.ownerMemberIds : []);
+            openModal("fundModal");
+        }
+
+        function renderFundOwnerCheckboxes(selectedIds) {
+            const wrap = document.getElementById("fundOwnerCheckboxes");
+            wrap.innerHTML = membersCache.map(m => `
+                <label style="display:flex; align-items:center; gap:4px; padding:6px 10px; border:1.5px solid var(--border-color); border-radius:20px; font-size:0.78rem; font-weight:600; cursor:pointer;">
+                    <input type="checkbox" class="fund-owner-checkbox" value="${escapeHtml(m.id)}" ${selectedIds.includes(m.id) ? "checked" : ""} style="accent-color:${escapeHtml(m.color)};">
+                    ${escapeHtml(m.name)}
+                </label>`).join("") || '<span style="font-size:0.78rem; color:var(--text-muted);">No members set up yet.</span>';
+        }
+
+        async function handleSaveFund() {
+            const name = document.getElementById("fundName").value.trim();
+            if (!name) { alert("Please enter a fund name."); return; }
+            const nav = parseFloat(document.getElementById("fundNav").value);
+            if (isNaN(nav) || nav < 0) { alert("Please enter a valid Current NAV."); return; }
+            const ownerMemberIds = Array.from(document.querySelectorAll(".fund-owner-checkbox:checked")).map(cb => cb.value);
+
+            const id = document.getElementById("fundId").value || "fund_" + Date.now();
+            const record = {
+                id,
+                accountId: document.getElementById("fundAccountId").value,
+                name,
+                code: document.getElementById("fundCode").value.trim() || null,
+                category: document.getElementById("fundCategory").value,
+                currency: document.getElementById("fundCurrency").value,
+                ownerMemberIds,
+                currentNav: nav,
+                units: 0
+            };
+            // Preserve the running unit balance when editing — this form never touches units,
+            // only fund metadata + NAV.
+            if (document.getElementById("fundId").value) {
+                const existing = (await readAllDB(STORES.FUNDS)).find(f => f.id === id);
+                record.units = existing ? (existing.units || 0) : 0;
+            }
+            await writeDB(STORES.FUNDS, record);
+            closeModal("fundModal");
+            renderApp();
+        }
+
+        async function handleDeleteFund() {
+            const id = document.getElementById("fundId").value;
+            if (!id) return;
+            const ok = await customConfirm("Delete this fund? Its transaction history stays in the ledger, but will no longer be linked to a fund.");
+            if (!ok) return;
+            await deleteDB(STORES.FUNDS, id);
+            closeModal("fundModal");
+            renderApp();
+        }
+
+        async function openAddFundTxModal() {
+            const accountId = activeLedgerAccountView;
+            if (accountId === "all") return;
+            const funds = await getFundsForAccount(accountId);
+            if (funds.length === 0) { alert("Add a fund first, then log transactions against it."); return; }
+
+            document.getElementById("fundTxAccountId").value = accountId;
+            const fundSel = document.getElementById("fundTxFundId");
+            fundSel.innerHTML = funds.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.name)}${f.code ? " (" + escapeHtml(f.code) + ")" : ""}</option>`).join("");
+
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const cashAccounts = accounts.filter(a => a.id !== accountId);
+            const transferSel = document.getElementById("fundTxTransferAccount");
+            transferSel.innerHTML = cashAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))}</option>`).join("");
+
+            document.getElementById("fundTxType").value = "buy";
+            document.getElementById("fundTxDate").value = new Date().toISOString().split("T")[0];
+            document.getElementById("fundTxUnits").value = "";
+            document.getElementById("fundTxPrice").value = "";
+            document.getElementById("fundTxTotal").value = "";
+            document.getElementById("fundTxNotes").value = "";
+            handleFundTxTypeChange();
+            openModal("fundTxModal");
+        }
+
+        // Units × Price → Total, kept in sync as a convenience (Total Amount is still directly
+        // editable afterward — e.g. to match an exact contract-note figure with rounding).
+        function recalcFundTxTotal() {
+            const units = parseFloat(document.getElementById("fundTxUnits").value);
+            const price = parseFloat(document.getElementById("fundTxPrice").value);
+            if (!isNaN(units) && !isNaN(price)) {
+                document.getElementById("fundTxTotal").value = (units * price).toFixed(2);
+            }
+        }
+
+        // Shows/hides + relabels the Units/Price row and the transfer-Account row based on which
+        // fund transaction type is selected — this is exactly the field the user's reference
+        // screenshots were missing ("this card short of 'amount transfer from/to which account'").
+        function handleFundTxTypeChange() {
+            const type = document.getElementById("fundTxType").value;
+            const unitsRow = document.getElementById("fundTxUnitsRow");
+            const acctRow = document.getElementById("fundTxAccountRow");
+            const acctLabel = document.getElementById("fundTxAccountLabel");
+
+            unitsRow.style.display = (type === "dividend_payout") ? "none" : "grid";
+
+            if (type === "buy") {
+                acctRow.style.display = "flex"; acctLabel.textContent = "Account (transfer from)";
+            } else if (type === "sell") {
+                acctRow.style.display = "flex"; acctLabel.textContent = "Account (transfer to)";
+            } else if (type === "dividend_payout") {
+                acctRow.style.display = "flex"; acctLabel.textContent = "Account (cheque paid into)";
+            } else {
+                // dividend_reinvest / contribution — units are added straight back into the
+                // fund, no cash account involved.
+                acctRow.style.display = "none";
+            }
+        }
+        function handleFundTxFundChange() { /* no-op hook, kept for symmetry with other forms */ }
+
+        async function handleSaveFundTx() {
+            const accountId = document.getElementById("fundTxAccountId").value;
+            const fundId = document.getElementById("fundTxFundId").value;
+            const type = document.getElementById("fundTxType").value;
+            const date = document.getElementById("fundTxDate").value;
+            const units = parseFloat(document.getElementById("fundTxUnits").value) || 0;
+            const price = parseFloat(document.getElementById("fundTxPrice").value) || 0;
+            const total = parseFloat(document.getElementById("fundTxTotal").value);
+            const transferAccountId = document.getElementById("fundTxTransferAccount").value;
+            const notes = document.getElementById("fundTxNotes").value.trim();
+
+            if (!date) { alert("Please select a date."); return; }
+            if (isNaN(total) || total <= 0) { alert("Please enter a valid Total Amount."); return; }
+            if (type !== "dividend_payout" && (isNaN(units) || units <= 0)) { alert("Please enter valid Units."); return; }
+            if ((type === "buy" || type === "sell" || type === "dividend_payout") && !transferAccountId) {
+                alert("Please choose which account this transfers from/to."); return;
+            }
+
+            const funds = await readAllDB(STORES.FUNDS);
+            const fund = funds.find(f => f.id === fundId);
+            if (!fund) { alert("Fund not found."); return; }
+            const account = (await readAllDB(STORES.ACCOUNTS)).find(a => a.id === accountId);
+
+            const baseTx = {
+                fundId, fundTxType: type,
+                desc: `${fundTxTypeLabel(type)} — ${fund.name}`,
+                amount: total, date,
+                units: type === "dividend_payout" ? null : units,
+                pricePerUnit: (type === "dividend_payout" || price === 0) ? null : price,
+                notes: notes || null,
+                currency: fund.currency,
+                image: null,
+                fdReferenceNo: null, fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null
+            };
+
+            let unitDelta = 0;
+            if (type === "buy") {
+                Object.assign(baseTx, { type: "transfer", src: transferAccountId, dest: accountId, cat: null });
+                unitDelta = units;
+            } else if (type === "sell") {
+                Object.assign(baseTx, { type: "transfer", src: accountId, dest: transferAccountId, cat: null });
+                unitDelta = -units;
+            } else if (type === "dividend_reinvest") {
+                Object.assign(baseTx, { type: "income", src: accountId, dest: null, cat: "Dividend Unit Trust" });
+                unitDelta = units;
+            } else if (type === "contribution") {
+                Object.assign(baseTx, { type: "income", src: accountId, dest: null, cat: "Dividend Unit Trust" });
+                unitDelta = units;
+            } else if (type === "dividend_payout") {
+                Object.assign(baseTx, { type: "income", src: transferAccountId, dest: null, cat: "Dividend Unit Trust" });
+                unitDelta = 0;
+            }
+
+            await writeDB(STORES.TRANSACTIONS, baseTx);
+            fund.units = Math.max(0, (fund.units || 0) + unitDelta);
+            await writeDB(STORES.FUNDS, fund);
+
+            closeModal("fundTxModal");
+            renderApp();
+        }
+
+        function fundTxTypeLabel(type) {
+            return {
+                buy: "Buy", sell: "Sell",
+                dividend_reinvest: "Dividend (Reinvest)",
+                dividend_payout: "Dividend (Cheque Payout)",
+                contribution: "Contribution"
+            }[type] || type;
+        }
+
+        // Tapping a fund-linked row in the normal ledger list (Buy/Sell/Dividend/Contribution)
+        // can't go through the regular Edit Transaction modal — editing amount/units there would
+        // desync the fund's running unit balance. Offers delete-with-unwind instead: removes the
+        // transaction and reverses whatever unit change it made when saved.
+        async function handleFundTxRowTap(tx) {
+            const ok = await customConfirm(`Delete this "${fundTxTypeLabel(tx.fundTxType)}" fund transaction? The fund's unit balance will be adjusted accordingly. To change it instead, delete then log a new one from "+ Transaction".`);
+            if (!ok) return;
+
+            const funds = await readAllDB(STORES.FUNDS);
+            const fund = funds.find(f => f.id === tx.fundId);
+            if (fund) {
+                let unitDelta = 0;
+                if (tx.fundTxType === "buy" || tx.fundTxType === "dividend_reinvest" || tx.fundTxType === "contribution") unitDelta = -(tx.units || 0);
+                else if (tx.fundTxType === "sell") unitDelta = (tx.units || 0);
+                fund.units = Math.max(0, (fund.units || 0) + unitDelta);
+                await writeDB(STORES.FUNDS, fund);
+            }
+            await deleteDB(STORES.TRANSACTIONS, tx.id);
+            renderApp();
+        }
+
+
+        // Draws the Fund Holdings table (image7-style): UNITS / NAV / VALUE / INVESTED / P/L /
+        // RETURN / ANNUALISED / HOLDING per fund under this Unit Trust account, each row tagged
+        // with its owner member name(s) so funds held by different family members under the same
+        // account are never confused with one another.
+        async function renderFundHoldingsTable(accountId, allTxs) {
+            const funds = await getFundsForAccount(accountId);
+            const wrap = document.getElementById("fundHoldingsTableWrap");
+            if (funds.length === 0) {
+                wrap.innerHTML = '<p style="padding:12px 4px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No funds yet — tap "+ Fund" to add one.</p>';
+                return;
+            }
+            const todayMs = Date.now();
+            const rows = funds.map(f => {
+                const fundTxs = allTxs.filter(t => t.fundId === f.id).sort((a, b) => new Date(a.date) - new Date(b.date));
+                let invested = 0;
+                fundTxs.forEach(t => {
+                    if (t.fundTxType === "buy" || t.fundTxType === "dividend_reinvest" || t.fundTxType === "contribution") invested += t.amount;
+                    else if (t.fundTxType === "sell") invested -= t.amount;
+                });
+                const value = (f.units || 0) * (f.currentNav || 0);
+                const pl = value - invested;
+                const returnPct = invested > 0 ? (pl / invested) * 100 : 0;
+                const firstTxDate = fundTxs.length > 0 ? new Date(fundTxs[0].date) : null;
+                const holdingYears = firstTxDate ? Math.max((todayMs - firstTxDate.getTime()) / (365.25 * 86400000), 0) : 0;
+                let annualised = 0;
+                if (invested > 0 && value > 0 && holdingYears >= 0.08) {
+                    annualised = (Math.pow(value / invested, 1 / holdingYears) - 1) * 100;
+                }
+                const ownerLabel = accountOwnerNamesText({ memberIds: f.ownerMemberIds });
+                const plColor = pl >= 0 ? "var(--income-color)" : "var(--expense-color)";
+                return `
+                    <tr style="cursor:pointer;" data-click="editFund" data-id="${escapeHtml(f.id)}">
+                        <td style="padding:8px 10px;">
+                            <strong>${escapeHtml(f.name)}</strong><br>
+                            <span style="font-size:0.68rem; color:var(--text-muted);">${escapeHtml(f.code || "")}</span><br>
+                            <span style="font-size:0.68rem; color:var(--primary); font-weight:700;">${escapeHtml(ownerLabel)}</span>
+                        </td>
+                        <td style="padding:8px 10px;">${escapeHtml(f.category || "")}</td>
+                        <td style="padding:8px 10px; text-align:right;">${(f.units || 0).toFixed(4)}</td>
+                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(f.currentNav || 0, f.currency)}</td>
+                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(value, f.currency)}</strong></td>
+                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested, f.currency)}</td>
+                        <td style="padding:8px 10px; text-align:right; color:${plColor}; font-weight:700;">${pl >= 0 ? "+" : ""}${formatCurrency(pl, f.currency)}</td>
+                        <td style="padding:8px 10px; text-align:right; color:${plColor};">${returnPct.toFixed(2)}%</td>
+                        <td style="padding:8px 10px; text-align:right;">${holdingYears >= 0.08 ? annualised.toFixed(2) + "%" : "-"}</td>
+                        <td style="padding:8px 10px; text-align:right;">${holdingYears >= 0.08 ? holdingYears.toFixed(1) + " yrs" : "-"}</td>
+                    </tr>`;
+            }).join("");
+
+            wrap.innerHTML = `
+                <table style="width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
+                    <thead>
+                        <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase;">
+                            <th style="padding:6px 10px;">Fund</th>
+                            <th style="padding:6px 10px;">Category</th>
+                            <th style="padding:6px 10px; text-align:right;">Units</th>
+                            <th style="padding:6px 10px; text-align:right;">NAV</th>
+                            <th style="padding:6px 10px; text-align:right;">Value</th>
+                            <th style="padding:6px 10px; text-align:right;">Invested</th>
+                            <th style="padding:6px 10px; text-align:right;">P/L</th>
+                            <th style="padding:6px 10px; text-align:right;">Return</th>
+                            <th style="padding:6px 10px; text-align:right;">Annualised</th>
+                            <th style="padding:6px 10px; text-align:right;">Holding</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+        }
+
         // Wired to the Delete button inside the Accounts modal — only visible while editing,
         // so editAccountId is always populated when this fires.
         function deleteAccountFromForm() {
@@ -1799,6 +2274,12 @@
                 const linkedTx = allTx.filter(t => t.src === id || t.dest === id);
                 for (const t of linkedTx) {
                     await deleteDB(STORES.TRANSACTIONS, t.id);
+                }
+                // Cascade-delete any Unit Trust funds filed under this account too — they're
+                // meaningless without their holding account.
+                const allFunds = await readAllDB(STORES.FUNDS);
+                for (const f of allFunds.filter(f => f.accountId === id)) {
+                    await deleteDB(STORES.FUNDS, f.id);
                 }
                 await deleteDB(STORES.ACCOUNTS, id);
             } catch (err) {
@@ -1937,7 +2418,7 @@
         async function renderMembersPage() {
             await loadMembersCache();
             const html = membersCache.map(m => `
-                <div class="config-item" style="cursor:pointer;" data-click="editMember" data-id="${m.id}">
+                <div class="config-item" style="cursor:pointer;" data-click="editMember" data-id="${escapeHtml(m.id)}">
                     <span style="display:flex; align-items:center; gap:10px;">
                         <span class="member-color-dot" style="background:${m.color};"></span>
                         <strong>${escapeHtml(m.name)}</strong>
@@ -1959,7 +2440,7 @@
             }
             wrap.innerHTML = membersCache.map(m => `
                 <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; font-weight:600; cursor:pointer;">
-                    <input type="checkbox" class="acc-member-checkbox" value="${m.id}" ${selected.includes(m.id) ? "checked" : ""}>
+                    <input type="checkbox" class="acc-member-checkbox" value="${escapeHtml(m.id)}" ${selected.includes(m.id) ? "checked" : ""}>
                     <span class="member-color-dot" style="background:${m.color};"></span>
                     ${escapeHtml(m.name)}
                 </label>
@@ -2032,7 +2513,7 @@
             let total = 0;
             const currencyTotals = {};
             accountsSubset.forEach(a => {
-                if (a.type === "multi" || a.type === "fd") {
+                if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
                     Object.entries(nativeBalances[a.id] || {}).forEach(([curr, amt]) => {
                         total += convertCurrency(amt, curr, baseCurrency);
                         currencyTotals[curr] = (currencyTotals[curr] || 0) + amt;
@@ -2159,10 +2640,12 @@
                     ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#ede9fe; color:#6d28d9; font-weight:bold;">Fixed Deposit</span>`
                     : a.type === "multi"
                         ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e0f2fe; color:#0369a1; font-weight:bold;">Multi-Currency</span>`
-                        : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${a.currency}</span>`;
+                        : a.type === "unittrust"
+                            ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:bold;">Unit Trust</span>`
+                            : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
 
                 let balSummary;
-                if (a.type === "fd" || a.type === "multi") {
+                if (a.type === "fd" || a.type === "multi" || a.type === "unittrust") {
                     const baskets = nativeBalances[a.id];
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
@@ -2173,7 +2656,7 @@
                 }
 
                 html += `
-                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${a.id}" data-back="member">
+                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="member">
                         <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span></span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
@@ -2320,7 +2803,7 @@
             const rowHtml = c => `
                 <div class="config-item">
                     <span class="category-display-badge"><span>${c.icon}</span> <strong>${escapeHtml(c.name)}</strong></span>
-                    <button class="trash-btn" data-click="removeCategory" data-id="${c.id}">🗑</button>
+                    <button class="trash-btn" data-click="removeCategory" data-id="${escapeHtml(c.id)}">🗑</button>
                 </div>`;
 
             const incomeCats = dynamicCategories.filter(c => c.type === "income");
@@ -2450,16 +2933,24 @@
 
             Object.keys(fxRates).forEach(c => { currSelect.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
             accounts.forEach(a => {
-                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : "";
-                const currLabel = (a.type === "multi" || a.type === "fd") ? "" : ` (${a.currency})`;
-                srcSelect.innerHTML += `<option value="${a.id}">${prefix}${escapeHtml(a.name)}${currLabel}</option>`;
-                destSelect.innerHTML += `<option value="${a.id}">${prefix}${escapeHtml(a.name)}${currLabel}</option>`;
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
+                const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
+                const ownerLabel = ` — ${escapeHtml(accountOwnerNamesText(a))}`;
+                srcSelect.innerHTML += `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}${ownerLabel}</option>`;
+                destSelect.innerHTML += `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}${ownerLabel}</option>`;
             });
 
             if (existingTxId !== null) {
                 const txs = await readAllDB(STORES.TRANSACTIONS);
                 const tx = txs.find(t => t.id === existingTxId);
                 if (!tx) return;
+                // Fund transactions (Buy/Sell/Dividend/Contribution) keep a linked fund's unit
+                // balance in sync — editing amount/units here would silently desync it, so these
+                // are managed from the Fund Holdings screen (delete + re-add) instead.
+                if (tx.fundId) {
+                    await handleFundTxRowTap(tx);
+                    return;
+                }
 
                 document.getElementById("txId").value = tx.id;
                 document.getElementById("txType").value = tx.type;
@@ -3011,9 +3502,9 @@
             // Destination account pickers for both flows — any account except this same FD placement's
             // holding account makes sense as a target (though we don't hard-block picking it either).
             const destOptions = accounts.map(a => {
-                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : "";
-                const currLabel = (a.type === "multi" || a.type === "fd") ? "" : ` (${a.currency})`;
-                return `<option value="${a.id}">${prefix}${escapeHtml(a.name)}${currLabel}</option>`;
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
+                const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
+                return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel} — ${escapeHtml(accountOwnerNamesText(a))}</option>`;
             }).join("");
             document.getElementById("resolveFdInterestDest").innerHTML = destOptions;
             document.getElementById("resolveFdWithdrawDest").innerHTML = destOptions;
@@ -3407,7 +3898,7 @@
 
             const nativeBalances = {};
             accounts.forEach(a => {
-                nativeBalances[a.id] = (a.type === "multi" || a.type === "fd") ? {} : (a.initialBalance || 0);
+                nativeBalances[a.id] = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? {} : (a.initialBalance || 0);
             });
 
             // Applies a signed amount to an account's balance. "Normal" accounts are converted into
@@ -3422,7 +3913,7 @@
             // — bypasses conversion entirely rather than deriving it from a rate.
             function applyToAccountBalance(account, amount, currency, sign, manualFxRate, directAmountOverride) {
                 if (!account) return;
-                if (account.type === "multi" || account.type === "fd") {
+                if (account.type === "multi" || account.type === "fd" || account.type === "unittrust") {
                     const basket = nativeBalances[account.id];
                     basket[currency] = (basket[currency] || 0) + sign * amount;
                 } else if (directAmountOverride != null) {
@@ -3460,7 +3951,7 @@
             let globalBaseNetWorth = 0;
             const currencyTotals = {}; // native (unconverted) sum per currency actually held, across every account
             accounts.forEach(a => {
-                if (a.type === "multi" || a.type === "fd") {
+                if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
                     Object.entries(nativeBalances[a.id]).forEach(([curr, amt]) => {
                         globalBaseNetWorth += convertCurrency(amt, curr, baseCurrency);
                         currencyTotals[curr] = (currencyTotals[curr] || 0) + amt;
@@ -3503,7 +3994,7 @@
                         ? `matured ${Math.abs(daysLeft)} day${Math.abs(daysLeft) === 1 ? '' : 's'} ago — action needed`
                         : (daysLeft === 0 ? `matures today` : `matures in ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${t.fdMaturityDate})`);
                     reminderHTML += `
-                        <div data-click="openResolveFdModal" data-id="${t.id}" style="cursor:pointer; background:${bg}; border:1px solid ${border}; color:${textCol}; border-radius:12px; padding:12px 14px; margin-bottom:8px; font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
+                        <div data-click="openResolveFdModal" data-id="${escapeHtml(t.id)}" style="cursor:pointer; background:${bg}; border:1px solid ${border}; color:${textCol}; border-radius:12px; padding:12px 14px; margin-bottom:8px; font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
                             <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(t.amount, t.currency)} placement in "${escapeHtml(holdingAccount.name)}" ${label} — plan renewal or withdrawal.</span>
                             <span style="font-size:1.1rem;">›</span>
                         </div>
@@ -3526,14 +4017,14 @@
                 )].sort((a, b) => a - b);
 
                 if (accountLedgerYearsCache.length > 0) {
-                    if (accountLedgerYear === null || !accountLedgerYearsCache.includes(accountLedgerYear)) {
+                    if (accountLedgerYear === "__fresh__" || (accountLedgerYear !== null && !accountLedgerYearsCache.includes(accountLedgerYear))) {
                         accountLedgerYear = accountLedgerYearsCache[accountLedgerYearsCache.length - 1];
                     }
                 } else {
                     accountLedgerYear = null;
                 }
             } else {
-                accountLedgerYear = null;
+                accountLedgerYear = "__fresh__";
             }
 
             const yearNavEl = document.getElementById("ledgerYearNav");
@@ -3541,9 +4032,11 @@
             if (showFullAccountHistory && accountLedgerYearsCache.length > 0) {
                 accountYearIdx = accountLedgerYearsCache.indexOf(accountLedgerYear);
                 yearNavEl.style.display = "flex";
-                document.getElementById("ledgerYearLabel").textContent = accountLedgerYear;
-                document.getElementById("ledgerYearPrevBtn").disabled = accountYearIdx <= 0;
-                document.getElementById("ledgerYearNextBtn").disabled = accountYearIdx >= accountLedgerYearsCache.length - 1;
+                const yearSelect = document.getElementById("ledgerYearLabel");
+                yearSelect.innerHTML = accountLedgerYearsCache.map(y => `<option value="${y}">${y}</option>`).join("") + `<option value="all">All Years</option>`;
+                yearSelect.value = accountLedgerYear === null ? "all" : String(accountLedgerYear);
+                document.getElementById("ledgerYearPrevBtn").disabled = accountLedgerYear === null || accountYearIdx <= 0;
+                document.getElementById("ledgerYearNextBtn").disabled = accountLedgerYear === null || accountYearIdx >= accountLedgerYearsCache.length - 1;
             } else {
                 yearNavEl.style.display = "none";
             }
@@ -3560,7 +4053,7 @@
                 const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
                 if (viewingAcc) {
                     let balSummary;
-                    if (viewingAcc.type === "fd" || viewingAcc.type === "multi") {
+                    if (viewingAcc.type === "fd" || viewingAcc.type === "multi" || viewingAcc.type === "unittrust") {
                         const baskets = nativeBalances[viewingAcc.id];
                         const currencies = Object.keys(baskets);
                         balSummary = currencies.length === 0
@@ -3576,6 +4069,23 @@
                 }
             } else {
                 balanceBanner.style.display = "none";
+            }
+
+            // Fund Holdings section (Unit Trust accounts only) — shown above the normal
+            // transaction ledger list, which still displays every Buy/Sell/Dividend/Contribution
+            // as an ordinary-looking entry (they ARE ordinary transfer/income transactions under
+            // the hood, just tagged with a fundId — see saveFundTransaction()).
+            const fundSection = document.getElementById("fundHoldingsSection");
+            if (showFullAccountHistory) {
+                const viewingAcc2 = accounts.find(a => a.id === activeLedgerAccountView);
+                if (viewingAcc2 && viewingAcc2.type === "unittrust") {
+                    fundSection.style.display = "block";
+                    await renderFundHoldingsTable(viewingAcc2.id, txs);
+                } else {
+                    fundSection.style.display = "none";
+                }
+            } else {
+                fundSection.style.display = "none";
             }
 
             // Compute structural titles
@@ -3639,7 +4149,7 @@
             const isEarliestYear = accountYearIdx <= 0;
             if (showFullAccountHistory && isEarliestYear) {
                 const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
-                if (viewingAcc && viewingAcc.type !== "multi" && viewingAcc.type !== "fd" && viewingAcc.initialBalance) {
+                if (viewingAcc && viewingAcc.type !== "multi" && viewingAcc.type !== "fd" && viewingAcc.type !== "unittrust" && viewingAcc.initialBalance) {
                     const subText = viewingAcc.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(viewingAcc.initialBalance, viewingAcc.currency, baseCurrency), baseCurrency)}</span>` : '';
                     openingBalanceHTML = `
                         <div class="ledger-item" style="background-color: #fafbfd; border-left: 4px solid var(--primary); cursor: default;">
@@ -3666,7 +4176,7 @@
             let balanceBfHTML = "", balanceCfHTML = "";
             if (showFullAccountHistory && accountLedgerYearsCache.length > 0 && accountLedgerYear !== null) {
                 const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
-                if (viewingAcc && viewingAcc.type !== "multi" && viewingAcc.type !== "fd") {
+                if (viewingAcc && viewingAcc.type !== "multi" && viewingAcc.type !== "fd" && viewingAcc.type !== "unittrust") {
                     const isLatestYear = accountYearIdx >= accountLedgerYearsCache.length - 1;
 
                     if (!isEarliestYear) {
@@ -3798,7 +4308,7 @@
                 if (t.type === "transfer" && activeLedgerAccountView === t.dest) {
                     const destAcc = accounts.find(a => a.id === t.dest);
                     const srcAcc = accounts.find(a => a.id === t.src);
-                    if (destAcc && srcAcc && destAcc.type !== "multi" && destAcc.type !== "fd" && destAcc.currency !== t.currency) {
+                    if (destAcc && srcAcc && destAcc.type !== "multi" && destAcc.type !== "fd" && destAcc.type !== "unittrust" && destAcc.currency !== t.currency) {
                         const shown = t.destAmount != null ? t.destAmount : convertCurrency(t.amount, t.currency, destAcc.currency);
                         const prefix = t.destAmount != null ? "" : "≈ ";
                         displayAmountHTML = `${sgn}${prefix}${formatCurrency(shown, destAcc.currency)}`;
@@ -3833,7 +4343,7 @@
                 }
 
                 ledgerHTML += `
-                    <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${t.id}">
+                    <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${receiptBadge}</span>
@@ -4069,7 +4579,7 @@
             const select = document.getElementById(selectId);
             const prevValue = select.value || "all";
             select.innerHTML = `<option value="all">All Members (everyone, incl. joint)</option>` +
-                membersCache.map(m => `<option value="${m.id}">${escapeHtml(m.name)}</option>`).join("");
+                membersCache.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join("");
             select.value = membersCache.some(m => m.id === prevValue) ? prevValue : "all";
         }
 
@@ -4228,6 +4738,9 @@
 
             const storedRates = await readKeyDB("settings", "fxRates");
             if (storedRates) fxRates = storedRates.value;
+            if (mergeInDefaultCurrencies()) {
+                await writeDB(STORES.SETTINGS, { key: "fxRates", value: fxRates });
+            }
 
             const storedDefaultIncomeCat = await readKeyDB("settings", "defaultIncomeCategory");
             if (storedDefaultIncomeCat) defaultIncomeCategory = storedDefaultIncomeCat.value || "";
@@ -4295,6 +4808,7 @@
                 transactions: await readAllDB(STORES.TRANSACTIONS),
                 categories: await readAllDB(STORES.CATEGORIES),
                 members: await readAllDB(STORES.MEMBERS),
+                funds: await readAllDB(STORES.FUNDS),
                 baseCurrency: baseCurrency,
                 fxRates: fxRates
             };
@@ -4423,6 +4937,9 @@
                     if (db.objectStoreNames.contains(STORES.MEMBERS)) {
                         await clearStoreDB(STORES.MEMBERS);
                     }
+                    if (db.objectStoreNames.contains(STORES.FUNDS)) {
+                        await clearStoreDB(STORES.FUNDS);
+                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -4437,6 +4954,9 @@
                     }
                     if (bundle.members) {
                         for (const mem of bundle.members) await writeDB(STORES.MEMBERS, mem);
+                    }
+                    if (bundle.funds) {
+                        for (const fund of bundle.funds) await writeDB(STORES.FUNDS, fund);
                     }
 
                     await syncAndLoadCategories();
@@ -4530,6 +5050,12 @@
             numpadDigit: (el) => numpadDigit(el.dataset.digit),
             numpadBackspace: () => numpadBackspace(),
             numpadClear: () => numpadClear(),
+            openAddFundModal: () => openAddFundModal(),
+            openAddFundTxModal: () => openAddFundTxModal(),
+            editFund: (el) => editFund(el.dataset.id),
+            handleSaveFund: () => handleSaveFund(),
+            handleDeleteFund: () => handleDeleteFund(),
+            handleSaveFundTx: () => handleSaveFundTx(),
         };
 
         const CHANGE_ACTIONS = {
@@ -4554,6 +5080,10 @@
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
+            ledgerYearSelectChange: () => ledgerYearSelectChange(),
+            handleAccGroupChange: () => handleAccGroupChange(),
+            handleFundTxTypeChange: () => handleFundTxTypeChange(),
+            handleFundTxFundChange: () => handleFundTxFundChange(),
         };
 
         const INPUT_ACTIONS = {
@@ -4563,6 +5093,7 @@
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
             recalcTransferFxFromRate: () => recalcTransferFxFromRate(),
             recalcTransferFxFromDestAmount: () => recalcTransferFxFromDestAmount(),
+            recalcFundTxTotal: () => recalcFundTxTotal(),
         };
 
         document.addEventListener("click", (e) => {

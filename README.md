@@ -1,4 +1,4 @@
-# Enterprise Multi-Currency Ledger
+# My Ledger
 
 Static, single-file-style PWA (IndexedDB-based, offline-first, no backend).
 Deploy the contents of this folder as-is (e.g. to GitHub Pages).
@@ -799,3 +799,163 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v36.
+
+## v37: security fix — closed remaining unescaped-HTML gaps
+
+- **Fixed: `a.currency` and `.id` fields could reach `innerHTML`
+  unescaped.** A security review found four spots where an account's
+  `currency` code was interpolated straight into `innerHTML` without
+  `escapeHtml()` — the Financial Accounts page currency badge, the
+  same badge on a member's account list, and the `currLabel` used in
+  both the Transaction form's source/destination dropdowns and the
+  FD-resolution dropdown. Thirteen more spots did the same with an
+  account/transaction/member/category `.id` inside a `data-id="..."`
+  or `<option value="...">` attribute. In normal use these fields are
+  only ever set via fixed dropdowns or generated internally, so this
+  wasn't reachable through the UI — but `importBackup()` writes
+  parsed backup JSON straight into IndexedDB with no field
+  validation, so a tampered `.json` backup could have set one of
+  these fields to break out of an HTML attribute or inject markup
+  (e.g. a `<style>` block, since `style-src` allows
+  `'unsafe-inline'`). The CSP's `script-src 'self'` (no inline
+  scripts/handlers) already blocked this from becoming actual JS
+  execution, but it's now fixed properly: every one of those 17
+  interpolations is wrapped in `escapeHtml()`, matching the pattern
+  already used everywhere else `innerHTML` is built from data.
+- No IndexedDB schema/import-export format changes — this is a
+  rendering-only fix. Verified with `node --check` after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v37.
+
+## v38: fixed installed-shortcut launch failure on Cloudflare Pages
+(net::ERR_FAILED)
+
+- **Root cause.** Cloudflare Pages 301/308-redirects `/index.html` →
+  `/` by default (GitHub Pages doesn't do this). `manifest.json` had
+  `start_url: "./index.html"`, so an installed desktop/mobile
+  shortcut always relaunched at the literal `/index.html` URL. The
+  service worker's install step ran `cache.addAll([..., "./index.html",
+  ...])`, which silently followed Cloudflare's redirect and cached
+  the result — but that cached `Response` has `redirected: true`
+  baked in. Chrome refuses to answer a navigation with a redirected
+  `Response`; it fails the whole load with exactly `net::ERR_FAILED`.
+  The very first-ever load (before the service worker existed)
+  followed the redirect normally at the network level and landed on
+  `/`, so reloads in that same tab worked fine — but the installed
+  shortcut always relaunches fresh at `/index.html`, hitting the
+  poisoned cache entry every time.
+- **Fix 1 — `manifest.json`:** `start_url` changed from
+  `"./index.html"` to `"./"`, so installed shortcuts launch at the
+  URL that doesn't get redirected.
+- **Fix 2 — `sw.js`:** removed the redirect-vulnerable
+  `"./index.html"` entry from `ASSETS_TO_CACHE`. The `fetch` handler
+  now special-cases navigation requests (`event.request.mode ===
+  "navigate"`) so they *always* resolve through the canonical `"./"`
+  cache entry regardless of the exact URL requested — covers `/`,
+  `/index.html`, or any other in-scope path an old bookmark/shortcut
+  might still hit. If `"./"` itself isn't cached yet, it's fetched
+  fresh; if that fetch's response ever comes back `redirected` (host
+  misconfiguration), the handler falls back to cache instead of
+  handing Chrome a redirected `Response`. Non-navigation requests
+  (JS, JSON, icons) are unaffected — same cache-first-then-network
+  logic as before.
+- No IndexedDB schema/import-export format changes. Verified with
+  `node --check` after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v38.
+
+## v39: app rename, currency setup, member labels everywhere, year picker,
+account sub-groups + totals, and a full Unit Trust account type
+
+- **Renamed** "Enterprise Multi-Currency Ledger" → **"My Ledger"**
+  (manifest.json `name`/`short_name`, `<title>`,
+  `apple-mobile-web-app-title`).
+- **Currency setup:** default `fxRates`/`baseCurrency` now cover the
+  10 currencies actually held (MYR, SGD, USD, HKD, CNY, TWD, THB,
+  KRW, JPY, BND), MYR as base. `mergeInDefaultCurrencies()` runs on
+  every load and additively fills in any of these 10 an *existing*
+  install doesn't already have — never touches a currency the user
+  already customised. The base-currency `<select>` is now populated
+  dynamically from `fxRates` (was a hardcoded 5-currency list).
+- **Member names on every account picker**, not just the list
+  screens: transfer source/destination, Default Payment Account,
+  Recent Transactions account filter, FD-resolve destination, and
+  the new fund-transaction transfer-account picker all now show
+  `AccountName (Member1, Member2)` / `(Unassigned)` via new
+  `accountOwnerNamesText()`/`accountOptionLabel()` helpers — fixes
+  same-name accounts (e.g. two "KWSP (MYR)") being indistinguishable
+  in a dropdown.
+- **Year picker on account Activity pages:** the old plain
+  "&lt; 2019 &gt;" label is now a `<select>` (`#ledgerYearLabel`)
+  listing every year with data plus an **"All Years"** option
+  (`accountLedgerYear = null`) showing the account's complete
+  history on one page. Re-plumbed the "fresh view" vs "explicit
+  All Years" state — was a `null` sentinel for both, now `"__fresh__"`
+  vs `null` respectively, so picking "All Years" doesn't get
+  silently reset back to the latest year on the next render.
+- **Account Sub-Groups:** new `ACCOUNT_SUBGROUPS` config
+  (`Investment` → Fixed Deposit / KWSP / ASNB / Unit Trust by
+  default, easily extended) — Add/Edit Account gained a Sub-Group
+  select that only appears for a Group with sub-groups configured.
+  Financial Accounts page now shows a Sub-Total row per sub-group
+  and a Group Total row per group (via new `accountBaseValue()`
+  helper, base-currency-converted).
+- **New account type: Unit Trust** (4th button next to
+  Normal/Multi-Currency/Fixed Deposit). Holds one or more **funds**
+  (new `FUNDS` IndexedDB store, `DB_VERSION` bumped 3→4) — Add/Edit
+  Fund modal (name, code, category, currency, owner member(s),
+  Current NAV). Add Transaction modal covers **Buy, Sell, Dividend
+  (Reinvest), Dividend (Cheque Payout), Contribution**, each
+  showing/hiding the Units/Price row and a "transfer from/to
+  account" field appropriately for that type — this was the field
+  missing from the reference screenshots. New income category
+  **"Dividend Unit Trust"** added to `DEFAULT_CATEGORIES`.
+  - Design: every fund transaction is a REAL row in the existing
+    `TRANSACTIONS` store (tagged `fundId`/`fundTxType`), not a
+    parallel ledger — so they inherit year filtering, member
+    ownership, category reporting, and backup/restore for free.
+    Buy/Sell are ordinary Transfers between a cash account and the
+    Unit Trust account (account's currency-basket balance =
+    cash actually invested/withdrawn). Dividend (Reinvest) and
+    Contribution are ordinary Income transactions credited to the
+    Unit Trust account itself (mirrors how this app already treats
+    KWSP-style dividends/employer contributions). Dividend (Cheque
+    Payout) is an ordinary Income transaction on whichever cash
+    account the user names, since that money leaves the fund
+    entirely. `fund.units` is adjusted directly alongside each
+    linked transaction's save/delete.
+  - Editing a fund-linked row through the normal Edit Transaction
+    modal is blocked (would silently desync `fund.units`); tapping
+    one instead offers delete-with-unwind (reverses the unit delta),
+    via new `handleFundTxRowTap()`.
+  - **Fund Holdings report** (account's own Activity page, Unit
+    Trust accounts only): Units / NAV / Value / Invested / P&L /
+    Return / Annualised / Holding per fund, each row tagged with its
+    owner member name(s). "Invested" = net cash basis (buy +
+    reinvest + contribution − sell); "Annualised" uses
+    `((Value/Invested)^(1/years) - 1) × 100`, guarded for very new
+    holdings.
+  - `unittrust` treated as a basket-type account (same as
+    multi/fd) everywhere `computeAccountBalances()`, the dashboard
+    net-worth rollups, the Accounts page, and account-picker labels
+    branch on account type — swept every `type === "multi" ||
+    type === "fd"` check in `ledger.js` to confirm/add `unittrust`.
+  - Account deletion now cascades to delete any funds filed under
+    it. Export/import backup bundle, and the encrypted-store
+    migration loop (`Object.values(STORES)`), extended to cover the
+    new `FUNDS` store.
+- **Passcode screen mistouch fix:** "Forgot passcode? Reset app
+  data" moved well clear of the Unlock button, separated by a
+  divider — was 16px below Unlock and easy to hit by accident
+  (destructive: wipes the whole app).
+- No breaking changes to existing accounts/transactions/categories/
+  members — `DB_VERSION` bump only adds the new `funds` object
+  store, doesn't touch existing ones. Verified with `node --check`
+  on both JS files plus the usual `getElementById` /
+  `data-click`/`data-change`/`data-input` cross-reference scripts
+  before packaging.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v39.
