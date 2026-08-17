@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v45";
+        const APP_VERSION = "v46";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -65,6 +65,11 @@
         // Which member/joint-group is currently being viewed on page-member, e.g.
         // { type: "member", ids: ["mem_1"] } or { type: "joint", ids: ["mem_1","mem_2"] }.
         let activeMemberFilter = null;
+        // Set by the sidebar's per-type shortcuts (see renderSidebarAccountTypeShortcuts) to
+        // restrict the Accounts page list to one group/sub-group at a time, e.g.
+        // { group: "Investment", subgroup: "Fixed Deposit", label: "Fixed Deposit" }. null shows
+        // every account, same as opening the page from "Financial Accounts" directly.
+        let accountsPageTypeFilter = null;
         let db;
 
         // Escapes a value for safe insertion into HTML text content or a double-quoted HTML
@@ -1200,12 +1205,20 @@
             window.scrollTo(0, workspaceScrollY);
         }
 
-        async function navigateToAccountsPage() {
+        async function navigateToAccountsPage(typeFilter) {
             closeSidebar();
             workspaceScrollY = window.scrollY;
+            accountsPageTypeFilter = typeFilter || null;
             showPage("page-accounts");
             window.scrollTo(0, 0);
             pushVirtualState("accounts");
+            await renderAccountsPage();
+        }
+
+        // Clears the Accounts page's type filter (if any) and re-renders — wired to the "Show
+        // All Accounts" link that appears whenever a sidebar type shortcut narrowed the list.
+        async function clearAccountsPageTypeFilter() {
+            accountsPageTypeFilter = null;
             await renderAccountsPage();
         }
 
@@ -1836,7 +1849,17 @@
         async function renderAccountsPage() {
             await populateDefaultPaymentAccountSelect();
             const { accounts, nativeBalances } = await computeAccountBalances();
-            const sorted = sortAccountsByGroupThenName(accounts);
+            const filter = accountsPageTypeFilter;
+            const filtered = filter
+                ? accounts.filter(a => (a.group || DEFAULT_ACCOUNT_GROUP) === filter.group && (a.subgroup || "") === (filter.subgroup || ""))
+                : accounts;
+            const sorted = sortAccountsByGroupThenName(filtered);
+
+            const titleEl = document.getElementById("accountsPageListTitle");
+            const hintEl = document.getElementById("accountsPageFilterHint");
+            if (titleEl) titleEl.textContent = filter ? filter.label : "All Accounts";
+            if (hintEl) hintEl.classList.toggle("hidden", !filter);
+
             let html = "";
             let lastGroup = null;
             let lastSubgroup = undefined;
@@ -1909,7 +1932,9 @@
             });
             flushSubgroupTotal();
             flushGroupTotal();
-            document.getElementById("accountsPageList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts yet — tap + to add one.</p>`;
+            document.getElementById("accountsPageList").innerHTML = html || (filter
+                ? `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No ${escapeHtml(filter.label)} accounts yet.</p>`
+                : `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts yet — tap + to add one.</p>`);
         }
 
         // Shared by both entry points: the ✏️ icon on an account's Activity page, and (kept for
@@ -3006,8 +3031,9 @@
 
         // Renders one shortcut button per account type, but only for a type that already has
         // at least one account filed under it — keeps the sidebar from listing every possible
-        // type up front and only offers quick shortcuts for types actually in use. Tapping one
-        // opens the Add Account modal pre-set to that group/sub-group.
+        // type up front and only offers shortcuts for types actually in use. Tapping one opens
+        // the Accounts page filtered to just that group/sub-group (see
+        // sidebarFilterAccountsByType / accountsPageTypeFilter).
         async function renderSidebarAccountTypeShortcuts() {
             const wrap = document.getElementById("sidebarAccountTypeShortcuts");
             if (!wrap) return;
@@ -3015,20 +3041,22 @@
             const usedTypes = accountTypeShortcutList().filter(t =>
                 accounts.some(a => (a.group || DEFAULT_ACCOUNT_GROUP) === t.group && (a.subgroup || "") === t.subgroup)
             );
-            wrap.innerHTML = usedTypes.map(t => `
-                <button class="sidebar-account-type-item" data-click="sidebarAddAccountOfType" data-group="${escapeHtml(t.group)}" data-subgroup="${escapeHtml(t.subgroup)}">
-                    <span class="acct-type-plus">+</span> Add ${escapeHtml(t.label)}
-                </button>
-            `).join("");
+            const accountsPageVisible = !document.getElementById("page-accounts").classList.contains("hidden");
+            wrap.innerHTML = usedTypes.map(t => {
+                const isActive = accountsPageVisible && accountsPageTypeFilter
+                    && accountsPageTypeFilter.group === t.group && (accountsPageTypeFilter.subgroup || "") === t.subgroup;
+                return `
+                    <button class="sidebar-account-type-item${isActive ? " active" : ""}" data-click="sidebarFilterAccountsByType" data-group="${escapeHtml(t.group)}" data-subgroup="${escapeHtml(t.subgroup)}" data-label="${escapeHtml(t.label)}">
+                        ${escapeHtml(t.label)}
+                    </button>
+                `;
+            }).join("");
         }
 
-        // Wired to each shortcut above — opens the Add Account modal with Group/Sub-Group
-        // already set, so the user only has to fill in the name/balance/currency.
-        function sidebarAddAccountOfType(el) {
-            closeSidebar();
-            openAccountFormModal();
-            document.getElementById("newAccGroup").value = el.dataset.group;
-            handleAccGroupChange(el.dataset.subgroup || "");
+        // Wired to each shortcut above — opens the Accounts page filtered to just that
+        // group/sub-group instead of the full list.
+        function sidebarFilterAccountsByType(el) {
+            navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label });
         }
 
         // --- FILTERED NET WORTH HELPERS (shared by the dashboard's per-member rows and the
@@ -5546,7 +5574,8 @@
             navigateToDataSecurityPage: () => navigateToDataSecurityPage(),
             navigateToMembersPage: () => navigateToMembersPage(),
             sidebarGoMember: (el) => sidebarGoMember(el),
-            sidebarAddAccountOfType: (el) => sidebarAddAccountOfType(el),
+            sidebarFilterAccountsByType: (el) => sidebarFilterAccountsByType(el),
+            clearAccountsPageTypeFilter: () => clearAccountsPageTypeFilter(),
             openMemberFormModal: () => openMemberFormModal(),
             handleCreateMemberMobile: () => handleCreateMemberMobile(),
             deleteMemberFromForm: () => deleteMemberFromForm(),
