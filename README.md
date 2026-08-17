@@ -1116,3 +1116,47 @@ longer subtracted from Invested
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v43.
+
+## v44: new "Daily NAV Update" page — update every held fund's price
+in one place, with a History log
+
+- **New sidebar page (📊 Daily NAV Update)** that auto-lists every
+  fund you currently hold (units > 0) across all Unit Trust accounts,
+  with three views (toggle top-right, matching the requested Card /
+  Table / History design):
+  - **Card**: one card per fund — name, "Current: $X.XXXX", and an
+    editable price field.
+  - **Table**: same data as a compact FUND / CURRENT NAV / NEW NAV
+    table.
+  - **History**: a read-only log, one row per NAV Date, one column
+    per fund that's ever been updated — a plain historical record,
+    not editable.
+  A NAV Date picker sits above Card/Table (hidden in History). Typing
+  into a price field updates both the Card and Table input for that
+  fund at once (`handleNavPriceInput()`), so switching views mid-edit
+  never shows a stale value — Card/Table share state without either
+  view re-rendering.
+- **"Update All Prices"** writes every typed price straight to that
+  fund's own record (`fund.currentNav` — the same field the Fund
+  Holdings table on each Unit Trust account page reads for live
+  valuation), then snapshots the whole batch into a new `navHistory`
+  store keyed by NAV Date. Re-running it on the same date overwrites
+  that date's History row instead of duplicating it, so correcting a
+  mistyped price same-day just fixes it in place. Only fields actually
+  changed trigger a save; if nothing changed it says so instead of
+  writing a no-op History row.
+- **New `navHistory` object store** (keyPath `"date"`), added via a
+  `DB_VERSION` bump (4 → 5) — each record snapshots
+  `{ date, entries: [{ fundId, name, currency, nav }, ...] }`. Storing
+  each fund's name/currency *in* the snapshot (not looked up live at
+  render time) means a later fund rename or deletion doesn't blank out
+  or reshuffle its historical column — same "keep showing it, mark
+  it's gone" approach as the existing orphaned-fund rows in the Fund
+  Holdings table. Included in Backup export/import (`bundle.navHistory`)
+  alongside the other stores.
+- Verified with `node --check` plus the same data-click/data-change/
+  data-input cross-reference script used for prior releases — 0
+  missing handlers, all new element ids resolve.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v44.

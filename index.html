@@ -196,6 +196,41 @@
             padding: 16px;
         }
 
+        /* --- Daily NAV Update page (Card/Table/History views) --- */
+        .nav-view-toggle {
+            display: flex;
+            border: 1.5px solid var(--border-color);
+            border-radius: 10px;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .nav-view-toggle-btn {
+            background: var(--card-bg);
+            border: none;
+            padding: 8px 12px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            color: var(--text-muted);
+            cursor: pointer;
+            white-space: nowrap;
+        }
+        .nav-view-toggle-btn + .nav-view-toggle-btn { border-left: 1.5px solid var(--border-color); }
+        .nav-view-toggle-btn.active { background: var(--primary); color: #fff; }
+        .navfund-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 12px;
+        }
+        .navfund-card {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 14px;
+            padding: 14px;
+        }
+        .navfund-card-name { font-weight: 800; font-size: 0.85rem; margin-bottom: 2px; }
+        .navfund-card-current { font-size: 0.72rem; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; }
+        .navfund-price-input { width: 100%; }
+
         .report-summary-grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -875,6 +910,9 @@
             <button class="sidebar-item" data-click="navigateToAccountsPage">
                 <span class="sidebar-item-icon">🏦</span> Financial Accounts
             </button>
+            <button class="sidebar-item" data-click="navigateToNavUpdatePage">
+                <span class="sidebar-item-icon">📊</span> Daily NAV Update
+            </button>
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
@@ -1412,6 +1450,35 @@
                 <span style="color:var(--text-muted);">›</span>
             </div>
         </div>
+    </div>
+
+    <!-- ================= PAGE: DAILY NAV UPDATE (manual fund price entry, applies to all held funds) ================= -->
+    <div id="page-navupdate" class="page hidden">
+        <div class="nav-header" style="align-items:flex-start; flex-wrap:wrap; gap:10px;">
+            <div style="display:flex; align-items:flex-start; gap:12px;">
+                <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+                <div>
+                    <h3 style="font-weight:800; font-size:1.2rem;">Daily NAV Update</h3>
+                    <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Update unit prices for funds you currently hold</p>
+                </div>
+            </div>
+            <div class="nav-view-toggle" id="navUpdateViewToggle" style="margin-left:auto;">
+                <button type="button" class="nav-view-toggle-btn active" data-click="setNavUpdateView" data-view="card">▢ Card</button>
+                <button type="button" class="nav-view-toggle-btn" data-click="setNavUpdateView" data-view="table">📋 Table</button>
+                <button type="button" class="nav-view-toggle-btn" data-click="setNavUpdateView" data-view="history">📜 History</button>
+            </div>
+        </div>
+
+        <div class="form-row" id="navUpdateDateRow">
+            <label>NAV Date:</label>
+            <input type="date" id="navUpdateDate" class="form-input">
+        </div>
+
+        <div id="navUpdateCardView"></div>
+        <div id="navUpdateTableView" class="hidden"></div>
+        <div id="navUpdateHistoryView" class="hidden"></div>
+
+        <button type="button" class="submit-btn" id="navUpdateSaveBtn" data-click="handleSaveAllNav">Update All Prices</button>
     </div>
 
     <!-- ================= PAGE: MANAGE MEMBERS (add/edit/remove household members) ================= -->

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v43";
+        const APP_VERSION = "v44";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -21,12 +21,12 @@
         if (versionBadgeEl) versionBadgeEl.textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
         const DB_NAME = "EnterpriseMultiCurrencyLedgerDB_v4";
-        const DB_VERSION = 4;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds" };
+        const DB_VERSION = 5;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -834,6 +834,7 @@
             const databasePage = document.getElementById("page-database");
             const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
+            const navUpdatePage = document.getElementById("page-navupdate");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
@@ -845,7 +846,8 @@
                 !autolockPage.classList.contains("hidden") ||
                 !databasePage.classList.contains("hidden") ||
                 !spendingBreakdownPage.classList.contains("hidden") ||
-                !incomeBreakdownPage.classList.contains("hidden")
+                !incomeBreakdownPage.classList.contains("hidden") ||
+                !navUpdatePage.classList.contains("hidden")
             ) {
                 navigateToWorkspace();
             }
@@ -874,6 +876,11 @@
                     }
                     if (!database.objectStoreNames.contains(STORES.FUNDS)) {
                         database.createObjectStore(STORES.FUNDS, { keyPath: "id" });
+                    }
+                    if (!database.objectStoreNames.contains(STORES.NAV_HISTORY)) {
+                        // One record per NAV Date (keyPath "date", e.g. "2026-08-17") — re-saving
+                        // the same date overwrites it rather than creating a duplicate History row.
+                        database.createObjectStore(STORES.NAV_HISTORY, { keyPath: "date" });
                     }
                 };
                 request.onerror = (e) => reject(e.target.error);
@@ -1085,7 +1092,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member", "page-navupdate"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -1257,6 +1264,21 @@
             renderMemberPage();
         }
 
+        // "Daily NAV Update" page — a manual price-entry sheet for every fund currently held
+        // (units > 0) across every Unit Trust account, so updating a fund's price doesn't
+        // require opening each account's Fund Holdings table and editing one fund at a time.
+        // Card/Table are two views onto the same editable price fields (kept in sync by
+        // handleNavPriceInput below); History is a read-only log of past "Update All Prices"
+        // batches, one row per NAV Date.
+        function navigateToNavUpdatePage() {
+            closeSidebar();
+            workspaceScrollY = window.scrollY;
+            showPage("page-navupdate");
+            window.scrollTo(0, 0);
+            pushVirtualState("navupdate");
+            renderNavUpdatePage();
+        }
+
         function handleLedgerBackClick() {
             if (ledgerBackToPage === "savings") {
                 showPage("page-savings");
@@ -1299,6 +1321,7 @@
             const databaseHidden = document.getElementById("page-database").classList.contains("hidden");
             const spendingHidden = document.getElementById("page-spending-breakdown").classList.contains("hidden");
             const incomeHidden = document.getElementById("page-income-breakdown").classList.contains("hidden");
+            const navUpdateHidden = document.getElementById("page-navupdate").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
             else if (!accountsHidden) target = "accounts";
@@ -1308,6 +1331,7 @@
             else if (!databaseHidden) target = "database";
             else if (!spendingHidden) target = "spending-breakdown";
             else if (!incomeHidden) target = "income-breakdown";
+            else if (!navUpdateHidden) target = "navupdate";
             else if (!ledgerHidden) {
                 const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
                 target = isUnfiltered ? "all-ledger" : null;
@@ -2514,6 +2538,212 @@
                     </thead>
                     <tbody>${rowsHtml.join("")}${totalsRow}</tbody>
                 </table>`;
+        }
+
+        // --- DAILY NAV UPDATE PAGE ---
+        // Formats a fund price at 4 decimal places — unlike formatCurrency() (2 d.p., meant for
+        // account balances/transaction amounts), a unit trust NAV like $0.0736 loses all its
+        // meaningful precision if rounded to $0.07.
+        function formatNav(value, currency) {
+            const sym = currencySymbols[currency] || currency || "";
+            return `${sym}${(value || 0).toFixed(4)}`;
+        }
+
+        function formatNavHistoryDate(iso) {
+            const d = new Date(iso + "T00:00:00");
+            if (isNaN(d.getTime())) return iso;
+            const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+            return `${String(d.getDate()).padStart(2, "0")}-${months[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
+        }
+
+        let navUpdateView = "card"; // "card" | "table" | "history" — which of the 3 views is shown
+        let navUpdateFundsCache = []; // funds currently held (units > 0), across every account
+
+        // Re-fetches every currently-held fund and rebuilds all 3 views. Called once on page
+        // entry and again after a successful save (so "Current: $X" and the History log both
+        // reflect what was just written).
+        async function renderNavUpdatePage() {
+            const allFunds = await readAllDB(STORES.FUNDS);
+            // "Currently holding" = a live positive unit balance — the same definition the Fund
+            // Holdings table on each Unit Trust account page uses to decide a fund still has an
+            // active position (a fully sold-out fund's record can still exist at 0 units).
+            navUpdateFundsCache = allFunds
+                .filter(f => (f.units || 0) > 0.00005)
+                .sort((a, b) => a.name.localeCompare(b.name));
+
+            const dateInput = document.getElementById("navUpdateDate");
+            if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0, 10);
+
+            renderNavUpdateCardView();
+            renderNavUpdateTableView();
+            await renderNavUpdateHistoryView();
+            applyNavUpdateViewVisibility();
+        }
+
+        function navUpdateEmptyStateHtml() {
+            return '<p style="padding:24px 4px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No fund holdings yet — buy units under a Unit Trust account first.</p>';
+        }
+
+        function renderNavUpdateCardView() {
+            const wrap = document.getElementById("navUpdateCardView");
+            if (navUpdateFundsCache.length === 0) { wrap.innerHTML = navUpdateEmptyStateHtml(); return; }
+            wrap.innerHTML = `<div class="navfund-card-grid">${navUpdateFundsCache.map(f => `
+                <div class="navfund-card">
+                    <div class="navfund-card-name">${escapeHtml(f.name)}</div>
+                    <div class="navfund-card-current">Current: ${formatNav(f.currentNav || 0, f.currency)}</div>
+                    <input type="number" step="0.0001" min="0" inputmode="decimal" class="navfund-price-input"
+                        id="navPriceCard_${escapeHtml(f.id)}" data-input="handleNavPriceInput" data-id="${escapeHtml(f.id)}"
+                        value="${(f.currentNav || 0).toFixed(4)}">
+                </div>`).join("")}</div>`;
+        }
+
+        function renderNavUpdateTableView() {
+            const wrap = document.getElementById("navUpdateTableView");
+            if (navUpdateFundsCache.length === 0) { wrap.innerHTML = navUpdateEmptyStateHtml(); return; }
+            const rows = navUpdateFundsCache.map(f => `
+                <tr>
+                    <td style="padding:10px 8px;">
+                        <strong>${escapeHtml(f.name)}</strong><br>
+                        <span style="font-size:0.68rem; color:var(--text-muted);">${escapeHtml(f.code || "")}</span>
+                    </td>
+                    <td style="padding:10px 8px; text-align:right;">${formatNav(f.currentNav || 0, f.currency)}</td>
+                    <td style="padding:10px 8px; text-align:right;">
+                        <input type="number" step="0.0001" min="0" inputmode="decimal" style="text-align:right; width:112px; display:inline-block;"
+                            id="navPriceTable_${escapeHtml(f.id)}" data-input="handleNavPriceInput" data-id="${escapeHtml(f.id)}"
+                            value="${(f.currentNav || 0).toFixed(4)}">
+                    </td>
+                </tr>`).join("");
+            wrap.innerHTML = `
+                <div style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; font-size:0.82rem;">
+                    <thead>
+                        <tr style="border-bottom:2px solid var(--border-color); text-align:left;">
+                            <th style="padding:8px; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase;">Fund</th>
+                            <th style="padding:8px; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase;">Current NAV</th>
+                            <th style="padding:8px; text-align:right; font-size:0.68rem; color:var(--text-muted); text-transform:uppercase;">New NAV</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>
+                </div>`;
+        }
+
+        async function renderNavUpdateHistoryView() {
+            const wrap = document.getElementById("navUpdateHistoryView");
+            const history = (await readAllDB(STORES.NAV_HISTORY)).sort((a, b) => new Date(a.date) - new Date(b.date));
+            if (history.length === 0) {
+                wrap.innerHTML = '<p style="padding:24px 4px; text-align:center; color:var(--text-muted); font-size:0.85rem;">No NAV updates recorded yet — switch to Card or Table view and tap "Update All Prices".</p>';
+                return;
+            }
+
+            // Column set = every fund that has ever appeared in a saved update, in first-seen
+            // order, using each fund's most-recently-recorded name/currency. This is a self-
+            // contained snapshot (name/currency stored per entry, not looked up live), so a later
+            // fund rename or deletion doesn't blank out or reshuffle its historical column — same
+            // "keep showing it, just mark it's gone" approach as the orphaned-fund rows in the
+            // Fund Holdings table above.
+            const fundOrder = [];
+            const fundMetaById = {};
+            history.forEach(h => {
+                (h.entries || []).forEach(e => {
+                    if (!(e.fundId in fundMetaById)) fundOrder.push(e.fundId);
+                    fundMetaById[e.fundId] = { name: e.name, currency: e.currency };
+                });
+            });
+
+            const headerCells = fundOrder.map(fid => `<th style="padding:8px 10px; white-space:nowrap;">${escapeHtml((fundMetaById[fid].name || "").toUpperCase())}</th>`).join("");
+            const bodyRows = history.map((h, idx) => {
+                const navByFund = {};
+                (h.entries || []).forEach(e => { navByFund[e.fundId] = e; });
+                const cells = fundOrder.map(fid => {
+                    const e = navByFund[fid];
+                    return `<td style="padding:8px 10px;">${e ? formatNav(e.nav, e.currency) : "-"}</td>`;
+                }).join("");
+                return `<tr style="${idx % 2 === 0 ? "background:#f8fafc;" : ""}">
+                    <td style="padding:8px 10px; color:var(--text-muted);">${idx + 1}</td>
+                    <td style="padding:8px 10px; white-space:nowrap; font-weight:700;">${formatNavHistoryDate(h.date)}</td>
+                    ${cells}
+                </tr>`;
+            }).join("");
+
+            wrap.innerHTML = `
+                <div class="report-card" style="padding:0; overflow:hidden;">
+                    <div style="padding:14px 16px; font-weight:800; font-size:0.88rem; border-bottom:1.5px solid var(--border-color);">📜 Historical NAV / Unit Price Log</div>
+                    <div style="overflow-x:auto;">
+                    <table style="width:100%; border-collapse:collapse; font-size:0.78rem;">
+                        <thead>
+                            <tr style="background:var(--primary); color:#fff; text-align:left;">
+                                <th style="padding:8px 10px;">No.</th>
+                                <th style="padding:8px 10px;">Date</th>
+                                ${headerCells}
+                            </tr>
+                        </thead>
+                        <tbody>${bodyRows}</tbody>
+                    </table>
+                    </div>
+                </div>`;
+        }
+
+        // Shows/hides the 3 view containers + the date row + Update All Prices button to match
+        // navUpdateView, and highlights the matching toggle button. Pure visibility switch — it
+        // never re-renders, so anything the user already typed into an input stays exactly as
+        // typed while flipping between Card and Table.
+        function applyNavUpdateViewVisibility() {
+            document.querySelectorAll("#navUpdateViewToggle .nav-view-toggle-btn").forEach(b => b.classList.toggle("active", b.dataset.view === navUpdateView));
+            document.getElementById("navUpdateDateRow").style.display = navUpdateView === "history" ? "none" : "";
+            document.getElementById("navUpdateCardView").classList.toggle("hidden", navUpdateView !== "card");
+            document.getElementById("navUpdateTableView").classList.toggle("hidden", navUpdateView !== "table");
+            document.getElementById("navUpdateHistoryView").classList.toggle("hidden", navUpdateView !== "history");
+            document.getElementById("navUpdateSaveBtn").style.display = navUpdateView === "history" ? "none" : "block";
+        }
+
+        function setNavUpdateView(el) {
+            navUpdateView = el.dataset.view;
+            applyNavUpdateViewVisibility();
+        }
+
+        // Card and Table each have their own <input> per fund (different ids) so they can be
+        // shown/hidden without re-rendering — this keeps the one the user isn't looking at in
+        // sync every keystroke, so switching views mid-edit never shows a stale value.
+        function handleNavPriceInput(el) {
+            const fundId = el.dataset.id;
+            const val = el.value;
+            const card = document.getElementById(`navPriceCard_${fundId}`);
+            const table = document.getElementById(`navPriceTable_${fundId}`);
+            if (card && card !== el) card.value = val;
+            if (table && table !== el) table.value = val;
+        }
+
+        // Applies every typed price straight to its fund record (what the Fund Holdings table
+        // actually reads for live valuation) and snapshots the whole batch into NAV_HISTORY under
+        // the chosen date — re-saving the same date overwrites that date's row rather than adding
+        // a duplicate, so correcting a mis-typed price the same day just fixes it in place.
+        async function handleSaveAllNav() {
+            if (navUpdateFundsCache.length === 0) return;
+            const dateVal = document.getElementById("navUpdateDate").value;
+            if (!dateVal) { alert("Please pick a NAV date."); return; }
+
+            const entries = [];
+            let anyChanged = false;
+            for (const f of navUpdateFundsCache) {
+                const input = document.getElementById(`navPriceCard_${f.id}`) || document.getElementById(`navPriceTable_${f.id}`);
+                const raw = input ? parseFloat(input.value) : NaN;
+                const newNav = (isNaN(raw) || raw < 0) ? (f.currentNav || 0) : raw;
+                if (newNav !== (f.currentNav || 0)) anyChanged = true;
+                entries.push({ fundId: f.id, name: f.name, currency: f.currency, nav: newNav });
+            }
+
+            if (!anyChanged) { alert("No prices were changed."); return; }
+
+            for (const e of entries) {
+                const fund = navUpdateFundsCache.find(f => f.id === e.fundId);
+                if (!fund) continue;
+                await writeDB(STORES.FUNDS, { ...fund, currentNav: e.nav });
+            }
+            await writeDB(STORES.NAV_HISTORY, { date: dateVal, entries });
+
+            await renderNavUpdatePage();
+            alert("Prices updated.");
         }
 
         // Wired to the Delete button inside the Accounts modal — only visible while editing,
@@ -5070,6 +5300,7 @@
                 categories: await readAllDB(STORES.CATEGORIES),
                 members: await readAllDB(STORES.MEMBERS),
                 funds: await readAllDB(STORES.FUNDS),
+                navHistory: await readAllDB(STORES.NAV_HISTORY),
                 baseCurrency: baseCurrency,
                 fxRates: fxRates
             };
@@ -5201,6 +5432,9 @@
                     if (db.objectStoreNames.contains(STORES.FUNDS)) {
                         await clearStoreDB(STORES.FUNDS);
                     }
+                    if (db.objectStoreNames.contains(STORES.NAV_HISTORY)) {
+                        await clearStoreDB(STORES.NAV_HISTORY);
+                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -5218,6 +5452,9 @@
                     }
                     if (bundle.funds) {
                         for (const fund of bundle.funds) await writeDB(STORES.FUNDS, fund);
+                    }
+                    if (bundle.navHistory) {
+                        for (const rec of bundle.navHistory) await writeDB(STORES.NAV_HISTORY, rec);
                     }
 
                     await syncAndLoadCategories();
@@ -5318,6 +5555,9 @@
             handleDeleteFund: () => handleDeleteFund(),
             handleSaveFundTx: () => handleSaveFundTx(),
             handleDeleteFundTxFromModal: () => handleDeleteFundTxFromModal(),
+            navigateToNavUpdatePage: () => navigateToNavUpdatePage(),
+            setNavUpdateView: (el) => setNavUpdateView(el),
+            handleSaveAllNav: () => handleSaveAllNav(),
         };
 
         const CHANGE_ACTIONS = {
@@ -5357,6 +5597,7 @@
             recalcTransferFxFromDestAmount: () => recalcTransferFxFromDestAmount(),
             recalcFundTxTotal: () => recalcFundTxTotal(),
             recalcFundTxPriceFromTotal: () => recalcFundTxPriceFromTotal(),
+            handleNavPriceInput: (el) => handleNavPriceInput(el),
         };
 
         document.addEventListener("click", (e) => {
