@@ -1163,7 +1163,10 @@
             </div>
         </div>
         <div id="ledgerCurrentBalanceBanner" class="net-savings-banner" style="display:none; background:#eef2ff;">
-            Current Balance: <span id="ledgerCurrentBalanceValue">0.00</span>
+            <span id="ledgerCurrentBalanceLabel">Current Balance</span>: <span id="ledgerCurrentBalanceValue">0.00</span>
+        </div>
+        <div id="ledgerLinkedAccountBanner" style="display:none; cursor:pointer; font-size:0.78rem; font-weight:700; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:8px 12px; margin:-6px 0 14px; text-align:center;" data-click="navigateToLinkedAccountFromLedgerHeader">
+            🔗 Related Account: <span id="ledgerLinkedAccountValue"></span>
         </div>
         <div id="ledgerYearNav" style="display:none; align-items:center; justify-content:center; gap:16px; padding:10px 0 14px;">
             <button type="button" class="btn-util" id="ledgerYearPrevBtn" data-click="ledgerYearPrev" style="padding:6px 14px; font-size:1rem;">&lt;</button>
@@ -1211,6 +1214,22 @@
         </div>
         <div class="ledger-container" id="fundActivityList"></div>
         <button class="fab-btn" data-click="openAddFundTxModalForActiveFund" aria-label="Add transaction" title="Add transaction">+</button>
+    </div>
+
+    <!-- ================= PAGE: CURRENCY ACTIVITY (v55 — one currency basket within a
+         Multi-Currency account's own transactions, mirrors the Fund Activity page) ================= -->
+    <div id="page-currencyactivity" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="handleCurrencyActivityBackClick">&larr; Back</button>
+            <div style="flex:1;">
+                <h3 id="currencyActivityTitle" style="font-weight:800; font-size:1.2rem;">Currency Activity</h3>
+                <p id="currencyActivityMeta" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;"></p>
+            </div>
+        </div>
+        <div class="net-savings-banner" style="background:#eef2ff;">
+            Current Balance: <span id="currencyActivityBalanceValue">0.00</span>
+        </div>
+        <div class="ledger-container" id="currencyActivityList"></div>
     </div>
 
     <!-- ================= PAGE 4: ALL ACCOUNTS ================= -->
@@ -1661,12 +1680,37 @@
                         <option value="Credit Card">💳 Credit Card</option>
                         <option value="Investment">📈 Investment</option>
                         <option value="Real Estate">🏠 Real Estate</option>
+                        <option value="Bank Loan">💸 Bank Loan</option>
                     </select>
                 </div>
 
                 <div class="form-row" id="newAccSubgroupRow" style="display:none;">
                     <label>Sub-Group (optional)</label>
                     <select id="newAccSubgroup" class="form-input"></select>
+                </div>
+
+                <!-- Bank Loan (v50): which existing account this loan relates to — e.g. the
+                     bank/current account repayments are deducted from, or the account tied to
+                     whatever the loan was taken out for. Purely informational/organizational,
+                     shown only when Group = "Bank Loan". -->
+                <div class="form-row" id="newAccLinkedAccountRow" style="display:none;">
+                    <label>Related Account (optional)</label>
+                    <select id="newAccLinkedAccount" class="form-input"></select>
+                    <p style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">Which account this loan relates to — e.g. the bank account repayments come from.</p>
+                </div>
+
+                <!-- Real Estate (v53): whether this property counts toward the Net Worth figure
+                     on the main Dashboard — a property's recorded "Purchase Cost" is a running
+                     cost total, not a current market valuation, so some users may prefer to track
+                     it here without it inflating that headline number. Shown only when Group =
+                     "Real Estate"; defaults to Include (unset/legacy accounts behave as Include). -->
+                <div class="form-row" id="newAccNetWorthRow" style="display:none;">
+                    <label>Include in Net Worth (Dashboard)</label>
+                    <select id="newAccIncludeNetWorth" class="form-input">
+                        <option value="yes">✅ Include</option>
+                        <option value="no">🚫 Exclude</option>
+                    </select>
+                    <p style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">Exclude if this property's recorded cost shouldn't count toward the Dashboard's Net Worth total.</p>
                 </div>
 
                 <!-- Currency + Opening Balance — only applicable to "Normal" (single-currency) accounts. -->

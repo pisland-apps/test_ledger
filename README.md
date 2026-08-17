@@ -1212,3 +1212,47 @@ optional for Dividend (Reinvest)/Contribution; Settings reorganized
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v48.
+
+## v55: FD maturity dates on Activity rows, Multi-Currency accounts
+reworked (Base total + per-currency Activity pages), "(deleted
+account)" mislabel fixed for Opening Balance entries
+
+- **Fixed Deposit placements** now show their maturity date inline on
+  every FD row in an account's own Activity list (e.g. "2026-07-27
+  [Transfer] · Ref: 3-65019-0008812-0 · Matures 2027-07-27"), not just
+  inside the maturity-reminder banner.
+- **Multi-Currency accounts** (e.g. "Foreign Cash") reworked on both
+  the Accounts page and their own Activity page:
+  - The account row headline is now a single converted **Base total**
+    ("Base MYR: RM103,xxx.xx") instead of a long "+"-joined string of
+    every currency held — same for the **Current Balance** banner on
+    the account's own Activity page.
+  - Each currency basket now lists as its own subrow directly under
+    the account (Accounts page) or as its own row on the account's
+    Activity page — same one-per-line pattern Unit Trust already uses
+    for its fund holdings — instead of everything squashed onto one
+    wrapping line.
+  - Tapping a currency opens a new **Currency Activity page**
+    (mirrors the existing Fund Activity page) showing just that
+    currency's own transactions, including its Opening Balance entry.
+    The account's own Activity page no longer lists raw transactions
+    directly — only the currency rows — since every transaction now
+    lives on its currency's dedicated page.
+- Fixed accounts group total/subtotal and net worth calculations are
+  unaffected — only the display changed, `accountBaseValue()` still
+  drives every total exactly as before.
+- **"(deleted account)" mislabel fixed**: Opening Balance / Opening FD
+  Placement entries deliberately leave `src` blank ("") since those
+  funds originate outside the app — they were being shown as
+  "(deleted account) → X" (indistinguishable from an actually-deleted
+  account reference). Now shown as "(Opening Balance)" instead,
+  wherever an account name is resolved from a transaction leg.
+- Reminder: the Accounts page's sidebar shortcuts (Financial Accounts
+  → Fixed Deposit, etc.) already list every account filed under that
+  group/sub-group together in one place (with group/sub-group
+  subtotals) — this was unchanged by v55, just confirmed still
+  working as the way to see every FD placement across every account
+  at a glance.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v55.

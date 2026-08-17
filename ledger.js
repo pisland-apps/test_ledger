@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v48";
-        const APP_VERSION_DATE = "2026-08-17";
+        const APP_VERSION = "v55";
+        const APP_VERSION_DATE = "2026-08-18";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -34,7 +34,7 @@
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
         // saved before this existed default to "Bank/Cash" wherever a group is read.
-        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate"];
+        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate", "Bank Loan"];
         const DEFAULT_ACCOUNT_GROUP = ACCOUNT_GROUPS[0];
 
         // Sub-groups (v39) — optional, per-Group breakdown so e.g. "Investment" can be split
@@ -43,6 +43,7 @@
         // organizational — doesn't affect account.type (Normal/Multi-Currency/Fixed
         // Deposit/Unit Trust), just where it's filed on the Accounts page.
         const ACCOUNT_SUBGROUPS = {
+            "Bank/Cash": ["Current Account", "Savings Account", "Cash Account"],
             "Investment": ["Fixed Deposit", "KWSP", "ASNB", "Unit Trust"],
         };
         function subgroupsForGroup(group) {
@@ -658,6 +659,9 @@
         // fund's Buy/Sell/Dividend/Contribution transactions only.
         let activeFundActivityId = null;
         let fundActivityBackToPage = "accounts";
+        let activeCurrencyActivityAccountId = null;
+        let activeCurrencyActivityCurrency = null;
+        let currencyActivityBackToPage = "ledger";
 
         // Remembers how far down the workspace dashboard the user had scrolled (e.g. down to "My
         // Financial Accounts") before drilling into an account/category/type ledger view. All three
@@ -733,6 +737,7 @@
             { name: "Grants", type: "income", icon: "🎓" },
             { name: "Dividend Unit Trust", type: "income", icon: "🧺" },
             { name: "Bank Charges", type: "expense", icon: "💳" },
+            { name: "Mortgage Interest", type: "expense", icon: "🏠" },
             { name: "Education", type: "expense", icon: "🎓" },
             { name: "Family", type: "expense", icon: "👨‍👩‍👧‍👦" },
             { name: "Betting", type: "expense", icon: "🎰" },
@@ -849,9 +854,12 @@
             const membersPage = document.getElementById("page-members");
             const memberPage = document.getElementById("page-member");
             const fundActivityPage = document.getElementById("page-fundactivity");
+            const currencyActivityPage = document.getElementById("page-currencyactivity");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
+            } else if (!currencyActivityPage.classList.contains("hidden")) {
+                handleCurrencyActivityBackClick();
             } else if (!fundActivityPage.classList.contains("hidden")) {
                 handleFundActivityBackClick();
             } else if (!membersPage.classList.contains("hidden")) {
@@ -1113,7 +1121,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -1655,7 +1663,11 @@
 
         // Populates the Sub-Group select for whichever Group is currently chosen, and shows/hides
         // the row entirely when that Group has no configured sub-groups (see ACCOUNT_SUBGROUPS).
-        function handleAccGroupChange(preselectSubgroup) {
+        // Also shows/hides + populates the Bank Loan "Related Account" select (see
+        // populateLinkedAccountSelect below) whenever the Group is switched to/from "Bank Loan",
+        // and the Real Estate "Include in Net Worth" select whenever it's switched to/from
+        // "Real Estate".
+        async function handleAccGroupChange(preselectSubgroup, preselectLinkedAccountId, preselectIncludeInNetWorth) {
             const group = document.getElementById("newAccGroup").value;
             const list = subgroupsForGroup(group);
             const row = document.getElementById("newAccSubgroupRow");
@@ -1663,11 +1675,43 @@
             if (list.length === 0) {
                 row.style.display = "none";
                 sel.innerHTML = "";
-                return;
+            } else {
+                row.style.display = "flex";
+                sel.innerHTML = `<option value="">(No Sub-Group)</option>` + list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
+                sel.value = (preselectSubgroup && list.includes(preselectSubgroup)) ? preselectSubgroup : "";
             }
-            row.style.display = "flex";
-            sel.innerHTML = `<option value="">(No Sub-Group)</option>` + list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
-            sel.value = (preselectSubgroup && list.includes(preselectSubgroup)) ? preselectSubgroup : "";
+
+            const linkedRow = document.getElementById("newAccLinkedAccountRow");
+            if (group === "Bank Loan") {
+                linkedRow.style.display = "flex";
+                await populateLinkedAccountSelect(preselectLinkedAccountId);
+            } else {
+                linkedRow.style.display = "none";
+                document.getElementById("newAccLinkedAccount").innerHTML = "";
+            }
+
+            const netWorthRow = document.getElementById("newAccNetWorthRow");
+            if (group === "Real Estate") {
+                netWorthRow.style.display = "flex";
+                document.getElementById("newAccIncludeNetWorth").value = preselectIncludeInNetWorth === "no" ? "no" : "yes";
+            } else {
+                netWorthRow.style.display = "none";
+            }
+        }
+
+        // Fills the Bank Loan "Related Account" select with every OTHER account (excluding the
+        // account currently being edited, and excluding other Bank Loan accounts — a loan
+        // shouldn't relate to another loan). Purely informational: doesn't affect any balance or
+        // transaction, just shown alongside the loan account wherever it's displayed.
+        async function populateLinkedAccountSelect(preselectId) {
+            const sel = document.getElementById("newAccLinkedAccount");
+            const excludeId = document.getElementById("editAccountId").value;
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const candidates = accounts
+                .filter(a => a.id !== excludeId && (a.group || DEFAULT_ACCOUNT_GROUP) !== "Bank Loan")
+                .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+            sel.innerHTML = `<option value="">(None)</option>` + candidates.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join("");
+            sel.value = (preselectId && candidates.some(a => a.id === preselectId)) ? preselectId : "";
         }
 
         function resetAccountForm() {
@@ -1703,7 +1747,8 @@
 
             if(!name) { alert("Please enter an account name."); return; }
 
-            const record = { id, name, type, group: document.getElementById("newAccGroup").value || DEFAULT_ACCOUNT_GROUP, subgroup: document.getElementById("newAccSubgroup").value || "", memberIds: getCheckedAccountMemberIds() };
+            const group = document.getElementById("newAccGroup").value || DEFAULT_ACCOUNT_GROUP;
+            const record = { id, name, type, group, subgroup: document.getElementById("newAccSubgroup").value || "", linkedAccountId: (group === "Bank Loan" ? (document.getElementById("newAccLinkedAccount").value || null) : null), includeInNetWorth: (group === "Real Estate" ? (document.getElementById("newAccIncludeNetWorth").value !== "no") : true), memberIds: getCheckedAccountMemberIds() };
 
             if (type === "normal") {
                 const balInput = document.getElementById("newAccBal").value;
@@ -1930,8 +1975,17 @@
                             ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:bold;">Unit Trust</span>`
                             : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
 
+                const baseVal = accountBaseValue(a, nativeBalances);
+
                 let balSummary;
-                if (a.type === "fd" || a.type === "multi" || a.type === "unittrust") {
+                if (a.type === "multi") {
+                    // Multi-Currency accounts (v55): the headline now shows one converted Base
+                    // total instead of a long "+"-joined string of every currency held — the
+                    // per-currency breakdown moves to its own subrow list below (same pattern as
+                    // Unit Trust's fund subrows), each line up on its own row and clickable
+                    // through to that currency's own Activity page.
+                    balSummary = `<strong>Base ${escapeHtml(baseCurrency)}: ${formatBalanceHTML(baseVal, baseCurrency)}</strong>`;
+                } else if (a.type === "fd" || a.type === "unittrust") {
                     const baskets = nativeBalances[a.id];
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
@@ -1941,18 +1995,48 @@
                     balSummary = `<strong>${formatBalanceHTML(nativeBalances[a.id], a.currency)}</strong>`;
                 }
 
-                const baseVal = accountBaseValue(a, nativeBalances);
                 groupTotal += baseVal;
                 subgroupTotal += baseVal;
+
+                // Bank Loan (v50): show which other account this loan relates to, if set —
+                // purely informational, resolved from the id against the accounts list already
+                // in scope here.
+                const linkedAcc = a.linkedAccountId ? accounts.find(x => x.id === a.linkedAccountId) : null;
+                const linkedLine = linkedAcc
+                    ? `<br><span style="font-size:0.7rem; color:#92400e; font-weight:600;">🔗 Related: ${escapeHtml(linkedAcc.name)}</span>`
+                    : "";
+
+                // Real Estate (v53): flag when a property was explicitly excluded from the
+                // Dashboard's Net Worth total (see newAccIncludeNetWorth), so it's obvious here
+                // too rather than just being a silent gap in the headline number.
+                const excludedLine = a.includeInNetWorth === false
+                    ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
+                    : "";
 
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
                         <span>
                             <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
-                            <br>${accountOwnerTagHTML(a)}
+                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}
                         </span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
+
+                // Multi-Currency account (v55): list each currency basket right under the
+                // account row, one per line (same subrow pattern as Unit Trust funds below) —
+                // tap a currency to jump straight to that currency's own Activity page, where
+                // its Opening Balance and every other transaction in that currency actually live.
+                if (a.type === "multi") {
+                    const baskets = nativeBalances[a.id] || {};
+                    const currencies = Object.keys(baskets).sort();
+                    if (currencies.length > 0) {
+                        html += currencies.map(curr => `
+                            <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(a.id)}" data-currency="${escapeHtml(curr)}" data-back="accounts">
+                                <span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span></span>
+                                <span style="color:var(--text-muted);">›</span>
+                            </div>`).join("");
+                    }
+                }
 
                 // Unit Trust account: list its individual fund holdings right under the account
                 // row (tap a fund to jump straight to that fund's own Activity page).
@@ -1991,7 +2075,7 @@
             document.getElementById("editAccountId").value = account.id;
             document.getElementById("newAccName").value = account.name;
             document.getElementById("newAccGroup").value = account.group || DEFAULT_ACCOUNT_GROUP;
-            handleAccGroupChange(account.subgroup || "");
+            await handleAccGroupChange(account.subgroup || "", account.linkedAccountId || "", account.includeInNetWorth === false ? "no" : "yes");
 
             setAccountTypeUI(account.type || "normal");
             if (!account.type || account.type === "normal") {
@@ -2112,6 +2196,89 @@
                     </div>`;
             }).join("");
             document.getElementById("fundActivityList").innerHTML = html || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No transactions yet — tap + to log a Buy, Sell, or Dividend.</p>';
+        }
+
+        // Currency's own Activity page (v55) — same idea as navigateToFundActivityPage, but for
+        // one currency basket within a Multi-Currency account, since that account's own Activity
+        // page now only lists currency summary rows (see isMultiCurrencyAccountView above).
+        function navigateToCurrencyActivityPage(el) {
+            const accountId = el.dataset.id;
+            const currency = el.dataset.currency;
+            workspaceScrollY = window.scrollY;
+            activeCurrencyActivityAccountId = accountId;
+            activeCurrencyActivityCurrency = currency;
+            currencyActivityBackToPage = el.dataset.back === "accounts" ? "accounts" : "ledger";
+            showPage("page-currencyactivity");
+            window.scrollTo(0, 0);
+            pushVirtualState("currencyactivity");
+            renderCurrencyActivityPage();
+        }
+
+        function handleCurrencyActivityBackClick() {
+            if (currencyActivityBackToPage === "accounts") {
+                showPage("page-accounts");
+                renderAccountsPage();
+            } else {
+                showPage("page-ledger");
+                renderApp();
+            }
+        }
+
+        // Renders the Currency Activity page: a native-currency balance banner (this basket's
+        // running total, matching what the account row/subrow shows), and every transaction in
+        // that account touching this specific currency, newest first — including the Opening
+        // Balance entry that used to show directly on the account's own Activity page.
+        async function renderCurrencyActivityPage() {
+            const accountId = activeCurrencyActivityAccountId;
+            const currency = activeCurrencyActivityCurrency;
+            if (!accountId || !currency) return;
+
+            const { accounts, txs, nativeBalances } = await computeAccountBalances();
+            const account = accounts.find(a => a.id === accountId);
+            if (!account) { handleCurrencyActivityBackClick(); return; }
+
+            document.getElementById("currencyActivityTitle").textContent = `${currency} Activity`;
+            document.getElementById("currencyActivityMeta").textContent = `${account.name} · ${currency}`;
+
+            const basket = nativeBalances[accountId] || {};
+            const balance = basket[currency] || 0;
+            document.getElementById("currencyActivityBalanceValue").innerHTML = formatBalanceHTML(balance, currency);
+
+            // Opening Balance entries deliberately leave src blank ("") — the funds originate
+            // outside the app, not from a since-deleted account — so an empty id gets its own
+            // label rather than being mistaken for a removed account record.
+            const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(a.name) : "(deleted account)"; };
+
+            const relevantTxs = txs
+                .filter(t => t.currency === currency && (t.src === accountId || t.dest === accountId))
+                .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            const html = relevantTxs.map(t => {
+                let col, sgn;
+                if (t.type === "income") { col = "income-color"; sgn = "+"; }
+                else if (t.type === "expense") { col = "expense-color"; sgn = "-"; }
+                else if (t.dest === accountId) { col = "income-color"; sgn = "+"; }
+                else { col = "expense-color"; sgn = "-"; }
+
+                const iconBadge = t.type === "transfer" ? "🔄" : getCategoryIcon(t.cat, t.type);
+                const accountText = t.type === "transfer"
+                    ? `🏦 ${accountName(t.src)} → ${t.dest ? accountName(t.dest) : "(unknown)"}`
+                    : `🏦 ${accountName(t.src)}`;
+                const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
+
+                return `
+                    <div class="ledger-item" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
+                        <div class="item-left">
+                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
+                            <span class="item-meta">${escapeHtml(t.date)} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}</span>
+                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                        </div>
+                        <div class="item-right">
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
+                        </div>
+                    </div>`;
+            }).join("");
+            document.getElementById("currencyActivityList").innerHTML = html || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No transactions yet.</p>';
         }
 
         // [+] on the Fund Activity page — same fundTxModal as everywhere else, but pre-set to
@@ -2562,10 +2729,15 @@
                 // everyday sense a user expects (e.g. RM100 Buy + RM100 Reinvest + RM100
                 // Contribution, all at NAV 1.00, should read as RM100 invested / RM200 profit, not
                 // RM300 invested / RM0 profit).
+                //
+                // Dividend (Cheque Payout) is cash paid straight out to another account — no units
+                // change, so unlike Reinvest it never shows up in `value`. It's real cash the owner
+                // actually pocketed from the holding, exactly like a Sell's proceeds, so it's folded
+                // into `recovered` alongside Sell rather than being silently dropped from P/L.
                 let invested = 0, recovered = 0;
                 fundTxs.forEach(t => {
                     if (t.fundTxType === "buy") invested += t.amount;
-                    else if (t.fundTxType === "sell") recovered += t.amount;
+                    else if (t.fundTxType === "sell" || t.fundTxType === "dividend_payout") recovered += t.amount;
                 });
                 return { invested, recovered };
             }
@@ -3223,6 +3395,11 @@
             let total = 0;
             const currencyTotals = {};
             accountsSubset.forEach(a => {
+                // Include in Net Worth (v53/v54) — same opt-out as the main Dashboard total
+                // (currently only settable on Real Estate accounts); kept in sync here so a
+                // property excluded from the headline Net Worth is excluded from every member's
+                // and joint group's net worth too, not just the dashboard-wide figure.
+                if (a.includeInNetWorth === false) return;
                 if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
                     Object.entries(nativeBalances[a.id] || {}).forEach(([curr, amt]) => {
                         total += convertCurrency(amt, curr, baseCurrency);
@@ -3365,9 +3542,14 @@
                     balSummary = `<strong>${formatBalanceHTML(nativeBalances[a.id], a.currency)}</strong>`;
                 }
 
+                const linkedAcc = a.linkedAccountId ? accounts.find(x => x.id === a.linkedAccountId) : null;
+                const linkedLine = linkedAcc
+                    ? ` · <span style="color:#92400e; font-weight:600;">🔗 ${escapeHtml(linkedAcc.name)}</span>`
+                    : "";
+
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="member">
-                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span></span>
+                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}</span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
             });
@@ -4647,6 +4829,52 @@
                 }
             });
 
+            // Unit Trust accounts (v50): the cash-flow basket built above (Buy amount in, Sell
+            // amount out, plus whatever Total Amount was typed for Dividend Reinvest/
+            // Contribution) only approximates what the holding is worth — it never re-marks
+            // itself when a fund's NAV moves, so it silently drifts away from the Fund Holdings
+            // table's own "Total" row (units × currentNav). Net worth, the Accounts/Member page
+            // balances, and the Current Balance banner should all agree with that Total row, so
+            // for Unit Trust accounts specifically the basket above is discarded and rebuilt here
+            // from live market value instead — same inputs, same math, as renderFundHoldingsTable().
+            const unitTrustAccounts = accounts.filter(a => a.type === "unittrust");
+            if (unitTrustAccounts.length > 0) {
+                const funds = await readAllDB(STORES.FUNDS);
+                const fundsByAccountId = {};
+                funds.forEach(f => { (fundsByAccountId[f.accountId] = fundsByAccountId[f.accountId] || []).push(f); });
+
+                unitTrustAccounts.forEach(acc => {
+                    const basket = {};
+                    const accFunds = fundsByAccountId[acc.id] || [];
+                    accFunds.forEach(f => {
+                        basket[f.currency] = (basket[f.currency] || 0) + (f.units || 0) * (f.currentNav || 0);
+                    });
+
+                    // Orphaned fund transactions (the FUNDS record was deleted separately, but its
+                    // history intentionally stays — see handleDeleteFund()) still count toward this
+                    // account's balance. There's no live NAV left to mark them at, so they're
+                    // valued at remaining cost basis, exactly like the Fund Holdings table's own
+                    // "(fund deleted)" row.
+                    const liveFundIds = new Set(accFunds.map(f => f.id));
+                    const orphanTxsByFundId = {};
+                    txs.forEach(t => {
+                        if (!t.fundId || liveFundIds.has(t.fundId)) return;
+                        (orphanTxsByFundId[t.fundId] = orphanTxsByFundId[t.fundId] || []).push(t);
+                    });
+                    Object.values(orphanTxsByFundId).forEach(fTxs => {
+                        let invested = 0, recovered = 0;
+                        fTxs.forEach(t => {
+                            if (t.fundTxType === "buy") invested += t.amount;
+                            else if (t.fundTxType === "sell" || t.fundTxType === "dividend_payout") recovered += t.amount;
+                        });
+                        const currency = fTxs[0].currency || baseCurrency;
+                        basket[currency] = (basket[currency] || 0) + Math.max(invested - recovered, 0);
+                    });
+
+                    nativeBalances[acc.id] = basket;
+                });
+            }
+
             return { accounts, txs, nativeBalances };
         }
 
@@ -4662,6 +4890,11 @@
             let globalBaseNetWorth = 0;
             const currencyTotals = {}; // native (unconverted) sum per currency actually held, across every account
             accounts.forEach(a => {
+                // Include in Net Worth (v53) — currently only settable on Real Estate accounts
+                // (see newAccIncludeNetWorth); every other account has no way to opt out, so
+                // undefined/missing here always means "include" and this only ever filters out
+                // a Real Estate account whose owner explicitly excluded it.
+                if (a.includeInNetWorth === false) return;
                 if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
                     Object.entries(nativeBalances[a.id]).forEach(([curr, amt]) => {
                         globalBaseNetWorth += convertCurrency(amt, curr, baseCurrency);
@@ -4758,13 +4991,22 @@
 
             // Current Balance banner (v34) — the account's actual up-to-date balance, shown
             // regardless of which year is currently selected (unlike Balance B/F & C/F below,
-            // which are specific to the selected year's boundaries).
+            // which are specific to the selected year's boundaries). Label (v51): reads
+            // "Purchase Cost" for Real Estate accounts instead of "Current Balance" — a property
+            // account's running total is the cumulative cost put into it (purchase price + extras
+            // like an extra car park, less any rebate/credit note logged as a reverse Transfer),
+            // not a "balance" in the everyday cash-account sense, so the old label was misleading.
             const balanceBanner = document.getElementById("ledgerCurrentBalanceBanner");
             if (showFullAccountHistory) {
                 const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
                 if (viewingAcc) {
                     let balSummary;
-                    if (viewingAcc.type === "fd" || viewingAcc.type === "multi" || viewingAcc.type === "unittrust") {
+                    if (viewingAcc.type === "multi") {
+                        // v55: Current Balance for a Multi-Currency account is now its single
+                        // converted Base total (matching the Accounts page headline), not the
+                        // raw "+"-joined string of every currency basket.
+                        balSummary = formatBalanceHTML(accountBaseValue(viewingAcc, nativeBalances), baseCurrency);
+                    } else if (viewingAcc.type === "fd" || viewingAcc.type === "unittrust") {
                         const baskets = nativeBalances[viewingAcc.id];
                         const currencies = Object.keys(baskets);
                         balSummary = currencies.length === 0
@@ -4773,6 +5015,8 @@
                     } else {
                         balSummary = formatBalanceHTML(nativeBalances[viewingAcc.id], viewingAcc.currency);
                     }
+                    document.getElementById("ledgerCurrentBalanceLabel").textContent =
+                        (viewingAcc.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate" ? "Purchase Cost" : "Current Balance";
                     document.getElementById("ledgerCurrentBalanceValue").innerHTML = balSummary;
                     balanceBanner.style.display = "block";
                 } else {
@@ -4780,6 +5024,24 @@
                 }
             } else {
                 balanceBanner.style.display = "none";
+            }
+
+            // Related Account banner (v50) — Bank Loan accounts only, shown just under Current
+            // Balance when a linked account was set on this loan (see populateLinkedAccountSelect).
+            // Tapping it jumps straight to that account's own Activity page.
+            const linkedBanner = document.getElementById("ledgerLinkedAccountBanner");
+            if (showFullAccountHistory) {
+                const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
+                const linkedAcc = viewingAcc && viewingAcc.linkedAccountId ? accounts.find(a => a.id === viewingAcc.linkedAccountId) : null;
+                if (linkedAcc) {
+                    document.getElementById("ledgerLinkedAccountValue").textContent = linkedAcc.name;
+                    linkedBanner.dataset.id = linkedAcc.id;
+                    linkedBanner.style.display = "block";
+                } else {
+                    linkedBanner.style.display = "none";
+                }
+            } else {
+                linkedBanner.style.display = "none";
             }
 
             // Fund Holdings section (Unit Trust accounts only) — shown above the normal
@@ -4799,6 +5061,18 @@
                 }
             } else {
                 fundSection.style.display = "none";
+            }
+
+            // Multi-Currency account's own Activity page (v55): rather than a jumbled list of
+            // raw Opening Balance / transaction rows across every currency at once, this view
+            // shows one row per currency basket held — each currency's own transactions
+            // (including its Opening Balance) live on that currency's dedicated Activity page
+            // instead (see navigateToCurrencyActivityPage / renderCurrencyActivityPage).
+            let isMultiCurrencyAccountView = false;
+            let viewingMultiAcc = null;
+            if (showFullAccountHistory) {
+                viewingMultiAcc = accounts.find(a => a.id === activeLedgerAccountView);
+                isMultiCurrencyAccountView = !!(viewingMultiAcc && viewingMultiAcc.type === "multi");
             }
 
             // Compute structural titles
@@ -4970,6 +5244,11 @@
                     }
                 }
 
+                // Multi-Currency account view (v55): skip building any per-transaction row here
+                // — see isMultiCurrencyAccountView above, this account's own list is replaced
+                // with per-currency summary rows further down instead.
+                if (isMultiCurrencyAccountView) return;
+
                 let isBound = false;
                 if (activeCategoryView !== "all") {
                     isBound = t.cat === activeCategoryView;
@@ -5006,6 +5285,11 @@
                     ? `<span data-click="openImageViewer" data-image="${escapeHtml(t.image)}" style="cursor:pointer; margin-left:4px;" title="View attached photo">📎</span>`
                     : '';
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
+                // Maturity date (v55) — shown inline on every FD placement row, not just inside
+                // the maturity reminder banner, so it's visible while scrolling that account's
+                // own Activity history too. fdResolved placements keep showing their maturity
+                // date for reference even though the ✅ Closed badge already covers status.
+                const maturityText = t.fdMaturityDate ? ` · Matures ${escapeHtml(t.fdMaturityDate)}` : '';
                 const manualFxBadge = (t.manualFxRate || (t.type === "transfer" && t.destAmount != null))
                     ? `<span style="font-size:0.62rem; font-weight:700; color:#c2410c; background:#ffedd5; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">✏️ Manual FX</span>`
                     : '';
@@ -5033,7 +5317,11 @@
                 // regardless of which page it's viewed from (a single account's own Activity page,
                 // or a combined view like a category/type breakdown where the account otherwise
                 // isn't obvious at all).
-                const accountName = id => { const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(a.name) : "(deleted account)"; };
+                // Opening Balance / Opening Fixed Deposit Placement entries deliberately leave
+                // src blank ("") — the funds originate outside the app, not from a since-deleted
+                // account — so an empty id is labelled distinctly from an id that actually points
+                // at a removed account record.
+                const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(a.name) : "(deleted account)"; };
                 let accountText;
                 if (t.type === "transfer") {
                     accountText = `🏦 ${accountName(t.src)} → ${t.dest ? accountName(t.dest) : "(unknown)"}`;
@@ -5059,7 +5347,7 @@
                     <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${receiptBadge}</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${maturityText}${receiptBadge}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                         </div>
                         <div class="item-right">
@@ -5103,6 +5391,22 @@
             if (isUnitTrustAccountView) {
                 ledgerListEl.innerHTML = "";
                 ledgerListEl.style.display = "none";
+            } else if (isMultiCurrencyAccountView) {
+                const baskets = nativeBalances[viewingMultiAcc.id] || {};
+                const currencies = Object.keys(baskets).sort();
+                ledgerListEl.style.display = "";
+                ledgerListEl.innerHTML = currencies.length === 0
+                    ? '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No funds yet — tap + to log an opening balance or transaction.</p>'
+                    : currencies.map(curr => `
+                        <div class="ledger-item" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(viewingMultiAcc.id)}" data-currency="${escapeHtml(curr)}" data-back="ledger">
+                            <div class="item-left">
+                                <span class="item-name">${escapeHtml(curr)}</span>
+                                <span class="item-meta">Tap to view this currency's Activity log</span>
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="font-weight:bold;">${formatBalanceHTML(baskets[curr], curr)}</div>
+                            </div>
+                        </div>`).join("");
             } else {
                 ledgerListEl.style.display = "";
                 ledgerListEl.innerHTML = ledgerHTML || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No matches found.</p>';
@@ -5752,6 +6056,7 @@
             openCategoryFormModal: () => openCategoryFormModal(),
             deleteAccountFromForm: () => deleteAccountFromForm(),
             editAccountFromLedgerHeader: () => editAccountFromLedgerHeader(),
+            navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportBackup: () => exportBackup(),
             openImportInput: () => document.getElementById("importInput").click(),
             handleLedgerBackClick: () => handleLedgerBackClick(),
@@ -5793,6 +6098,8 @@
             navigateToFundActivityPage: (el) => navigateToFundActivityPage(el),
             handleFundActivityBackClick: () => handleFundActivityBackClick(),
             editFundFromActivityHeader: () => editFundFromActivityHeader(),
+            navigateToCurrencyActivityPage: (el) => navigateToCurrencyActivityPage(el),
+            handleCurrencyActivityBackClick: () => handleCurrencyActivityBackClick(),
             handleSaveFund: () => handleSaveFund(),
             handleDeleteFund: () => handleDeleteFund(),
             handleSaveFundTx: () => handleSaveFundTx(),
