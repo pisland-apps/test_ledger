@@ -635,15 +635,30 @@
         .member-networth-row .member-row-amt { font-weight: 800; font-size: 0.95rem; flex-shrink: 0; }
         .member-color-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; border: 1.5px solid rgba(0,0,0,0.08); }
 
+        /* Owner(s) selection chip — used for both the account form's Owner(s) picker
+           (.acc-member-checkbox) and a fund's Owner(s) picker (.fund-owner-checkbox). Explicit
+           flex-direction/white-space/sizing so every member's chip renders identically (one flat
+           row: small checkbox + name) instead of drifting into a stacked/oversized box on some
+           members — this is what image1's bug report showed happening to one chip but not others. */
+        .owner-chip {
+            display: flex; flex-direction: row; flex-wrap: nowrap; align-items: center; gap: 6px;
+            padding: 6px 10px; border: 1.5px solid var(--border-color); border-radius: 20px;
+            font-size: 0.78rem; font-weight: 600; cursor: pointer; white-space: nowrap;
+            flex: 0 0 auto; box-sizing: border-box;
+        }
+        .owner-chip input[type="checkbox"] {
+            width: 15px; height: 15px; min-width: 15px; flex-shrink: 0; margin: 0; cursor: pointer;
+        }
+
         /* Bottom "More" action buttons on the dashboard — icon-only, one row */
         .dashboard-bottom-actions { display: flex; flex-direction: row; gap: 10px; margin-bottom: 8px; }
         .dash-bottom-btn {
             display: flex; align-items: center; justify-content: center; flex: 1;
             background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
-            padding: 14px 0; cursor: pointer;
+            padding: 18px 0; cursor: pointer;
         }
         .dash-bottom-btn:active { background: #f1f5f9; }
-        .dash-bottom-btn-icon { font-size: 1.3rem; }
+        .dash-bottom-btn-icon { font-size: 1.7rem; }
 
         /* Sidebar member rows */
         .sidebar-member-item {
@@ -781,6 +796,9 @@
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
         .config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
         .config-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); }
+        /* Fund holding listed under its Unit Trust account row on the Accounts page — indented,
+           lighter background/border so it reads as a child of the account above it. */
+        .fund-subrow { margin-left: 18px; padding: 8px 12px; background: #fff; font-size: 0.8rem; }
         .util-row { display: flex; gap: 8px; margin-top: 24px; }
         .btn-util { flex: 1; padding: 12px; font-size: 0.8rem; border-radius: 8px; background: #e2e8f0; border: none; font-weight: 600; cursor: pointer; }
 
@@ -963,13 +981,10 @@
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Members</div>
             <div id="sidebarMembersSection"></div>
-            <button class="sidebar-item" data-click="navigateToMembersPage">
-                <span class="sidebar-item-icon">👪</span> Manage Members
-            </button>
 
             <div class="sidebar-divider"></div>
             <button class="sidebar-item" data-click="navigateToDataSecurityPage">
-                <span class="sidebar-item-icon">🔐</span> Data Security
+                <span class="sidebar-item-icon">⚙️</span> Setting
             </button>
         </nav>
     </div>
@@ -1125,11 +1140,11 @@
             <button class="dash-bottom-btn" data-click="navigateToAccountsPage" title="Financial Accounts" aria-label="Financial Accounts">
                 <span class="dash-bottom-btn-icon">🏦</span>
             </button>
-            <button class="dash-bottom-btn" data-click="navigateToAllLedgerPage" title="All Transactions" aria-label="All Transactions">
-                <span class="dash-bottom-btn-icon">📜</span>
+            <button class="dash-bottom-btn" data-click="sidebarGo" data-target="backup" title="Export &amp; Import" aria-label="Export &amp; Import">
+                <span class="dash-bottom-btn-icon">💾</span>
             </button>
-            <button class="dash-bottom-btn" data-click="navigateToDataSecurityPage" title="Data Security" aria-label="Data Security">
-                <span class="dash-bottom-btn-icon">🔐</span>
+            <button class="dash-bottom-btn" data-click="navigateToDataSecurityPage" title="Setting" aria-label="Setting">
+                <span class="dash-bottom-btn-icon">⚙️</span>
             </button>
         </div>
     </div>
@@ -1176,6 +1191,26 @@
             <button class="action-btn btn-transfer" data-click="quickAddChooseType" data-type="transfer"><span>🔄 Transfer</span></button>
         </div>
         <button class="fab-btn" data-click="toggleLedgerQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
+    </div>
+
+    <!-- ================= PAGE: FUND ACTIVITY (v48 — one fund's own transactions, mirrors an
+         account's Activity page but scoped to a single fund) ================= -->
+    <div id="page-fundactivity" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="handleFundActivityBackClick">&larr; Back</button>
+            <div style="flex:1;">
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <h3 id="fundActivityTitle" style="font-weight:800; font-size:1.2rem;">Fund Activity</h3>
+                    <button class="icon-edit-btn" data-click="editFundFromActivityHeader" title="Edit fund details">✏️</button>
+                </div>
+                <div id="fundActivityMeta" style="display:flex; flex-wrap:wrap; gap:10px; font-size:0.72rem; color:var(--text-muted); font-weight:600;"></div>
+            </div>
+        </div>
+        <div class="net-savings-banner" style="background:#eef2ff;">
+            Current Value: <span id="fundActivityBalanceValue">0.00</span>
+        </div>
+        <div class="ledger-container" id="fundActivityList"></div>
+        <button class="fab-btn" data-click="openAddFundTxModalForActiveFund" aria-label="Add transaction" title="Add transaction">+</button>
     </div>
 
     <!-- ================= PAGE 4: ALL ACCOUNTS ================= -->
@@ -1468,11 +1503,15 @@
         <div class="nav-header">
             <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
             <div>
-                <h3 style="font-weight:800; font-size:1.2rem;">Data Security</h3>
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Backups, auto-lock &amp; storage</p>
+                <h3 style="font-weight:800; font-size:1.2rem;">Setting</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Members, backups, auto-lock &amp; storage</p>
             </div>
         </div>
         <div class="config-list">
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
+                <span>👪 <strong>Manage Members</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="backup">
                 <span>💾 <strong>Backup &amp; Restore</strong></span>
                 <span style="color:var(--text-muted);">›</span>
@@ -1524,7 +1563,7 @@
     <!-- ================= PAGE: MANAGE MEMBERS (add/edit/remove household members) ================= -->
     <div id="page-members" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">Manage Members</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Tag accounts to a member — husband, wife, kids, etc.</p>
@@ -2035,7 +2074,7 @@
             </div>
             <div class="form-row">
                 <label>Total Amount</label>
-                <input type="number" id="fundTxTotal" step="0.01" placeholder="0.00" required data-input="recalcFundTxPriceFromTotal">
+                <input type="number" id="fundTxTotal" step="0.01" placeholder="0.00" data-input="recalcFundTxPriceFromTotal">
             </div>
             <div class="form-row" id="fundTxAccountRow">
                 <label id="fundTxAccountLabel">Account (transfer from)</label>

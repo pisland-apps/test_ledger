@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v47";
+        const APP_VERSION = "v48";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -654,6 +654,11 @@
         let accountLedgerYearsCache = [];
         let ledgerBackToPage = "workspace"; 
 
+        // Fund's own Activity page (v48) — mirrors an account's Activity page, but scoped to one
+        // fund's Buy/Sell/Dividend/Contribution transactions only.
+        let activeFundActivityId = null;
+        let fundActivityBackToPage = "accounts";
+
         // Remembers how far down the workspace dashboard the user had scrolled (e.g. down to "My
         // Financial Accounts") before drilling into an account/category/type ledger view. All three
         // pages share the browser's own window-level scroll (none of them has its own scrollable
@@ -840,9 +845,19 @@
             const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
             const navUpdatePage = document.getElementById("page-navupdate");
+            const dataSecurityPage = document.getElementById("page-datasecurity");
+            const membersPage = document.getElementById("page-members");
+            const memberPage = document.getElementById("page-member");
+            const fundActivityPage = document.getElementById("page-fundactivity");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
+            } else if (!fundActivityPage.classList.contains("hidden")) {
+                handleFundActivityBackClick();
+            } else if (!membersPage.classList.contains("hidden")) {
+                navigateToDataSecurityPage();
+            } else if (!memberPage.classList.contains("hidden")) {
+                navigateToWorkspace();
             } else if (
                 !savingsPage.classList.contains("hidden") ||
                 !accountsPage.classList.contains("hidden") ||
@@ -852,7 +867,8 @@
                 !databasePage.classList.contains("hidden") ||
                 !spendingBreakdownPage.classList.contains("hidden") ||
                 !incomeBreakdownPage.classList.contains("hidden") ||
-                !navUpdatePage.classList.contains("hidden")
+                !navUpdatePage.classList.contains("hidden") ||
+                !dataSecurityPage.classList.contains("hidden")
             ) {
                 navigateToWorkspace();
             }
@@ -1097,7 +1113,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member", "page-navupdate"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -1367,6 +1383,7 @@
             else if (target === "accounts") navigateToAccountsPage();
             else if (target === "categories") navigateToCategoriesPage();
             else if (target === "backup") navigateToBackupPage();
+            else if (target === "members") navigateToMembersPage();
             else if (target === "autolock") navigateToAutoLockPage();
             else if (target === "database") navigateToDatabasePage();
             else if (target === "spending-breakdown") navigateToSpendingBreakdownPage();
@@ -1849,6 +1866,13 @@
         async function renderAccountsPage() {
             await populateDefaultPaymentAccountSelect();
             const { accounts, nativeBalances } = await computeAccountBalances();
+            // Fetched once up front (not per-account inside the loop below) and grouped by
+            // accountId, so each Unit Trust account row can list its individual fund holdings
+            // (e.g. "HLBB Value Fund — RM147.20") directly on the Accounts page without the user
+            // having to tap into the account's Activity page first.
+            const allFunds = await readAllDB(STORES.FUNDS);
+            const fundsByAccountId = {};
+            allFunds.forEach(f => { (fundsByAccountId[f.accountId] = fundsByAccountId[f.accountId] || []).push(f); });
             const filter = accountsPageTypeFilter;
             const filtered = filter
                 ? accounts.filter(a => (a.group || DEFAULT_ACCOUNT_GROUP) === filter.group && (a.subgroup || "") === (filter.subgroup || ""))
@@ -1929,6 +1953,22 @@
                         </span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
+
+                // Unit Trust account: list its individual fund holdings right under the account
+                // row (tap a fund to jump straight to that fund's own Activity page).
+                if (a.type === "unittrust") {
+                    const funds = (fundsByAccountId[a.id] || []).slice().sort((x, y) => x.name.localeCompare(y.name));
+                    if (funds.length > 0) {
+                        html += funds.map(f => {
+                            const value = (f.units || 0) * (f.currentNav || 0);
+                            return `
+                                <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}" data-back="accounts">
+                                    <span>${escapeHtml(f.name)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(value, f.currency)}</span></span>
+                                    <span style="color:var(--text-muted);">›</span>
+                                </div>`;
+                        }).join("");
+                    }
+                }
             });
             flushSubgroupTotal();
             flushGroupTotal();
@@ -2001,6 +2041,100 @@
             return all.filter(f => f.accountId === accountId);
         }
 
+        // Fund's own Activity page (v48) — same idea as an account's Activity page
+        // (navigateToLedgerPage), but scoped to just this one fund's transactions, so a Unit
+        // Trust account holding several funds doesn't jumble all of them into one long list.
+        function navigateToFundActivityPage(el) {
+            const fundId = typeof el === "string" ? el : el.dataset.id;
+            workspaceScrollY = window.scrollY;
+            activeFundActivityId = fundId;
+            fundActivityBackToPage = activeLedgerAccountView !== "all" ? "ledger" : "accounts";
+            showPage("page-fundactivity");
+            window.scrollTo(0, 0);
+            pushVirtualState("fundactivity");
+            renderFundActivityPage();
+        }
+
+        function handleFundActivityBackClick() {
+            if (fundActivityBackToPage === "ledger") {
+                showPage("page-ledger");
+                renderApp();
+            } else {
+                showPage("page-accounts");
+                renderAccountsPage();
+            }
+        }
+
+        function editFundFromActivityHeader() {
+            if (activeFundActivityId) editFund(activeFundActivityId);
+        }
+
+        // Renders the Fund Activity page: a value banner (same style as an account's Current
+        // Balance banner), the fund's own mini holding stats, and its transactions only — every
+        // TRANSACTIONS row tagged with this fundId, newest first. Tapping a row opens the same
+        // dedicated fund-transaction editor as everywhere else (openEditFundTxModal via
+        // openTransactionForm's fundId branch).
+        async function renderFundActivityPage() {
+            const fundId = activeFundActivityId;
+            if (!fundId) return;
+            const funds = await readAllDB(STORES.FUNDS);
+            const fund = funds.find(f => f.id === fundId);
+            if (!fund) { handleFundActivityBackClick(); return; }
+
+            document.getElementById("fundActivityTitle").textContent = `${fund.name} Activity`;
+
+            const allTxs = await readAllDB(STORES.TRANSACTIONS);
+            const fundTxs = allTxs.filter(t => t.fundId === fundId).sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            const value = (fund.units || 0) * (fund.currentNav || 0);
+            document.getElementById("fundActivityBalanceValue").innerHTML = formatBalanceHTML(value, fund.currency);
+
+            const ownerLabel = accountOwnerNamesText({ memberIds: fund.ownerMemberIds });
+            document.getElementById("fundActivityMeta").innerHTML = `
+                <span>${escapeHtml(fund.category || "")}${fund.code ? " · " + escapeHtml(fund.code) : ""}</span>
+                <span style="color:var(--primary); font-weight:700;">${escapeHtml(ownerLabel)}</span>
+                <span>${(fund.units || 0).toFixed(4)} units @ ${formatCurrency(fund.currentNav || 0, fund.currency)} NAV</span>
+            `;
+
+            const html = fundTxs.map(t => {
+                const col = (t.fundTxType === "sell" || t.fundTxType === "dividend_payout") ? "expense-color" : "income-color";
+                const sgn = (t.fundTxType === "sell" || t.fundTxType === "dividend_payout") ? "-" : "+";
+                const unitsText = t.units != null ? `${t.units.toFixed(4)} units` : "";
+                return `
+                    <div class="ledger-item" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
+                        <div class="item-left">
+                            <span class="item-name">${escapeHtml(fundTxTypeLabel(t.fundTxType))}</span>
+                            <span class="item-meta">${escapeHtml(t.date)}${unitsText ? " · " + unitsText : ""}${t.notes ? " · " + escapeHtml(t.notes) : ""}</span>
+                        </div>
+                        <div class="item-right">
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
+                        </div>
+                    </div>`;
+            }).join("");
+            document.getElementById("fundActivityList").innerHTML = html || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No transactions yet — tap + to log a Buy, Sell, or Dividend.</p>';
+        }
+
+        // [+] on the Fund Activity page — same fundTxModal as everywhere else, but pre-set to
+        // this page's fund (skipping the "add a fund first" account-wide picker since the fund
+        // is already known from context).
+        async function openAddFundTxModalForActiveFund() {
+            const fundId = activeFundActivityId;
+            if (!fundId) return;
+            const funds = await readAllDB(STORES.FUNDS);
+            const fund = funds.find(f => f.id === fundId);
+            if (!fund) return;
+            await openAddFundTxModal(fund.accountId, fundId);
+        }
+
+        // Called after any fund/fund-transaction save or delete so the Fund Activity page stays
+        // current if that's what's on screen — mirrors refreshAfterAccountChange()'s pattern for
+        // the Accounts page.
+        async function refreshFundActivityPageIfVisible() {
+            if (!document.getElementById("page-fundactivity").classList.contains("hidden")) {
+                await renderFundActivityPage();
+            }
+        }
+
         function openAddFundModal() {
             const accountId = activeLedgerAccountView;
             if (accountId === "all") return;
@@ -2041,7 +2175,7 @@
         function renderFundOwnerCheckboxes(selectedIds) {
             const wrap = document.getElementById("fundOwnerCheckboxes");
             wrap.innerHTML = membersCache.map(m => `
-                <label style="display:flex; align-items:center; gap:4px; padding:6px 10px; border:1.5px solid var(--border-color); border-radius:20px; font-size:0.78rem; font-weight:600; cursor:pointer;">
+                <label class="owner-chip">
                     <input type="checkbox" class="fund-owner-checkbox" value="${escapeHtml(m.id)}" ${selectedIds.includes(m.id) ? "checked" : ""} style="accent-color:${escapeHtml(m.color)};">
                     ${escapeHtml(m.name)}
                 </label>`).join("") || '<span style="font-size:0.78rem; color:var(--text-muted);">No members set up yet.</span>';
@@ -2075,6 +2209,7 @@
             await writeDB(STORES.FUNDS, record);
             closeModal("fundModal");
             renderApp();
+            refreshFundActivityPageIfVisible();
         }
 
         async function handleDeleteFund() {
@@ -2085,10 +2220,11 @@
             await deleteDB(STORES.FUNDS, id);
             closeModal("fundModal");
             renderApp();
+            refreshFundActivityPageIfVisible();
         }
 
-        async function openAddFundTxModal() {
-            const accountId = activeLedgerAccountView;
+        async function openAddFundTxModal(accountIdOverride, presetFundId) {
+            const accountId = accountIdOverride || activeLedgerAccountView;
             if (accountId === "all") return;
             const funds = await getFundsForAccount(accountId);
             if (funds.length === 0) { alert("Add a fund first, then log transactions against it."); return; }
@@ -2096,6 +2232,7 @@
             document.getElementById("fundTxAccountId").value = accountId;
             const fundSel = document.getElementById("fundTxFundId");
             fundSel.innerHTML = funds.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.name)}${f.code ? " (" + escapeHtml(f.code) + ")" : ""}</option>`).join("");
+            if (presetFundId) fundSel.value = presetFundId;
 
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const cashAccounts = accounts.filter(a => a.id !== accountId);
@@ -2223,12 +2360,18 @@
             const date = document.getElementById("fundTxDate").value;
             const units = parseFloat(document.getElementById("fundTxUnits").value) || 0;
             const price = parseFloat(document.getElementById("fundTxPrice").value) || 0;
-            const total = parseFloat(document.getElementById("fundTxTotal").value);
+            // Total Amount is only a real cash figure for the types that move money into/out of
+            // an account (Buy/Sell/Dividend Cheque Payout) — Dividend (Reinvest) and Contribution
+            // just add units straight into the fund with no cash leg, so their Total Amount is
+            // optional/informational and left blank most of the time; treat a blank field as 0
+            // rather than blocking the save.
+            const total = parseFloat(document.getElementById("fundTxTotal").value) || 0;
             const transferAccountId = document.getElementById("fundTxTransferAccount").value;
             const notes = document.getElementById("fundTxNotes").value.trim();
+            const totalAmountRequired = (type === "buy" || type === "sell" || type === "dividend_payout");
 
             if (!date) { alert("Please select a date."); return; }
-            if (isNaN(total) || total <= 0) { alert("Please enter a valid Total Amount."); return; }
+            if (totalAmountRequired && total <= 0) { alert("Please enter a valid Total Amount."); return; }
             if (type !== "dividend_payout" && (isNaN(units) || units <= 0)) { alert("Please enter valid Units."); return; }
             if ((type === "buy" || type === "sell" || type === "dividend_payout") && !transferAccountId) {
                 alert("Please choose which account this transfers from/to."); return;
@@ -2305,6 +2448,7 @@
 
             closeModal("fundTxModal");
             renderApp();
+            refreshFundActivityPageIfVisible();
         }
 
         // Wired to the "🗑 Delete Transaction" button inside the fund-transaction editor (only
@@ -2333,6 +2477,7 @@
             await deleteDB(STORES.TRANSACTIONS, tx.id);
             closeModal("fundTxModal");
             renderApp();
+            refreshFundActivityPageIfVisible();
         }
 
         function fundTxTypeLabel(type) {
@@ -2456,7 +2601,7 @@
                 if (commonCurrency === null) commonCurrency = f.currency; else if (commonCurrency !== f.currency) mixedCurrency = true;
 
                 rowsHtml.push(`
-                    <tr style="cursor:pointer;" data-click="editFund" data-id="${escapeHtml(f.id)}">
+                    <tr style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}">
                         <td style="padding:8px 10px;">
                             <strong>${escapeHtml(f.name)}</strong><br>
                             <span style="font-size:0.68rem; color:var(--text-muted);">${escapeHtml(f.code || "")}</span><br>
@@ -2957,7 +3102,7 @@
                 return;
             }
             wrap.innerHTML = membersCache.map(m => `
-                <label style="display:flex; align-items:center; gap:4px; padding:6px 10px; border:1.5px solid var(--border-color); border-radius:20px; font-size:0.78rem; font-weight:600; cursor:pointer;">
+                <label class="owner-chip">
                     <input type="checkbox" class="acc-member-checkbox" value="${escapeHtml(m.id)}" ${selected.includes(m.id) ? "checked" : ""} style="accent-color:${escapeHtml(m.color)};">
                     ${escapeHtml(m.name)}
                 </label>
@@ -4642,9 +4787,11 @@
             // as an ordinary-looking entry (they ARE ordinary transfer/income transactions under
             // the hood, just tagged with a fundId — see saveFundTransaction()).
             const fundSection = document.getElementById("fundHoldingsSection");
+            let isUnitTrustAccountView = false;
             if (showFullAccountHistory) {
                 const viewingAcc2 = accounts.find(a => a.id === activeLedgerAccountView);
                 if (viewingAcc2 && viewingAcc2.type === "unittrust") {
+                    isUnitTrustAccountView = true;
                     fundSection.style.display = "block";
                     await renderFundHoldingsTable(viewingAcc2.id, txs);
                 } else {
@@ -4947,7 +5094,19 @@
             document.getElementById("reportSavings").textContent = formatCurrency(savings, baseCurrency);
             document.getElementById("savingsBanner").style.background = savings >= 0 ? "#f0fdf4" : "#fef2f2";
 
-            document.getElementById("ledgerList").innerHTML = ledgerHTML || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No matches found.</p>';
+            // Unit Trust account's own Activity page: each fund now has its own dedicated
+            // Activity page (see navigateToFundActivityPage) showing that fund's transactions,
+            // so the mixed Buy/Sell/Dividend log below the Fund Holdings table here would just
+            // duplicate — and, across multiple funds, jumble together — what's already broken
+            // out per-fund elsewhere. Skip building/showing it for this account type only.
+            const ledgerListEl = document.getElementById("ledgerList");
+            if (isUnitTrustAccountView) {
+                ledgerListEl.innerHTML = "";
+                ledgerListEl.style.display = "none";
+            } else {
+                ledgerListEl.style.display = "";
+                ledgerListEl.innerHTML = ledgerHTML || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No matches found.</p>';
+            }
 
             // The Net Savings Statement page has its own independent "All Years / Year" filter
             // (not the dashboard's month+year filter above), so it's rendered by a dedicated
@@ -5629,7 +5788,11 @@
             numpadClear: () => numpadClear(),
             openAddFundModal: () => openAddFundModal(),
             openAddFundTxModal: () => openAddFundTxModal(),
+            openAddFundTxModalForActiveFund: () => openAddFundTxModalForActiveFund(),
             editFund: (el) => editFund(el.dataset.id),
+            navigateToFundActivityPage: (el) => navigateToFundActivityPage(el),
+            handleFundActivityBackClick: () => handleFundActivityBackClick(),
+            editFundFromActivityHeader: () => editFundFromActivityHeader(),
             handleSaveFund: () => handleSaveFund(),
             handleDeleteFund: () => handleDeleteFund(),
             handleSaveFundTx: () => handleSaveFundTx(),

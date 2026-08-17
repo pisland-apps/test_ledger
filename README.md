@@ -1160,3 +1160,55 @@ in one place, with a History log
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v44.
+
+## v48: fund now has its own Activity page; Owner(s) chip styling
+unified; Fund Holdings visible from the Accounts page; Total Amount
+optional for Dividend (Reinvest)/Contribution; Settings reorganized
+
+- **New Fund Activity page** — tapping a fund (in the Fund Holdings
+  table on its Unit Trust account's own Activity page, or now also
+  directly from the Accounts page list) opens a dedicated page for
+  that one fund, mirroring an account's own Activity page: a Current
+  Value banner, an ✏️ edit-fund button in the header, and a
+  transaction list scoped to just that fund's Buy/Sell/Dividend/
+  Contribution rows. The `[+]` FAB opens the existing fund-transaction
+  form pre-set to this fund (`openAddFundTxModal()` now takes optional
+  `accountId`/`presetFundId` overrides instead of always reading
+  `activeLedgerAccountView`). Wired into the popstate back-button
+  handler and `APP_PAGE_IDS` like every other page; while at it, also
+  added the pre-existing Members/Data-Security pages to that same
+  back-button whitelist (they were reachable but not previously
+  covered by the hardware/gesture back button).
+- Since each fund now has its own Activity page, the Unit Trust
+  account's own Activity page no longer also shows the mixed Buy/
+  Sell/Dividend transaction log below the Fund Holdings table (it
+  only duplicated, and across multiple funds jumbled together, what's
+  now broken out per-fund). Other account types are unaffected.
+- **Accounts page** now lists each fund directly under its Unit Trust
+  account row (e.g. "HLBB Value Fund — RM147.20" under "HLAM"), so
+  holdings are visible without drilling into the account first —
+  tapping a fund jumps straight to its new Activity page.
+- **Owner(s) chip styling** (account form and fund form) unified under
+  one `.owner-chip` CSS class — explicit `flex-direction: row`,
+  `white-space: nowrap`, and fixed checkbox sizing so every member's
+  chip renders as the same flat "checkbox + name" pill, instead of one
+  member's chip occasionally rendering oversized/stacked.
+- **Add Transaction (fund)**: Total Amount is no longer required for
+  Dividend (Reinvest) or Contribution — those add units with no cash
+  leg, so it can be left blank/0. Still required (must be > 0) for
+  Buy, Sell, and Dividend (Cheque Payout), which do move real cash.
+- **Settings reorganized**: sidebar's standalone "Manage Members" item
+  removed; it now lives as the first row inside the settings hub,
+  which is renamed "Setting" everywhere (sidebar button, page header,
+  dashboard bottom button) — was "Data Security".
+- **Dashboard "More" row**: "All Transactions" button removed;
+  "Export & Import" (jumps straight to Backup & Restore) added in its
+  place alongside Financial Accounts and Setting. All three icons
+  enlarged (1.3rem → 1.7rem, more button padding) per feedback that
+  they read too small.
+- Verified with `node --check` plus the same data-click/data-change/
+  data-input cross-reference script used for prior releases — 0
+  missing handlers, all new element ids resolve.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v48.
