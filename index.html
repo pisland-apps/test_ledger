@@ -1555,7 +1555,7 @@
                      group accounts under Sidebar members and per-member Portfolio Net Worth reports. -->
                 <div class="form-row">
                     <label>Owner(s) — select one for an individual account, or several for a joint account</label>
-                    <div id="accountMemberCheckboxes" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;"></div>
+                    <div id="accountMemberCheckboxes" style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;"></div>
                 </div>
 
                 <!-- Action handlers changed to button onclick to bypass Android keyboard/form intercept bugs -->
@@ -1897,9 +1897,10 @@
     <div class="modal" id="fundTxModal">
         <div class="modal-sheet">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <h3 style="font-weight:800;">Add Transaction</h3>
+                <h3 id="fundTxModalTitle" style="font-weight:800;">Add Transaction</h3>
                 <button data-click="closeModal" data-modal="fundTxModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
             </div>
+            <input type="hidden" id="fundTxId" value="">
             <input type="hidden" id="fundTxAccountId">
             <div class="form-row">
                 <label>Fund</label>
@@ -1938,6 +1939,7 @@
                 <input type="text" id="fundTxNotes" placeholder="Optional notes">
             </div>
             <button type="button" data-click="handleSaveFundTx" class="submit-btn">Save Transaction</button>
+            <button type="button" id="fundTxDeleteBtn" data-click="handleDeleteFundTxFromModal" class="submit-btn" style="display:none; background:var(--expense-color); margin-top:8px;">🗑 Delete Transaction</button>
         </div>
     </div>
 

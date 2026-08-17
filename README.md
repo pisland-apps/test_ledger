@@ -989,3 +989,57 @@ double-submit)
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v40.
+
+## v41: fund transactions can now be edited (not just deleted), Fund
+Holdings table always tallies against the account balance, unified
+Owner(s) picker design
+
+- **Fund-linked ledger rows can now be edited.** Tapping a Buy / Sell /
+  Dividend (Reinvest) / Dividend (Cheque Payout) / Contribution row
+  used to jump straight to a delete confirmation — editing was
+  blocked because doing it through the plain Edit Transaction modal
+  would silently desync the fund's running unit balance. A dedicated
+  editor (`openEditFundTxModal()`, reusing the same "Add Transaction"
+  form under a new "Edit Transaction" title) now opens instead, fully
+  pre-filled. Saving (`handleSaveFundTx()`) unwinds the *original*
+  entry's unit effect first — on whichever fund it was originally
+  tagged to, even if the fund picker is changed mid-edit — before
+  applying the new one, so `fund.units` stays correct either way. A
+  "🗑 Delete Transaction" button inside the same modal
+  (`handleDeleteFundTxFromModal()`) replaces the old immediate-tap
+  deletion for the normal case. The original delete-with-unwind
+  behaviour (`handleFundTxRowTap()`) is kept only as a fallback for
+  when a row's fund has since been deleted — there's no fund/account
+  context left to build an editor around in that case.
+- **Fund Holdings table no longer silently drops a fund's history.**
+  Deleting a fund (`handleDeleteFund()`) always intentionally left its
+  past transactions in the ledger, un-linked — but the Fund Holdings
+  report only ever read from *live* fund records, so those orphaned
+  transactions kept affecting the account's real Current Balance while
+  disappearing from the table entirely, with nothing showing the two
+  had drifted apart. `renderFundHoldingsTable()` now also groups any
+  transaction whose `fundId` doesn't match a live fund under this
+  account and renders it as its own "⚠️ fund deleted" row (name
+  recovered from the transaction's saved description, valued at cost
+  since there's no live NAV left for it), and a **Totals row**
+  (Value / Invested / P/L / Return, summed across every row including
+  orphaned ones) now sits at the bottom of the table so it can be
+  checked at a glance against the Current Balance banner above it —
+  flags mixed currencies rather than presenting a misleading blended
+  total if a Unit Trust account holds funds in more than one currency.
+- **Owner(s) picker is now one consistent design everywhere.** The
+  Add/Edit Account modal's "Owner(s)" control
+  (`renderAccountMemberCheckboxes()`) was a plain stacked checkbox
+  list with a colour dot; the Add/Edit Fund modal's was already the
+  rounded-pill chip row (`renderFundOwnerCheckboxes()`). Restyled the
+  account version to match the fund version exactly (same pill markup,
+  same `accent-color` tinting from the member's own colour) — this is
+  the single shared control behind every Owner(s) picker in the app
+  (Accounts modal, and the member-filter pre-check on the Member
+  page), so the fix applies everywhere it's used, not just one screen.
+- No IndexedDB schema/export-import format changes. Verified with
+  `node --check` plus the id/data-click/data-change cross-reference
+  script (0 missing, 0 dupes, 0 unbound handlers) after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v41.

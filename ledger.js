@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v40";
+        const APP_VERSION = "v41";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -2052,13 +2052,69 @@
             const transferSel = document.getElementById("fundTxTransferAccount");
             transferSel.innerHTML = cashAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))}</option>`).join("");
 
+            document.getElementById("fundTxModalTitle").textContent = "Add Transaction";
+            document.getElementById("fundTxId").value = "";
             document.getElementById("fundTxType").value = "buy";
             document.getElementById("fundTxDate").value = new Date().toISOString().split("T")[0];
             document.getElementById("fundTxUnits").value = "";
             document.getElementById("fundTxPrice").value = "";
             document.getElementById("fundTxTotal").value = "";
             document.getElementById("fundTxNotes").value = "";
+            document.getElementById("fundTxDeleteBtn").style.display = "none";
             handleFundTxTypeChange();
+            openModal("fundTxModal");
+        }
+
+        // Opens the same fund-transaction form pre-filled for editing an existing Buy / Sell /
+        // Dividend (Reinvest) / Dividend (Cheque Payout) / Contribution row. Tapping a fund-linked
+        // row in the normal ledger list used to jump straight to a delete confirmation (v39/v40)
+        // because editing amount/units in the plain Edit Transaction modal would silently desync
+        // the fund's running unit balance — this dedicated editor solves that properly instead of
+        // just blocking edits: handleSaveFundTx() below unwinds the old unit delta (from whichever
+        // fund the entry was originally tagged to) before applying the new one.
+        async function openEditFundTxModal(tx) {
+            const funds = await readAllDB(STORES.FUNDS);
+            const fund = funds.find(f => f.id === tx.fundId);
+            if (!fund) {
+                // The fund this entry was tagged to no longer exists (deleted separately) — there's
+                // no account/currency/fund-list context left to build an editor around, so fall
+                // back to the original delete-with-unwind flow rather than editing blind.
+                await handleFundTxRowTap(tx);
+                return;
+            }
+            const accountId = fund.accountId;
+            const accountFunds = await getFundsForAccount(accountId);
+
+            document.getElementById("fundTxModalTitle").textContent = "Edit Transaction";
+            document.getElementById("fundTxId").value = tx.id;
+            document.getElementById("fundTxAccountId").value = accountId;
+
+            const fundSel = document.getElementById("fundTxFundId");
+            fundSel.innerHTML = accountFunds.map(f => `<option value="${escapeHtml(f.id)}">${escapeHtml(f.name)}${f.code ? " (" + escapeHtml(f.code) + ")" : ""}</option>`).join("");
+            fundSel.value = tx.fundId;
+
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const cashAccounts = accounts.filter(a => a.id !== accountId);
+            const transferSel = document.getElementById("fundTxTransferAccount");
+            transferSel.innerHTML = cashAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))}</option>`).join("");
+
+            document.getElementById("fundTxType").value = tx.fundTxType;
+            document.getElementById("fundTxDate").value = tx.date;
+            document.getElementById("fundTxUnits").value = tx.units != null ? tx.units : "";
+            document.getElementById("fundTxPrice").value = tx.pricePerUnit != null ? tx.pricePerUnit : "";
+            document.getElementById("fundTxTotal").value = tx.amount;
+            document.getElementById("fundTxNotes").value = tx.notes || "";
+            handleFundTxTypeChange();
+
+            // Pre-select which cash account this entry transferred from/to/into, based on type —
+            // dividend_reinvest/contribution have no cash leg (acctRow is hidden for those).
+            let transferAccountId = null;
+            if (tx.fundTxType === "buy") transferAccountId = tx.src;
+            else if (tx.fundTxType === "sell") transferAccountId = tx.dest;
+            else if (tx.fundTxType === "dividend_payout") transferAccountId = tx.src;
+            if (transferAccountId) transferSel.value = transferAccountId;
+
+            document.getElementById("fundTxDeleteBtn").style.display = "block";
             openModal("fundTxModal");
         }
 
@@ -2098,6 +2154,7 @@
         function handleFundTxFundChange() { /* no-op hook, kept for symmetry with other forms */ }
 
         async function handleSaveFundTx() {
+            const editId = document.getElementById("fundTxId").value;
             const accountId = document.getElementById("fundTxAccountId").value;
             const fundId = document.getElementById("fundTxFundId").value;
             const type = document.getElementById("fundTxType").value;
@@ -2118,7 +2175,12 @@
             const funds = await readAllDB(STORES.FUNDS);
             const fund = funds.find(f => f.id === fundId);
             if (!fund) { alert("Fund not found."); return; }
-            const account = (await readAllDB(STORES.ACCOUNTS)).find(a => a.id === accountId);
+
+            // Editing: look up the exact original record (preserving its real id, whatever type
+            // IndexedDB's autoIncrement gave it) so the save below overwrites it in place instead
+            // of accidentally creating a duplicate with a re-stringified id.
+            const allTxs = editId ? await readAllDB(STORES.TRANSACTIONS) : null;
+            const existingTx = editId ? allTxs.find(t => String(t.id) === String(editId)) : null;
 
             const baseTx = {
                 fundId, fundTxType: type,
@@ -2131,6 +2193,7 @@
                 image: null,
                 fdReferenceNo: null, fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null
             };
+            if (existingTx) baseTx.id = existingTx.id;
 
             let unitDelta = 0;
             if (type === "buy") {
@@ -2150,10 +2213,62 @@
                 unitDelta = 0;
             }
 
+            // Editing: first unwind whatever unit effect the ORIGINAL entry had, on whichever fund
+            // it was originally tagged to (may differ from the fund now selected, if the user
+            // switched funds while editing) — otherwise the new delta below would just stack on
+            // top of the old one and desync fund.units.
+            if (existingTx) {
+                let oldUnitDelta = 0;
+                if (existingTx.fundTxType === "buy" || existingTx.fundTxType === "dividend_reinvest" || existingTx.fundTxType === "contribution") oldUnitDelta = -(existingTx.units || 0);
+                else if (existingTx.fundTxType === "sell") oldUnitDelta = (existingTx.units || 0);
+
+                if (oldUnitDelta !== 0) {
+                    if (existingTx.fundId === fundId) {
+                        // Same fund — fold the reversal into the same in-memory record the new
+                        // delta is about to be applied to, so only one write happens for it below.
+                        fund.units = Math.max(0, (fund.units || 0) + oldUnitDelta);
+                    } else {
+                        const oldFund = funds.find(f => f.id === existingTx.fundId);
+                        if (oldFund) {
+                            oldFund.units = Math.max(0, (oldFund.units || 0) + oldUnitDelta);
+                            await writeDB(STORES.FUNDS, oldFund);
+                        }
+                    }
+                }
+            }
+
             await writeDB(STORES.TRANSACTIONS, baseTx);
             fund.units = Math.max(0, (fund.units || 0) + unitDelta);
             await writeDB(STORES.FUNDS, fund);
 
+            closeModal("fundTxModal");
+            renderApp();
+        }
+
+        // Wired to the "🗑 Delete Transaction" button inside the fund-transaction editor (only
+        // visible when editing, i.e. fundTxId is populated). Same confirm-then-unwind-then-delete
+        // flow as handleFundTxRowTap()'s fallback path, just triggered from inside the modal
+        // instead of immediately on tapping the ledger row.
+        async function handleDeleteFundTxFromModal() {
+            const editId = document.getElementById("fundTxId").value;
+            if (!editId) return;
+            const allTxs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = allTxs.find(t => String(t.id) === String(editId));
+            if (!tx) return;
+
+            const ok = await customConfirm(`Delete this "${fundTxTypeLabel(tx.fundTxType)}" fund transaction? The fund's unit balance will be adjusted accordingly.`);
+            if (!ok) return;
+
+            const funds = await readAllDB(STORES.FUNDS);
+            const fund = funds.find(f => f.id === tx.fundId);
+            if (fund) {
+                let unitDelta = 0;
+                if (tx.fundTxType === "buy" || tx.fundTxType === "dividend_reinvest" || tx.fundTxType === "contribution") unitDelta = -(tx.units || 0);
+                else if (tx.fundTxType === "sell") unitDelta = (tx.units || 0);
+                fund.units = Math.max(0, (fund.units || 0) + unitDelta);
+                await writeDB(STORES.FUNDS, fund);
+            }
+            await deleteDB(STORES.TRANSACTIONS, tx.id);
             closeModal("fundTxModal");
             renderApp();
         }
@@ -2167,10 +2282,13 @@
             }[type] || type;
         }
 
-        // Tapping a fund-linked row in the normal ledger list (Buy/Sell/Dividend/Contribution)
-        // can't go through the regular Edit Transaction modal — editing amount/units there would
-        // desync the fund's running unit balance. Offers delete-with-unwind instead: removes the
-        // transaction and reverses whatever unit change it made when saved.
+        // Fallback used only when a fund-linked row's fund record no longer exists (e.g. the fund
+        // itself was separately deleted, leaving this transaction "orphaned" — see the Fund
+        // Holdings table's handling of orphaned rows below). With no fund/account/currency context
+        // left to build a proper editor around, this offers delete-with-unwind instead: removes
+        // the transaction and reverses whatever unit change it made when saved. The normal case
+        // (fund still exists) goes through openEditFundTxModal() instead, which supports full
+        // editing.
         async function handleFundTxRowTap(tx) {
             const ok = await customConfirm(`Delete this "${fundTxTypeLabel(tx.fundTxType)}" fund transaction? The fund's unit balance will be adjusted accordingly. To change it instead, delete then log a new one from "+ Transaction".`);
             if (!ok) return;
@@ -2193,33 +2311,67 @@
         // RETURN / ANNUALISED / HOLDING per fund under this Unit Trust account, each row tagged
         // with its owner member name(s) so funds held by different family members under the same
         // account are never confused with one another.
+        //
+        // Tally note: every Buy/Sell/Dividend(Reinvest)/Contribution/Dividend(Payout) row is a
+        // real transaction that already counts toward this account's Current Balance banner above
+        // — but a fund's own units/holdings only get a row here as long as its FUNDS record still
+        // exists. If a fund was deleted separately (its transaction history intentionally stays in
+        // the ledger — see handleDeleteFund()'s confirm text), those transactions kept affecting
+        // the account's real balance but silently dropped out of this table entirely, which is
+        // exactly what made the total look like it didn't "tally" against the balance above. Those
+        // now still surface as an "(fund deleted)" row below, built straight from their orphaned
+        // transactions, and a Totals row ties the whole table's Value/Invested/P&L together so a
+        // mismatch against the Current Balance banner is visible at a glance instead of hidden.
         async function renderFundHoldingsTable(accountId, allTxs) {
             const funds = await getFundsForAccount(accountId);
             const wrap = document.getElementById("fundHoldingsTableWrap");
-            if (funds.length === 0) {
-                wrap.innerHTML = '<p style="padding:12px 4px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No funds yet — tap "+ Fund" to add one.</p>';
-                return;
-            }
+
             const todayMs = Date.now();
-            const rows = funds.map(f => {
-                const fundTxs = allTxs.filter(t => t.fundId === f.id).sort((a, b) => new Date(a.date) - new Date(b.date));
+
+            // Groups every fund-linked transaction under this account by fundId — used both to
+            // compute each live fund's invested-cash-basis figure, and to find transactions whose
+            // fundId no longer resolves to any fund record under this account (orphaned).
+            const fundTxsByFundId = {};
+            allTxs.forEach(t => {
+                if (!t.fundId) return;
+                (fundTxsByFundId[t.fundId] = fundTxsByFundId[t.fundId] || []).push(t);
+            });
+
+            function computeInvested(fundTxs) {
                 let invested = 0;
                 fundTxs.forEach(t => {
                     if (t.fundTxType === "buy" || t.fundTxType === "dividend_reinvest" || t.fundTxType === "contribution") invested += t.amount;
                     else if (t.fundTxType === "sell") invested -= t.amount;
                 });
+                return invested;
+            }
+            function computeHoldingYears(fundTxs) {
+                const firstTxDate = fundTxs.length > 0 ? new Date(fundTxs[0].date) : null;
+                return firstTxDate ? Math.max((todayMs - firstTxDate.getTime()) / (365.25 * 86400000), 0) : 0;
+            }
+
+            const rowsHtml = [];
+            let totalValue = 0, totalInvested = 0, totalPl = 0;
+            let commonCurrency = null, mixedCurrency = false;
+
+            funds.forEach(f => {
+                const fundTxs = (fundTxsByFundId[f.id] || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+                const invested = computeInvested(fundTxs);
                 const value = (f.units || 0) * (f.currentNav || 0);
                 const pl = value - invested;
                 const returnPct = invested > 0 ? (pl / invested) * 100 : 0;
-                const firstTxDate = fundTxs.length > 0 ? new Date(fundTxs[0].date) : null;
-                const holdingYears = firstTxDate ? Math.max((todayMs - firstTxDate.getTime()) / (365.25 * 86400000), 0) : 0;
+                const holdingYears = computeHoldingYears(fundTxs);
                 let annualised = 0;
                 if (invested > 0 && value > 0 && holdingYears >= 0.08) {
                     annualised = (Math.pow(value / invested, 1 / holdingYears) - 1) * 100;
                 }
                 const ownerLabel = accountOwnerNamesText({ memberIds: f.ownerMemberIds });
                 const plColor = pl >= 0 ? "var(--income-color)" : "var(--expense-color)";
-                return `
+
+                totalValue += value; totalInvested += invested; totalPl += pl;
+                if (commonCurrency === null) commonCurrency = f.currency; else if (commonCurrency !== f.currency) mixedCurrency = true;
+
+                rowsHtml.push(`
                     <tr style="cursor:pointer;" data-click="editFund" data-id="${escapeHtml(f.id)}">
                         <td style="padding:8px 10px;">
                             <strong>${escapeHtml(f.name)}</strong><br>
@@ -2235,8 +2387,75 @@
                         <td style="padding:8px 10px; text-align:right; color:${plColor};">${returnPct.toFixed(2)}%</td>
                         <td style="padding:8px 10px; text-align:right;">${holdingYears >= 0.08 ? annualised.toFixed(2) + "%" : "-"}</td>
                         <td style="padding:8px 10px; text-align:right;">${holdingYears >= 0.08 ? holdingYears.toFixed(1) + " yrs" : "-"}</td>
-                    </tr>`;
-            }).join("");
+                    </tr>`);
+            });
+
+            // Orphaned rows: transactions tagged with a fundId that doesn't match any fund record
+            // still under this account (the fund was deleted, or its record moved/removed some
+            // other way). Grouped and shown as their own read-only row so their cash basis still
+            // counts toward the Totals row below — there's no live NAV left to value them at, so
+            // Value is shown at cost (= Invested, P/L "-") rather than guessed.
+            const liveFundIds = new Set(funds.map(f => f.id));
+            const orphanFundIds = Object.keys(fundTxsByFundId).filter(fid => !liveFundIds.has(fid));
+            orphanFundIds.forEach(fid => {
+                const fundTxs = fundTxsByFundId[fid].slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+                if (fundTxs.length === 0) return;
+                const invested = computeInvested(fundTxs);
+                // Recover a display name/currency from the orphaned transactions themselves —
+                // desc is saved as "<Type> — <Fund Name>" at the time it was created.
+                const rawDesc = fundTxs[0].desc || "";
+                const dashIdx = rawDesc.indexOf("—");
+                const name = dashIdx >= 0 ? rawDesc.slice(dashIdx + 1).trim() : "(unknown fund)";
+                const currency = fundTxs[0].currency || baseCurrency;
+                let units = 0;
+                fundTxs.forEach(t => {
+                    if (t.fundTxType === "buy" || t.fundTxType === "dividend_reinvest" || t.fundTxType === "contribution") units += (t.units || 0);
+                    else if (t.fundTxType === "sell") units -= (t.units || 0);
+                });
+
+                totalValue += invested; totalInvested += invested; // P/L 0 at cost basis, no live NAV
+                if (commonCurrency === null) commonCurrency = currency; else if (commonCurrency !== currency) mixedCurrency = true;
+
+                rowsHtml.push(`
+                    <tr style="opacity:0.7;">
+                        <td style="padding:8px 10px;">
+                            <strong>${escapeHtml(name)}</strong><br>
+                            <span style="font-size:0.68rem; color:var(--expense-color); font-weight:700;">⚠️ fund deleted</span>
+                        </td>
+                        <td style="padding:8px 10px;">-</td>
+                        <td style="padding:8px 10px; text-align:right;">${units.toFixed(4)}</td>
+                        <td style="padding:8px 10px; text-align:right;">-</td>
+                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(invested, currency)}</strong></td>
+                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested, currency)}</td>
+                        <td style="padding:8px 10px; text-align:right;">-</td>
+                        <td style="padding:8px 10px; text-align:right;">-</td>
+                        <td style="padding:8px 10px; text-align:right;">-</td>
+                        <td style="padding:8px 10px; text-align:right;">-</td>
+                    </tr>`);
+            });
+
+            if (rowsHtml.length === 0) {
+                wrap.innerHTML = '<p style="padding:12px 4px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No funds yet — tap "+ Fund" to add one.</p>';
+                return;
+            }
+
+            const totalPlColor = totalPl >= 0 ? "var(--income-color)" : "var(--expense-color)";
+            const totalReturnPct = totalInvested > 0 ? (totalPl / totalInvested) * 100 : 0;
+            // Totals only mean much as one number when every fund shares a currency — with a
+            // mixed basket, sum the figures at face value but flag it rather than implying a false
+            // single-currency total.
+            const totalsRow = `
+                <tr style="border-top:2px solid var(--border-color); font-weight:700;">
+                    <td style="padding:8px 10px;" colspan="2">Total${mixedCurrency ? ' <span style="font-weight:400; font-size:0.68rem; color:var(--text-muted);">(mixed currencies — summed at face value)</span>' : ""}</td>
+                    <td style="padding:8px 10px;"></td>
+                    <td style="padding:8px 10px;"></td>
+                    <td style="padding:8px 10px; text-align:right;">${formatCurrency(totalValue, commonCurrency || baseCurrency)}</td>
+                    <td style="padding:8px 10px; text-align:right;">${formatCurrency(totalInvested, commonCurrency || baseCurrency)}</td>
+                    <td style="padding:8px 10px; text-align:right; color:${totalPlColor};">${totalPl >= 0 ? "+" : ""}${formatCurrency(totalPl, commonCurrency || baseCurrency)}</td>
+                    <td style="padding:8px 10px; text-align:right; color:${totalPlColor};">${totalReturnPct.toFixed(2)}%</td>
+                    <td style="padding:8px 10px;"></td>
+                    <td style="padding:8px 10px;"></td>
+                </tr>`;
 
             wrap.innerHTML = `
                 <table style="width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
@@ -2254,7 +2473,7 @@
                             <th style="padding:6px 10px; text-align:right;">Holding</th>
                         </tr>
                     </thead>
-                    <tbody>${rows}</tbody>
+                    <tbody>${rowsHtml.join("")}${totalsRow}</tbody>
                 </table>`;
         }
 
@@ -2431,6 +2650,9 @@
 
         // Draws the checkbox list inside the Accounts modal for tagging Owner(s). Called whenever
         // the modal opens (create or edit) so it always reflects the latest member list.
+        // Styled as the same rounded-pill chip group used for a fund's Owner(s) picker
+        // (renderFundOwnerCheckboxes) — kept as one consistent "Owner(s)" design everywhere in
+        // the app rather than two different looks for what is conceptually the same control.
         function renderAccountMemberCheckboxes(selectedIds) {
             const wrap = document.getElementById("accountMemberCheckboxes");
             const selected = selectedIds || [];
@@ -2439,9 +2661,8 @@
                 return;
             }
             wrap.innerHTML = membersCache.map(m => `
-                <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; font-weight:600; cursor:pointer;">
-                    <input type="checkbox" class="acc-member-checkbox" value="${escapeHtml(m.id)}" ${selected.includes(m.id) ? "checked" : ""}>
-                    <span class="member-color-dot" style="background:${m.color};"></span>
+                <label style="display:flex; align-items:center; gap:4px; padding:6px 10px; border:1.5px solid var(--border-color); border-radius:20px; font-size:0.78rem; font-weight:600; cursor:pointer;">
+                    <input type="checkbox" class="acc-member-checkbox" value="${escapeHtml(m.id)}" ${selected.includes(m.id) ? "checked" : ""} style="accent-color:${escapeHtml(m.color)};">
                     ${escapeHtml(m.name)}
                 </label>
             `).join("");
@@ -2945,10 +3166,11 @@
                 const tx = txs.find(t => t.id === existingTxId);
                 if (!tx) return;
                 // Fund transactions (Buy/Sell/Dividend/Contribution) keep a linked fund's unit
-                // balance in sync — editing amount/units here would silently desync it, so these
-                // are managed from the Fund Holdings screen (delete + re-add) instead.
+                // balance in sync, so they can't go through the normal Edit Transaction modal
+                // below — tapping one instead opens the dedicated fund-transaction editor, which
+                // knows how to unwind the old unit delta and apply the new one correctly.
                 if (tx.fundId) {
-                    await handleFundTxRowTap(tx);
+                    await openEditFundTxModal(tx);
                     return;
                 }
 
@@ -5056,6 +5278,7 @@
             handleSaveFund: () => handleSaveFund(),
             handleDeleteFund: () => handleDeleteFund(),
             handleSaveFundTx: () => handleSaveFundTx(),
+            handleDeleteFundTxFromModal: () => handleDeleteFundTxFromModal(),
         };
 
         const CHANGE_ACTIONS = {
