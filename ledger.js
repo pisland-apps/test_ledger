@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v41";
+        const APP_VERSION = "v42";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -2128,6 +2128,18 @@
             }
         }
 
+        // The reverse direction: once Units is filled in, typing straight into Total Amount
+        // derives Price per Unit automatically (Total ÷ Units) — so either "Units then Price"
+        // or "Units then Total" works as an entry order, matching how a real contract note is
+        // usually read (sometimes it states the price, sometimes just the total consideration).
+        function recalcFundTxPriceFromTotal() {
+            const units = parseFloat(document.getElementById("fundTxUnits").value);
+            const total = parseFloat(document.getElementById("fundTxTotal").value);
+            if (!isNaN(units) && units > 0 && !isNaN(total)) {
+                document.getElementById("fundTxPrice").value = (total / units).toFixed(4);
+            }
+        }
+
         // Shows/hides + relabels the Units/Price row and the transfer-Account row based on which
         // fund transaction type is selected — this is exactly the field the user's reference
         // screenshots were missing ("this card short of 'amount transfer from/to which account'").
@@ -2338,9 +2350,18 @@
             });
 
             function computeInvested(fundTxs) {
+                // Cost-basis "Invested" = actual new principal the owner put in — Buy only (cash
+                // transferred in from another account), reduced by Sell (cash taken back out).
+                // Dividend (Reinvest) and Contribution add units without the owner injecting new
+                // cash for them (a reinvested dividend/employer contribution is a return ON the
+                // existing holding, not new principal), so they're deliberately excluded here and
+                // instead show up entirely as P/L — that's what makes P/L match "profit" in the
+                // everyday sense a user expects (e.g. RM100 Buy + RM100 Reinvest + RM100
+                // Contribution, all at NAV 1.00, should read as RM100 invested / RM200 profit, not
+                // RM300 invested / RM0 profit).
                 let invested = 0;
                 fundTxs.forEach(t => {
-                    if (t.fundTxType === "buy" || t.fundTxType === "dividend_reinvest" || t.fundTxType === "contribution") invested += t.amount;
+                    if (t.fundTxType === "buy") invested += t.amount;
                     else if (t.fundTxType === "sell") invested -= t.amount;
                 });
                 return invested;
@@ -5317,6 +5338,7 @@
             recalcTransferFxFromRate: () => recalcTransferFxFromRate(),
             recalcTransferFxFromDestAmount: () => recalcTransferFxFromDestAmount(),
             recalcFundTxTotal: () => recalcFundTxTotal(),
+            recalcFundTxPriceFromTotal: () => recalcFundTxPriceFromTotal(),
         };
 
         document.addEventListener("click", (e) => {

@@ -1043,3 +1043,36 @@ Owner(s) picker design
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v41.
+
+## v42: Add Transaction total→price auto-calc, Invested no longer
+counts Dividend (Reinvest) / Contribution as principal
+
+- **Total Amount → Price per Unit auto-calculates too.** The Add/Edit
+  Transaction form for funds already derived Total from Units × Price
+  as you typed either one. Typing straight into Total Amount (once
+  Units is filled in) now derives Price per Unit the same way
+  (`recalcFundTxPriceFromTotal()`, Total ÷ Units) — so either entry
+  order works, matching how a contract note is read (some state the
+  price, some just the total consideration).
+- **Fixed: "Invested" on the Fund Holdings table was counting
+  Dividend (Reinvest) and Contribution as new principal, inflating it
+  and making P/L look artificially small.** Example that motivated
+  this: RM100 Buy + RM100 Dividend (Reinvest) + RM100 Contribution (at
+  NAV 1.00, 100 units each) previously showed Invested RM300 / P/L
+  RM0 — even though only the RM100 Buy was actual new cash the owner
+  put in; the other RM200 was a return on the holding (a reinvested
+  dividend / an employer-style contribution), which a user reasonably
+  reads as profit, not principal. `computeInvested()` (used by both
+  live and orphaned-fund rows in `renderFundHoldingsTable()`) now only
+  counts Buy (+) and Sell (−) toward Invested — the same example now
+  correctly shows Invested RM100 / P/L +RM200. This only changes how
+  the Fund Holdings report presents existing data; no stored
+  transaction fields, IndexedDB schema, or the underlying account
+  balance calculation changed.
+- No IndexedDB schema/export-import format changes. Verified with
+  `node --check` plus the id/data-click/data-change/data-input
+  cross-reference script (0 missing, 0 dupes, 0 unbound handlers)
+  after every edit.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v42.
