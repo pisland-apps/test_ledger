@@ -468,6 +468,18 @@
             border-top: 1.5px dashed var(--border-color);
             text-align: right;
         }
+        /* Label portion ("Sub-Total · X" / "Group Total · X") of the two totals above — pulled
+           out into its own class so it reads as clearly as the amount next to it, instead of
+           blending into plain text. */
+        .config-list-subtotal .total-label,
+        .config-list-grouptotal .total-label {
+            color: var(--primary);
+            font-weight: 800;
+        }
+        .config-list-grouptotal .total-label {
+            font-size: 0.88rem;
+            letter-spacing: 0.01em;
+        }
         .sidebar-section-label {
             font-size: 0.7rem;
             font-weight: 800;
@@ -632,6 +644,18 @@
         .sidebar-member-item.active { background: #eef2ff; color: var(--primary); }
         .sidebar-member-item .member-row-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .sidebar-empty-hint { padding: 6px 20px 10px; font-size: 0.72rem; color: var(--text-muted); font-weight: 600; }
+
+        /* Sidebar "Add <type>" shortcuts under Financial Accounts — one per account
+           group/sub-group, only rendered for types that already have at least one account
+           (see renderSidebarAccountTypeShortcuts). Indented further than the parent button so
+           they read as a nested sub-list. */
+        .sidebar-account-type-item {
+            display: flex; align-items: center; gap: 10px; padding: 8px 20px 8px 40px; font-weight: 600;
+            font-size: 0.82rem; cursor: pointer; border: none; background: none; width: 100%;
+            text-align: left; color: var(--text-muted);
+        }
+        .sidebar-account-type-item:active { background: #f1f5f9; }
+        .sidebar-account-type-item .acct-type-plus { color: var(--primary); font-weight: 800; font-size: 0.95rem; }
 
         /* Color swatch picker (member form) */
         .color-swatch-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 4px; }
@@ -910,6 +934,7 @@
             <button class="sidebar-item" data-click="navigateToAccountsPage">
                 <span class="sidebar-item-icon">🏦</span> Financial Accounts
             </button>
+            <div id="sidebarAccountTypeShortcuts"></div>
             <button class="sidebar-item" data-click="navigateToNavUpdatePage">
                 <span class="sidebar-item-icon">📊</span> Daily NAV Update
             </button>

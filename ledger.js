@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v44";
+        const APP_VERSION = "v45";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -1783,6 +1783,7 @@
         async function refreshAfterAccountChange() {
             await renderApp();
             renderSidebarMembers();
+            renderSidebarAccountTypeShortcuts();
             if (!document.getElementById("page-accounts").classList.contains("hidden")) {
                 await renderAccountsPage();
             }
@@ -1845,13 +1846,13 @@
             // sub-groups configured — plain groups with no sub-division never show one).
             function flushSubgroupTotal() {
                 if (lastSubgroup) {
-                    html += `<div class="config-list-subtotal">Sub-Total · ${escapeHtml(lastSubgroup)}: <strong>${formatBalanceHTML(subgroupTotal, baseCurrency)}</strong></div>`;
+                    html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <strong>${formatBalanceHTML(subgroupTotal, baseCurrency)}</strong></div>`;
                 }
                 subgroupTotal = 0;
             }
             function flushGroupTotal() {
                 if (lastGroup !== null) {
-                    html += `<div class="config-list-grouptotal">Group Total · ${escapeHtml(lastGroup)}: <strong>${formatBalanceHTML(groupTotal, baseCurrency)}</strong></div>`;
+                    html += `<div class="config-list-grouptotal"><span class="total-label">Group Total · ${escapeHtml(lastGroup)}</span>: <strong>${formatBalanceHTML(groupTotal, baseCurrency)}</strong></div>`;
                 }
                 groupTotal = 0;
             }
@@ -2895,6 +2896,7 @@
         async function afterMembersChanged() {
             await loadMembersCache();
             renderSidebarMembers();
+            renderSidebarAccountTypeShortcuts();
             if (!document.getElementById("page-members").classList.contains("hidden")) {
                 await renderMembersPage();
             }
@@ -2982,6 +2984,51 @@
 
         function sidebarGoMember(el) {
             navigateToMemberPage(el.dataset.key);
+        }
+
+        // --- SIDEBAR: "ADD <TYPE>" SHORTCUTS UNDER FINANCIAL ACCOUNTS ---
+        // Flattens ACCOUNT_GROUPS + ACCOUNT_SUBGROUPS into the 7 concrete account "types" a
+        // user can file something under (Bank/Cash, Credit Card, Fixed Deposit, KWSP, ASNB,
+        // Unit Trust, Real Estate) — a group with sub-groups configured contributes one entry
+        // per sub-group instead of the bare group.
+        function accountTypeShortcutList() {
+            const list = [];
+            ACCOUNT_GROUPS.forEach(group => {
+                const subs = subgroupsForGroup(group);
+                if (subs.length === 0) {
+                    list.push({ label: group, group, subgroup: "" });
+                } else {
+                    subs.forEach(sub => list.push({ label: sub, group, subgroup: sub }));
+                }
+            });
+            return list;
+        }
+
+        // Renders one shortcut button per account type, but only for a type that already has
+        // at least one account filed under it — keeps the sidebar from listing every possible
+        // type up front and only offers quick shortcuts for types actually in use. Tapping one
+        // opens the Add Account modal pre-set to that group/sub-group.
+        async function renderSidebarAccountTypeShortcuts() {
+            const wrap = document.getElementById("sidebarAccountTypeShortcuts");
+            if (!wrap) return;
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const usedTypes = accountTypeShortcutList().filter(t =>
+                accounts.some(a => (a.group || DEFAULT_ACCOUNT_GROUP) === t.group && (a.subgroup || "") === t.subgroup)
+            );
+            wrap.innerHTML = usedTypes.map(t => `
+                <button class="sidebar-account-type-item" data-click="sidebarAddAccountOfType" data-group="${escapeHtml(t.group)}" data-subgroup="${escapeHtml(t.subgroup)}">
+                    <span class="acct-type-plus">+</span> Add ${escapeHtml(t.label)}
+                </button>
+            `).join("");
+        }
+
+        // Wired to each shortcut above — opens the Add Account modal with Group/Sub-Group
+        // already set, so the user only has to fill in the name/balance/currency.
+        function sidebarAddAccountOfType(el) {
+            closeSidebar();
+            openAccountFormModal();
+            document.getElementById("newAccGroup").value = el.dataset.group;
+            handleAccGroupChange(el.dataset.subgroup || "");
         }
 
         // --- FILTERED NET WORTH HELPERS (shared by the dashboard's per-member rows and the
@@ -5271,6 +5318,7 @@
             }
             await loadMembersCache();
             renderSidebarMembers();
+            renderSidebarAccountTypeShortcuts();
 
             window.history.replaceState({ view: "workspace" }, "");
             
@@ -5460,6 +5508,7 @@
                     await syncAndLoadCategories();
                     await loadMembersCache();
                     renderSidebarMembers();
+                    renderSidebarAccountTypeShortcuts();
                     renderApp();
                     alert("Backup imported successfully.");
                 } catch (err) {
@@ -5497,6 +5546,7 @@
             navigateToDataSecurityPage: () => navigateToDataSecurityPage(),
             navigateToMembersPage: () => navigateToMembersPage(),
             sidebarGoMember: (el) => sidebarGoMember(el),
+            sidebarAddAccountOfType: (el) => sidebarAddAccountOfType(el),
             openMemberFormModal: () => openMemberFormModal(),
             handleCreateMemberMobile: () => handleCreateMemberMobile(),
             deleteMemberFromForm: () => deleteMemberFromForm(),
