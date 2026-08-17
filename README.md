@@ -959,3 +959,33 @@ account sub-groups + totals, and a full Unit Trust account type
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v39.
+
+## v40: fixed Add/Edit Fund and Add Transaction modals not closing
+properly (mistaken for "not working" / could quit the app / could
+double-submit)
+
+- **Root cause.** The `popstate` handler that actually closes modals
+  (`closeModal()` just calls `history.back()`; a single `popstate`
+  listener does the real work of removing each modal's `active`
+  class) checks a **hardcoded whitelist** of modal ids
+  (`activeModals`). The two new v39 modals — `fundModal` (Add/Edit
+  Fund) and `fundTxModal` (Add Transaction) — were never added to
+  that list.
+- **Effect.** Tapping [x], Save Fund, Delete Fund, or Save
+  Transaction called `closeModal()` → `history.back()` → the
+  listener didn't recognize either modal as open, so it never
+  removed `active` (modal visibly stuck on screen) and instead fell
+  through to the underlying ledger page's own back-navigation —
+  which, with a thin mobile history stack, could consume the app's
+  last "back" step and exit it entirely. Because the modal never
+  visually closed, a user re-tapping Save (thinking the first tap
+  did nothing) fired the save handler again — hence the occasional
+  duplicate transactions.
+- **Fix:** added `"fundModal"` and `"fundTxModal"` to the
+  `activeModals` whitelist. One-line fix; every other part of the
+  Unit Trust save/delete logic was already correct.
+- Verified with `node --check` on both JS files plus the usual
+  cross-reference scripts before packaging.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v40.
