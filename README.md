@@ -1076,3 +1076,43 @@ counts Dividend (Reinvest) / Contribution as principal
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v42.
+
+## v43: fixed Return % spiking after a partial Sell — Sell proceeds no
+longer subtracted from Invested
+
+- **Bug:** `computeInvested()` treated a Sell's entire proceeds as
+  "cost recovered" (`invested -= sell.amount`), but a sale's proceeds
+  are a mix of returned principal *and* realised profit. Subtracting
+  the whole amount shrank the Invested denominator by more than the
+  real cost sold, so Return % jumped right after a partial sell for
+  no economic reason — e.g. RM200 invested, +RM1,015.28 P/L (507.64%)
+  became +RM1,011.68 P/L but 778.21% after selling just RM70 worth of
+  units, even though almost nothing had actually changed. On a
+  near-full sell this could even push Invested negative.
+- **Fix:** switched to a total-cost-basis method. `computeInvested()`
+  now returns `{ invested, recovered }` — Invested only accumulates
+  Buy amounts and is never reduced by a Sell; Sell proceeds accumulate
+  separately as `recovered`. P/L is now `value + recovered - invested`
+  (current value, plus everything already sold off and taken out,
+  minus principal ever put in) and `Return % = P/L / invested`. Same
+  worked example: after the RM70 sell, P/L is now +RM709.66 and Return
+  % is 354.83% — matching a plain total-cost-method calculation by
+  hand — instead of spiking. Applied to both the live-fund rows and
+  the orphaned/deleted-fund rows in `renderFundHoldingsTable()`; the
+  orphan rows' displayed "Value" (no live NAV survives fund deletion)
+  is now approximated as remaining cost basis (`invested - recovered`,
+  floored at 0) so they still contribute ~0 to total P/L rather than
+  skewing the Totals row.
+- Buying back into a fund after selling it will now add to Invested
+  again on top of whatever was bought before — Invested is a running
+  total of principal ever contributed, not a live "money still in the
+  fund" figure. That's a deliberate trade-off for the total-cost
+  method's simplicity and stability; it does mean Invested can now
+  read higher than the fund's live value for a fund that's been mostly
+  sold down and not replaced.
+- No IndexedDB schema/export-import format changes — this only
+  changes how the Fund Holdings report computes and presents derived
+  figures from existing transaction data. Verified with `node --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v43.

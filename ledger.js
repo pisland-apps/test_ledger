@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v42";
+        const APP_VERSION = "v43";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -2350,8 +2350,16 @@
             });
 
             function computeInvested(fundTxs) {
-                // Cost-basis "Invested" = actual new principal the owner put in — Buy only (cash
-                // transferred in from another account), reduced by Sell (cash taken back out).
+                // Total-cost-basis "Invested" = cumulative principal the owner has ever put in —
+                // Buy only (cash transferred in from another account). Unlike an earlier version of
+                // this function, a Sell no longer subtracts from Invested: a sale's proceeds are a
+                // mix of returned cost AND realised profit, and treating the whole proceeds as "cost
+                // recovered" artificially shrinks the denominator, making Return % jump on every
+                // partial sell (e.g. selling units worth mostly profit could even push Invested
+                // negative on a near-full sell). Sell proceeds are tracked separately as
+                // `recovered` and folded into P/L instead, so Invested always reflects the true
+                // amount ever contributed and Return % stays stable across partial sells.
+                //
                 // Dividend (Reinvest) and Contribution add units without the owner injecting new
                 // cash for them (a reinvested dividend/employer contribution is a return ON the
                 // existing holding, not new principal), so they're deliberately excluded here and
@@ -2359,12 +2367,12 @@
                 // everyday sense a user expects (e.g. RM100 Buy + RM100 Reinvest + RM100
                 // Contribution, all at NAV 1.00, should read as RM100 invested / RM200 profit, not
                 // RM300 invested / RM0 profit).
-                let invested = 0;
+                let invested = 0, recovered = 0;
                 fundTxs.forEach(t => {
                     if (t.fundTxType === "buy") invested += t.amount;
-                    else if (t.fundTxType === "sell") invested -= t.amount;
+                    else if (t.fundTxType === "sell") recovered += t.amount;
                 });
-                return invested;
+                return { invested, recovered };
             }
             function computeHoldingYears(fundTxs) {
                 const firstTxDate = fundTxs.length > 0 ? new Date(fundTxs[0].date) : null;
@@ -2372,24 +2380,29 @@
             }
 
             const rowsHtml = [];
-            let totalValue = 0, totalInvested = 0, totalPl = 0;
+            let totalValue = 0, totalInvested = 0, totalPl = 0, totalRecovered = 0;
             let commonCurrency = null, mixedCurrency = false;
 
             funds.forEach(f => {
                 const fundTxs = (fundTxsByFundId[f.id] || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
-                const invested = computeInvested(fundTxs);
+                const { invested, recovered } = computeInvested(fundTxs);
                 const value = (f.units || 0) * (f.currentNav || 0);
-                const pl = value - invested;
+                // P/L is total return: current value PLUS everything already sold off and taken
+                // out, minus the principal ever put in. This is what stops Return % from jumping
+                // after a partial sell — the cash you already pocketed still counts toward P/L
+                // exactly as it should, it just no longer shrinks Invested to do so.
+                const pl = value + recovered - invested;
                 const returnPct = invested > 0 ? (pl / invested) * 100 : 0;
                 const holdingYears = computeHoldingYears(fundTxs);
                 let annualised = 0;
-                if (invested > 0 && value > 0 && holdingYears >= 0.08) {
-                    annualised = (Math.pow(value / invested, 1 / holdingYears) - 1) * 100;
+                const growth = value + recovered;
+                if (invested > 0 && growth > 0 && holdingYears >= 0.08) {
+                    annualised = (Math.pow(growth / invested, 1 / holdingYears) - 1) * 100;
                 }
                 const ownerLabel = accountOwnerNamesText({ memberIds: f.ownerMemberIds });
                 const plColor = pl >= 0 ? "var(--income-color)" : "var(--expense-color)";
 
-                totalValue += value; totalInvested += invested; totalPl += pl;
+                totalValue += value; totalInvested += invested; totalPl += pl; totalRecovered += recovered;
                 if (commonCurrency === null) commonCurrency = f.currency; else if (commonCurrency !== f.currency) mixedCurrency = true;
 
                 rowsHtml.push(`
@@ -2421,7 +2434,7 @@
             orphanFundIds.forEach(fid => {
                 const fundTxs = fundTxsByFundId[fid].slice().sort((a, b) => new Date(a.date) - new Date(b.date));
                 if (fundTxs.length === 0) return;
-                const invested = computeInvested(fundTxs);
+                const { invested, recovered } = computeInvested(fundTxs);
                 // Recover a display name/currency from the orphaned transactions themselves —
                 // desc is saved as "<Type> — <Fund Name>" at the time it was created.
                 const rawDesc = fundTxs[0].desc || "";
@@ -2434,7 +2447,12 @@
                     else if (t.fundTxType === "sell") units -= (t.units || 0);
                 });
 
-                totalValue += invested; totalInvested += invested; // P/L 0 at cost basis, no live NAV
+                // No live NAV survives fund deletion, so there's no real "Value" to show — approximate
+                // it as remaining cost basis (invested so far, minus whatever's already been sold
+                // off) so the row still contributes ~0 P/L to the totals below rather than silently
+                // inflating or deflating them.
+                const orphanValue = Math.max(invested - recovered, 0);
+                totalValue += orphanValue; totalInvested += invested; totalRecovered += recovered;
                 if (commonCurrency === null) commonCurrency = currency; else if (commonCurrency !== currency) mixedCurrency = true;
 
                 rowsHtml.push(`
@@ -2446,7 +2464,7 @@
                         <td style="padding:8px 10px;">-</td>
                         <td style="padding:8px 10px; text-align:right;">${units.toFixed(4)}</td>
                         <td style="padding:8px 10px; text-align:right;">-</td>
-                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(invested, currency)}</strong></td>
+                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(orphanValue, currency)}</strong></td>
                         <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested, currency)}</td>
                         <td style="padding:8px 10px; text-align:right;">-</td>
                         <td style="padding:8px 10px; text-align:right;">-</td>
