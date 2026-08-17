@@ -470,15 +470,26 @@
         }
         /* Label portion ("Sub-Total · X" / "Group Total · X") of the two totals above — grey/
            muted, matching the small currency/type badges elsewhere (e.g. the "SGD" tag) rather
-           than standing out in the primary color. */
+           than standing out in the primary color. Same color and font-size as the amount next
+           to it (.total-amount below) so the whole line reads as one consistent grey style. */
         .config-list-subtotal .total-label,
         .config-list-grouptotal .total-label {
             color: var(--text-muted);
             font-weight: 800;
         }
-        .config-list-grouptotal .total-label {
-            font-size: 0.88rem;
-            letter-spacing: 0.01em;
+        /* Amount portion — styled as the same grey pill/badge look used for currency & account-
+           type tags (e.g. "SGD"): light shaded background, muted grey text, rounded corners.
+           Deliberately left at the same font-size as .total-label (no override) so label and
+           amount match exactly within each row. */
+        .config-list-subtotal .total-amount,
+        .config-list-grouptotal .total-amount {
+            display: inline-block;
+            background: #e2e8f0;
+            color: var(--text-muted);
+            font-weight: 800;
+            border-radius: 6px;
+            padding: 2px 8px;
+            margin-left: 2px;
         }
         .sidebar-section-label {
             font-size: 0.7rem;

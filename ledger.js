@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v46";
+        const APP_VERSION = "v47";
         const APP_VERSION_DATE = "2026-08-17";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -1869,13 +1869,13 @@
             // sub-groups configured — plain groups with no sub-division never show one).
             function flushSubgroupTotal() {
                 if (lastSubgroup) {
-                    html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <strong>${formatBalanceHTML(subgroupTotal, baseCurrency)}</strong></div>`;
+                    html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <span class="total-amount">${formatBalanceHTML(subgroupTotal, baseCurrency)}</span></div>`;
                 }
                 subgroupTotal = 0;
             }
             function flushGroupTotal() {
                 if (lastGroup !== null) {
-                    html += `<div class="config-list-grouptotal"><span class="total-label">Group Total · ${escapeHtml(lastGroup)}</span>: <strong>${formatBalanceHTML(groupTotal, baseCurrency)}</strong></div>`;
+                    html += `<div class="config-list-grouptotal"><span class="total-label">Group Total · ${escapeHtml(lastGroup)}</span>: <span class="total-amount">${formatBalanceHTML(groupTotal, baseCurrency)}</span></div>`;
                 }
                 groupTotal = 0;
             }
