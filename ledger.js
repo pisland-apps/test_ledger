@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v55";
+        const APP_VERSION = "v62";
         const APP_VERSION_DATE = "2026-08-18";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -71,6 +71,11 @@
         // { group: "Investment", subgroup: "Fixed Deposit", label: "Fixed Deposit" }. null shows
         // every account, same as opening the page from "Financial Accounts" directly.
         let accountsPageTypeFilter = null;
+        // v62: which accounts' fund/currency/FD-placement subrows are expanded on the Accounts
+        // page — collapsed by default (empty Set) so an account with many holdings doesn't push
+        // the rest of the list down; persists only for this session (reset on reload), same as
+        // every other page-local UI state in this file.
+        let expandedAccountSubrows = new Set();
         let db;
 
         // Escapes a value for safe insertion into HTML text content or a double-quoted HTML
@@ -1316,15 +1321,25 @@
             renderNavUpdatePage();
         }
 
-        function handleLedgerBackClick() {
+        // v62: none of these branches restored scroll position after re-rendering the page being
+        // returned to — they navigated back to the top every time regardless of where in a long
+        // Accounts/Member/Savings list the user had tapped from. workspaceScrollY already holds
+        // the right value (captured by navigateToLedgerPage when the row was tapped); it just
+        // was never applied here. Made async so each branch can await its re-render before
+        // scrolling — scrolling before the list has re-rendered would target a not-yet-full-
+        // height page and land in the wrong place (same reasoning as navigateToWorkspace above).
+        async function handleLedgerBackClick() {
             if (ledgerBackToPage === "savings") {
                 showPage("page-savings");
+                window.scrollTo(0, workspaceScrollY);
             } else if (ledgerBackToPage === "accounts") {
                 showPage("page-accounts");
-                renderAccountsPage();
+                await renderAccountsPage();
+                window.scrollTo(0, workspaceScrollY);
             } else if (ledgerBackToPage === "member") {
                 showPage("page-member");
-                renderMemberPage();
+                await renderMemberPage();
+                window.scrollTo(0, workspaceScrollY);
             } else {
                 navigateToWorkspace();
             }
@@ -1479,11 +1494,23 @@
         }
 
         // --- ACCOUNTS MANAGER SETUP (WITH INTEGRATED EDITOR) ---
+        // Shared by every entry point that opens the Accounts modal (the "+" FAB, "+ Add
+        // Account" on a member's page, and editAccount) — (re)populates the Currency <option>s
+        // from fxRates and selects preselect (falling back to baseCurrency). Previously each
+        // entry point duplicated this population inline, and resetAccountForm() — used by the
+        // member-page "+ Add Account" flow — never populated it at all, just set .value on
+        // whatever options happened to already be in the select (often none, leaving the field
+        // blank with no dropdown arrow the first time a session went straight to a member page).
+        function populateNewAccountCurrencySelect(preselect) {
+            const select = document.getElementById("newAccCurrency");
+            select.innerHTML = "";
+            Object.keys(fxRates).forEach(c => { select.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
+            select.value = preselect || baseCurrency;
+        }
+
         // Opens the Accounts modal in "create" mode — used by the "+" FAB on the Accounts page.
         function openAccountFormModal() {
-            const select = document.getElementById("newAccCurrency"); select.innerHTML = "";
-            Object.keys(fxRates).forEach(c => { select.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
-            select.value = baseCurrency;
+            populateNewAccountCurrencySelect(baseCurrency);
             resetAccountForm();
             renderAccountMemberCheckboxes([]);
             openModal("accountsModal");
@@ -1676,14 +1703,17 @@
                 row.style.display = "none";
                 sel.innerHTML = "";
             } else {
-                row.style.display = "flex";
+                // block (not flex) — this row holds a <label> above a <select>, meant to stack
+                // vertically like every other .form-row in this form. flex was laying them out
+                // side-by-side instead, squeezing the select down to its min-content width.
+                row.style.display = "block";
                 sel.innerHTML = `<option value="">(No Sub-Group)</option>` + list.map(s => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("");
                 sel.value = (preselectSubgroup && list.includes(preselectSubgroup)) ? preselectSubgroup : "";
             }
 
             const linkedRow = document.getElementById("newAccLinkedAccountRow");
             if (group === "Bank Loan") {
-                linkedRow.style.display = "flex";
+                linkedRow.style.display = "block";
                 await populateLinkedAccountSelect(preselectLinkedAccountId);
             } else {
                 linkedRow.style.display = "none";
@@ -1692,7 +1722,7 @@
 
             const netWorthRow = document.getElementById("newAccNetWorthRow");
             if (group === "Real Estate") {
-                netWorthRow.style.display = "flex";
+                netWorthRow.style.display = "block";
                 document.getElementById("newAccIncludeNetWorth").value = preselectIncludeInNetWorth === "no" ? "no" : "yes";
             } else {
                 netWorthRow.style.display = "none";
@@ -1721,7 +1751,7 @@
             document.getElementById("newAccGroup").value = DEFAULT_ACCOUNT_GROUP;
             handleAccGroupChange();
             document.getElementById("newAccBal").value = "0";
-            document.getElementById("newAccCurrency").value = baseCurrency;
+            populateNewAccountCurrencySelect(baseCurrency);
             document.getElementById("accountFormHeaderTitle").textContent = "Create New Account";
             document.getElementById("accFormSubmitBtn").textContent = "Create Account";
             document.getElementById("accFormCancelBtn").style.display = "none";
@@ -1910,7 +1940,7 @@
 
         async function renderAccountsPage() {
             await populateDefaultPaymentAccountSelect();
-            const { accounts, nativeBalances } = await computeAccountBalances();
+            const { accounts, txs, nativeBalances } = await computeAccountBalances();
             // Fetched once up front (not per-account inside the loop below) and grouped by
             // accountId, so each Unit Trust account row can list its individual fund holdings
             // (e.g. "HLBB Value Fund — RM147.20") directly on the Accounts page without the user
@@ -1918,6 +1948,15 @@
             const allFunds = await readAllDB(STORES.FUNDS);
             const fundsByAccountId = {};
             allFunds.forEach(f => { (fundsByAccountId[f.accountId] = fundsByAccountId[f.accountId] || []).push(f); });
+            // Active Fixed Deposit placements, grouped by the account holding them (v55): every
+            // still-open placement transfer (fdMaturityDate set, not yet fdResolved) into an FD
+            // account, so each FD account row can list its individual tranches right here — same
+            // idea as the fund/currency subrows above — instead of requiring a tap into that
+            // account's own Activity page just to see what's actually placed.
+            const fdPlacementsByAccountId = {};
+            txs.filter(t => t.type === "transfer" && t.fdMaturityDate && !t.fdResolved && t.dest).forEach(t => {
+                (fdPlacementsByAccountId[t.dest] = fdPlacementsByAccountId[t.dest] || []).push(t);
+            });
             const filter = accountsPageTypeFilter;
             const filtered = filter
                 ? accounts.filter(a => (a.group || DEFAULT_ACCOUNT_GROUP) === filter.group && (a.subgroup || "") === (filter.subgroup || ""))
@@ -1928,6 +1967,13 @@
             const hintEl = document.getElementById("accountsPageFilterHint");
             if (titleEl) titleEl.textContent = filter ? filter.label : "All Accounts";
             if (hintEl) hintEl.classList.toggle("hidden", !filter);
+
+            // v62: a sidebar shortcut (e.g. "Current Account") is meant to show only that one
+            // slice — the Default Payment Account selector is unrelated to any single group/
+            // sub-group, so it's hidden whenever a filter narrowed the list, not just shown
+            // unconditionally at the top of every Accounts view.
+            document.getElementById("defaultPaymentAccountSection").classList.toggle("hidden", !!filter);
+            document.getElementById("defaultPaymentAccountRow").classList.toggle("hidden", !!filter);
 
             let html = "";
             let lastGroup = null;
@@ -1942,8 +1988,15 @@
                 }
                 subgroupTotal = 0;
             }
+            // v62: when the sidebar filter has narrowed the list down to one specific sub-group
+            // (e.g. "Current Account" within "Bank/Cash"), every account shown already belongs to
+            // that one sub-group, so the Group Total below would just repeat the exact same
+            // number as the Sub-Total above it under a confusingly broader label ("Group Total ·
+            // Bank/Cash" when only Current Account accounts are actually shown). Suppressed in
+            // that case; a whole-group filter with no sub-groups (e.g. "Real Estate") still shows
+            // its Group Total as normal, since that's the only total on screen for it.
             function flushGroupTotal() {
-                if (lastGroup !== null) {
+                if (lastGroup !== null && !(filter && filter.subgroup)) {
                     html += `<div class="config-list-grouptotal"><span class="total-label">Group Total · ${escapeHtml(lastGroup)}</span>: <span class="total-amount">${formatBalanceHTML(groupTotal, baseCurrency)}</span></div>`;
                 }
                 groupTotal = 0;
@@ -2013,14 +2066,11 @@
                     ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
-                html += `
-                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
-                        <span>
-                            <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
-                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}
-                        </span>
-                        <span style="color:var(--text-muted);">›</span>
-                    </div>`;
+                // v62: subrows collapsed by default (see expandedAccountSubrows) — built into
+                // subrowsHtml first (before the main row, so the row can show a collapse/expand
+                // toggle only when there's actually something to collapse), then wrapped in one
+                // collapsible container appended right after the row.
+                let subrowsHtml = "";
 
                 // Multi-Currency account (v55): list each currency basket right under the
                 // account row, one per line (same subrow pattern as Unit Trust funds below) —
@@ -2030,11 +2080,22 @@
                     const baskets = nativeBalances[a.id] || {};
                     const currencies = Object.keys(baskets).sort();
                     if (currencies.length > 0) {
-                        html += currencies.map(curr => `
+                        // Base-currency equivalent under each currency subrow, same
+                        // .converted-subtext pattern used on the Foreign Cash Activity page
+                        // (v58). Name+amount combined into the left span with the chevron alone
+                        // on the right (v60 fix, same as the Unit Trust fund subrow above) —
+                        // the earlier v59 version still split name (left) from amount+chevron
+                        // (right), which left the same big empty-middle gap it was meant to fix.
+                        subrowsHtml += currencies.map(curr => {
+                            const subText = curr !== baseCurrency
+                                ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(baskets[curr], curr, baseCurrency), baseCurrency)}</span>`
+                                : "";
+                            return `
                             <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(a.id)}" data-currency="${escapeHtml(curr)}" data-back="accounts">
-                                <span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span></span>
+                                <span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span>${subText}</span>
                                 <span style="color:var(--text-muted);">›</span>
-                            </div>`).join("");
+                            </div>`;
+                        }).join("");
                     }
                 }
 
@@ -2043,7 +2104,7 @@
                 if (a.type === "unittrust") {
                     const funds = (fundsByAccountId[a.id] || []).slice().sort((x, y) => x.name.localeCompare(y.name));
                     if (funds.length > 0) {
-                        html += funds.map(f => {
+                        subrowsHtml += funds.map(f => {
                             const value = (f.units || 0) * (f.currentNav || 0);
                             return `
                                 <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}" data-back="accounts">
@@ -2053,12 +2114,78 @@
                         }).join("");
                     }
                 }
+
+                // Fixed Deposit account (v55): list each still-open placement tranche right
+                // under the account row — same subrow pattern as funds/currencies above — so
+                // every active "Fixed Deposit Placement" across every FD account is visible
+                // without tapping into each account's own Activity page. Tapping a placement
+                // opens it straight in the transaction editor, same as tapping it there would.
+                if (a.type === "fd") {
+                    const placements = (fdPlacementsByAccountId[a.id] || []).slice().sort((x, y) => new Date(y.date) - new Date(x.date));
+                    if (placements.length > 0) {
+                        subrowsHtml += placements.map(t => {
+                            const isOverdue = new Date(t.fdMaturityDate + "T00:00:00").getTime() < new Date(new Date().toISOString().split("T")[0] + "T00:00:00").getTime();
+                            const statusBadge = isOverdue
+                                ? `<span style="font-size:0.62rem; font-weight:700; color:#b91c1c; background:#fee2e2; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">⏰ Due</span>`
+                                : `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">🟢 Active</span>`;
+                            const refText = t.fdReferenceNo ? ` (${escapeHtml(t.fdReferenceNo)})` : '';
+                            return `
+                                <div class="config-item fund-subrow" style="cursor:pointer;" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
+                                    <span>
+                                        Fixed Deposit Placement${refText}${statusBadge}
+                                        <br><span style="color:var(--text-muted); font-weight:600;">${formatBalanceHTML(t.amount, t.currency)} · Matures ${escapeHtml(t.fdMaturityDate)}</span>
+                                    </span>
+                                    <span style="color:var(--text-muted);">›</span>
+                                </div>`;
+                        }).join("");
+                    }
+                }
+
+                const isExpanded = expandedAccountSubrows.has(a.id);
+                // Caret toggle only rendered when there's actually a subrow list to collapse —
+                // stopPropagation isn't needed here since the click dispatcher resolves the
+                // nearest [data-click] ancestor via closest(), so tapping the caret fires only
+                // toggleAccountSubrows, not the row's own navigateToLedgerPage.
+                const subrowToggleHTML = subrowsHtml
+                    ? `<button type="button" class="subrow-toggle-btn" data-click="toggleAccountSubrows" data-id="${escapeHtml(a.id)}" aria-label="${isExpanded ? "Collapse" : "Expand"} details" title="${isExpanded ? "Collapse" : "Expand"} details">${isExpanded ? "▾" : "▸"}</button>`
+                    : "";
+
+                html += `
+                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
+                        <span>
+                            <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
+                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}
+                        </span>
+                        <span style="display:flex; align-items:center; gap:6px;">
+                            ${subrowToggleHTML}
+                            <span style="color:var(--text-muted);">›</span>
+                        </span>
+                    </div>`;
+
+                if (subrowsHtml) {
+                    html += `<div id="acctSubrows-${escapeHtml(a.id)}" class="${isExpanded ? "" : "hidden"}">${subrowsHtml}</div>`;
+                }
             });
             flushSubgroupTotal();
             flushGroupTotal();
             document.getElementById("accountsPageList").innerHTML = html || (filter
                 ? `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No ${escapeHtml(filter.label)} accounts yet.</p>`
                 : `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts yet — tap + to add one.</p>`);
+        }
+
+        // Wired to the ▸/▾ caret on an Accounts-page row that has fund/currency/FD-placement
+        // subrows (v62) — toggles just that one account's subrow container + caret glyph
+        // directly in the DOM rather than re-rendering the whole list, so the rest of the page
+        // (scroll position, any other account's expand state) is undisturbed.
+        function toggleAccountSubrows(el) {
+            const id = el.dataset.id;
+            const container = document.getElementById(`acctSubrows-${id}`);
+            if (!container) return;
+            const nowExpanded = container.classList.toggle("hidden") === false;
+            if (nowExpanded) expandedAccountSubrows.add(id); else expandedAccountSubrows.delete(id);
+            el.textContent = nowExpanded ? "▾" : "▸";
+            el.setAttribute("aria-label", `${nowExpanded ? "Collapse" : "Expand"} details`);
+            el.setAttribute("title", `${nowExpanded ? "Collapse" : "Expand"} details`);
         }
 
         // Shared by both entry points: the ✏️ icon on an account's Activity page, and (kept for
@@ -2069,8 +2196,7 @@
             const account = accounts.find(a => a.id === id);
             if (!account) return;
 
-            const select = document.getElementById("newAccCurrency"); select.innerHTML = "";
-            Object.keys(fxRates).forEach(c => { select.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
+            populateNewAccountCurrencySelect();
 
             document.getElementById("editAccountId").value = account.id;
             document.getElementById("newAccName").value = account.name;
@@ -2139,14 +2265,15 @@
             renderFundActivityPage();
         }
 
-        function handleFundActivityBackClick() {
+        async function handleFundActivityBackClick() {
             if (fundActivityBackToPage === "ledger") {
                 showPage("page-ledger");
-                renderApp();
+                await renderApp();
             } else {
                 showPage("page-accounts");
-                renderAccountsPage();
+                await renderAccountsPage();
             }
+            window.scrollTo(0, workspaceScrollY);
         }
 
         function editFundFromActivityHeader() {
@@ -2214,14 +2341,15 @@
             renderCurrencyActivityPage();
         }
 
-        function handleCurrencyActivityBackClick() {
+        async function handleCurrencyActivityBackClick() {
             if (currencyActivityBackToPage === "accounts") {
                 showPage("page-accounts");
-                renderAccountsPage();
+                await renderAccountsPage();
             } else {
                 showPage("page-ledger");
-                renderApp();
+                await renderApp();
             }
+            window.scrollTo(0, workspaceScrollY);
         }
 
         // Renders the Currency Activity page: a native-currency balance banner (this basket's
@@ -3532,7 +3660,12 @@
                             : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
 
                 let balSummary;
-                if (a.type === "fd" || a.type === "multi" || a.type === "unittrust") {
+                if (a.type === "multi") {
+                    // Multi-Currency accounts (v55 on the global Accounts page, ported here now):
+                    // show the one converted Base total rather than a joined "+" string of native
+                    // amounts — this page had been left on the pre-v55 joined-string format.
+                    balSummary = `<strong>Base ${escapeHtml(baseCurrency)}: ${formatBalanceHTML(accountBaseValue(a, nativeBalances), baseCurrency)}</strong>`;
+                } else if (a.type === "fd" || a.type === "unittrust") {
                     const baskets = nativeBalances[a.id];
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
@@ -3547,9 +3680,16 @@
                     ? ` · <span style="color:#92400e; font-weight:600;">🔗 ${escapeHtml(linkedAcc.name)}</span>`
                     : "";
 
+                // Real Estate (v53): same "excluded from Net Worth" flag renderAccountsPage()
+                // already shows on the global Accounts page — was missing here, so a property
+                // marked Exclude looked identical to an included one on a member's own page.
+                const excludedLine = a.includeInNetWorth === false
+                    ? ` · <span style="color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
+                    : "";
+
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="member">
-                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}</span>
+                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}${excludedLine}</span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
             });
@@ -5397,16 +5537,27 @@
                 ledgerListEl.style.display = "";
                 ledgerListEl.innerHTML = currencies.length === 0
                     ? '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No funds yet — tap + to log an opening balance or transaction.</p>'
-                    : currencies.map(curr => `
+                    : currencies.map(curr => {
+                        // Base-currency equivalent shown under the name+amount line (same
+                        // .converted-subtext pattern used on the account's own ledger rows), so
+                        // it's clear at a glance what each foreign balance is worth in baseCurrency
+                        // without having to open that currency's own Activity log.
+                        const subText = curr !== baseCurrency
+                            ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(baskets[curr], curr, baseCurrency), baseCurrency)}</span>`
+                            : "";
+                        // Name and amount combined into one item-left block (Unit Trust fund
+                        // subrow style) rather than split across item-left/item-right — with only
+                        // a short currency code on the left and a short amount on the right,
+                        // .ledger-item's justify-content:space-between left a wide empty gap
+                        // between them.
+                        return `
                         <div class="ledger-item" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(viewingMultiAcc.id)}" data-currency="${escapeHtml(curr)}" data-back="ledger">
-                            <div class="item-left">
-                                <span class="item-name">${escapeHtml(curr)}</span>
-                                <span class="item-meta">Tap to view this currency's Activity log</span>
+                            <div class="item-left" style="max-width:100%;">
+                                <span class="item-name">${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span></span>
+                                ${subText}
                             </div>
-                            <div class="item-right">
-                                <div class="item-value" style="font-weight:bold;">${formatBalanceHTML(baskets[curr], curr)}</div>
-                            </div>
-                        </div>`).join("");
+                        </div>`;
+                    }).join("");
             } else {
                 ledgerListEl.style.display = "";
                 ledgerListEl.innerHTML = ledgerHTML || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No matches found.</p>';
@@ -6039,6 +6190,7 @@
             sidebarGoMember: (el) => sidebarGoMember(el),
             sidebarFilterAccountsByType: (el) => sidebarFilterAccountsByType(el),
             clearAccountsPageTypeFilter: () => clearAccountsPageTypeFilter(),
+            toggleAccountSubrows: (el) => toggleAccountSubrows(el),
             openMemberFormModal: () => openMemberFormModal(),
             handleCreateMemberMobile: () => handleCreateMemberMobile(),
             deleteMemberFromForm: () => deleteMemberFromForm(),

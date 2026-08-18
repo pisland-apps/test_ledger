@@ -1256,3 +1256,27 @@ account)" mislabel fixed for Opening Balance entries
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v55.
+
+## v56: Fixed Deposit accounts now list active placements directly on
+the Accounts page
+
+- **Accounts page**: each Fixed Deposit account row now lists its own
+  still-open placement tranches directly underneath — e.g. "Fixed
+  Deposit Placement (3-65019-0008812-0) 🟢 Active / RM50,000.00 ·
+  Matures 2027-07-27" — same subrow pattern already used for Unit
+  Trust funds and Multi-Currency currency baskets. This means the
+  sidebar's "Financial Accounts → Fixed Deposit" shortcut (which
+  already listed every FD account together, unchanged since v55) now
+  also surfaces every individual placement across every FD account in
+  that same one screen, instead of just each account's running total.
+- Only still-open placements show here (fdMaturityDate set, not yet
+  fdResolved) — a placement that's been renewed or withdrawn drops off
+  once resolved, exactly like the maturity-reminder banner's own
+  filter. Tapping a placement opens it straight in the transaction
+  editor.
+- Purely additive to the FD account row — the account's own Base/
+  currency total, the maturity-reminder banner, and the FD Activity
+  page (with its per-row maturity date, from v55) are all unchanged.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v56.
