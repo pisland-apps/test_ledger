@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v62";
-        const APP_VERSION_DATE = "2026-08-18";
+        const APP_VERSION = "v88";
+        const APP_VERSION_DATE = "2026-08-21";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -34,7 +34,11 @@
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
         // saved before this existed default to "Bank/Cash" wherever a group is read.
-        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate", "Bank Loan"];
+        // v70: added Account Payable / Account Receivable as their own groups (not subgroups of
+        // one combined group) — AP and AR move in opposite directions financially, so a single
+        // netted group total would be misleading; keeping them apart mirrors how Bank Loan is
+        // already kept apart from Bank/Cash.
+        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate", "Bank Loan", "Account Payable", "Account Receivable"];
         const DEFAULT_ACCOUNT_GROUP = ACCOUNT_GROUPS[0];
 
         // Sub-groups (v39) — optional, per-Group breakdown so e.g. "Investment" can be split
@@ -73,9 +77,22 @@
         let accountsPageTypeFilter = null;
         // v62: which accounts' fund/currency/FD-placement subrows are expanded on the Accounts
         // page — collapsed by default (empty Set) so an account with many holdings doesn't push
-        // the rest of the list down; persists only for this session (reset on reload), same as
-        // every other page-local UI state in this file.
+        // the rest of the list down. v64: keys are "<filter>__<accountId>" (see
+        // subrowFilterKeyPrefix in renderAccountsPage), not just the raw account id, so the same
+        // account's expand state is independent between the unfiltered "All Accounts" list and
+        // any sidebar-filtered view (e.g. "Unit Trust") that also shows that account. v65: now
+        // persisted to the SETTINGS store (key "expandedAccountSubrows", value: array of keys) —
+        // saved on every toggle, loaded in bootstrap(), and included in backup export/import — so
+        // it survives a reload and carries over to a new device, instead of resetting each session.
         let expandedAccountSubrows = new Set();
+
+        // Fire-and-forget persist of expandedAccountSubrows to the SETTINGS store. Not awaited by
+        // callers (toggleAccountSubrows stays synchronous for instant UI feedback) — worst case on
+        // a write failure is the expand state not surviving a reload, which isn't destructive.
+        function saveExpandedAccountSubrows() {
+            writeDB(STORES.SETTINGS, { key: "expandedAccountSubrows", value: Array.from(expandedAccountSubrows) })
+                .catch(err => console.error("Failed to save subrow expand state:", err));
+        }
         let db;
 
         // Escapes a value for safe insertion into HTML text content or a double-quoted HTML
@@ -87,6 +104,33 @@
             return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
                 "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
             })[ch]);
+        }
+
+        // v80: formats a Date object as a "YYYY-MM-DD" calendar-date string using its LOCAL
+        // year/month/day components. This exists because `date.toISOString().split("T")[0]`
+        // (used throughout the FD maturity-date math) silently shifts the date for anyone in a
+        // UTC+ timezone (e.g. Malaysia, UTC+8): a Date built from local midnight, once run
+        // through toISOString(), gets re-expressed in UTC — which is still the *previous*
+        // calendar day at that hour — so the maturity date it prints ends up one day earlier
+        // than the commencing date + tenure actually works out to. Every FD maturity calculation
+        // (opening-balance placement rows, the Add/Edit Transaction FD fields, and the Resolve
+        // Maturity renewal form) now goes through this instead.
+        function localDateStr(date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, "0");
+            const d = String(date.getDate()).padStart(2, "0");
+            return `${y}-${m}-${d}`;
+        }
+
+        // v80: same fix as localDateStr(), for "today". `new Date().toISOString().split("T")[0]`
+        // (the pattern used everywhere in this file for "today's date") reads the CURRENT INSTANT
+        // back out in UTC, not the browser's local calendar date — for anyone in a UTC+ timezone
+        // (e.g. Malaysia, UTC+8) that's still "yesterday" in UTC terms for the first ~8 hours of
+        // every local day, which threw off the FD overdue/reminder check, default dates on new
+        // entries, and the maturity-vs-commence comparison during Resolve Maturity. Use this
+        // instead everywhere "today" means "today where the user is sitting".
+        function todayLocalStr() {
+            return localDateStr(new Date());
         }
 
         /* ================= APP LOCK: PBKDF2 + AES-GCM (Web Crypto) ================= */
@@ -651,6 +695,14 @@
         // Active exploration navigation states
         let activeLedgerAccountView = "all";
         let activeCategoryView = "all";
+        // v85: when a category page is reached from a page that has its own year/month filter
+        // (Net Savings Statement, Spending/Income Breakdown), these carry that filter's value
+        // along so the category page shows only that period instead of every transaction ever
+        // logged under the category. "all" means unfiltered (e.g. reached some other way).
+        // Deliberately separate from the dashboard's own month/year filter — see the v74 comment
+        // in renderApp() for why category drill-ins must never silently inherit that one.
+        let categoryDrillYear = "all";
+        let categoryDrillMonth = "all";
         let directTypeView = "all"; 
         // Per-account "Account Activity" year navigation (v33) — which year is currently shown,
         // and the sorted list of years that actually have a transaction for that account (used to
@@ -659,6 +711,14 @@
         let accountLedgerYear = "__fresh__"; // "__fresh__" = not yet initialized for this account view; null = user explicitly chose "All Years"; a number = one specific year
         let accountLedgerYearsCache = [];
         let ledgerBackToPage = "workspace"; 
+
+        // v86: which page the Backup & Restore page's Back button should return to — set by
+        // navigateToBackupPage()'s optional param. "datasecurity" (the default, matching the
+        // pre-v86 behavior) when reached via the Data Security hub's own "Backup & Restore" row;
+        // "workspace" when reached via the dashboard header's 💾 shortcut, which used to always
+        // land back on the Data Security hub regardless — a page the user may never have actually
+        // visited — forcing a second Back tap to actually get back to the dashboard.
+        let backupBackToPage = "datasecurity";
 
         // Fund's own Activity page (v48) — mirrors an account's Activity page, but scoped to one
         // fund's Buy/Sell/Dividend/Contribution transactions only.
@@ -682,6 +742,20 @@
 
         // Holds the compressed base64 image (if any) currently attached in the open transaction form.
         let currentTxImageData = null;
+
+        // v88: Transaction Quick View / Options / Refund / Split state.
+        // Which transaction id the Quick View modal is currently showing — set by openTxQuickView(),
+        // read by the toggle-checked/options/duplicate/refund/delete actions reached from it.
+        let activeQuickViewTxId = null;
+        // When set, the next handleTransactionSubmitMobile() save is tagged as a refund of this
+        // transaction id (isRefund:true, refundOf:<id>) instead of an ordinary income entry — set by
+        // openRefundFromOptions(), cleared on every openTransactionForm() call and after saving.
+        let pendingRefundOf = null;
+        // Calculator/numpad popup — which input field "Use This Value" writes back into.
+        let calcPadTargetId = null;
+        let calcPadExpr = "";
+        // Split Expenses — incrementing counter for unique split-row DOM ids within one form session.
+        let txSplitRowCounter = 0;
 
         // Default currency set (v39) — the 10 currencies the user actually holds. Rates are
         // approximate starting points only (per 1 MYR) — the user edits real values via
@@ -735,7 +809,7 @@
             { name: "Divident EPF", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(ER)", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(EE)", type: "income", icon: "🏦" },
-            { name: "FD Interest", type: "income", icon: "🏦" },
+            { name: "FD Interest Income", type: "income", icon: "🏦" },
             { name: "Bank Interest", type: "income", icon: "💰" },
             { name: "Gift Received", type: "income", icon: "🎁" },
             { name: "Rebate", type: "income", icon: "💸" },
@@ -794,6 +868,7 @@
             "epf contrib.(er)": "🏦",
             "epf contrib.(ee)": "🏦",
             "fd interest": "🏦",
+            "fd interest income": "🏦",
             "bank interest": "💰",
             "gift received": "🎁",
             "rebate": "💸",
@@ -834,7 +909,7 @@
                 return;
             }
 
-            const activeModals = ["txModal", "accountsModal", "currencyModal", "categoriesModal", "imageViewerModal", "resolveFdModal", "memberModal", "fundModal", "fundTxModal"];
+            const activeModals = ["txModal", "accountsModal", "currencyModal", "categoriesModal", "imageViewerModal", "resolveFdModal", "memberModal", "fundModal", "fundTxModal", "txQuickViewModal", "txOptionsModal", "calcPadModal"];
             let modalClosed = false;
             activeModals.forEach(id => {
                 const modal = document.getElementById(id);
@@ -854,6 +929,7 @@
             const databasePage = document.getElementById("page-database");
             const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
+            const portfolioReportPage = document.getElementById("page-portfolio-report");
             const navUpdatePage = document.getElementById("page-navupdate");
             const dataSecurityPage = document.getElementById("page-datasecurity");
             const membersPage = document.getElementById("page-members");
@@ -880,6 +956,7 @@
                 !databasePage.classList.contains("hidden") ||
                 !spendingBreakdownPage.classList.contains("hidden") ||
                 !incomeBreakdownPage.classList.contains("hidden") ||
+                !portfolioReportPage.classList.contains("hidden") ||
                 !navUpdatePage.classList.contains("hidden") ||
                 !dataSecurityPage.classList.contains("hidden")
             ) {
@@ -963,12 +1040,24 @@
         let recentTxAccountFilter = "all"; // "all" | accountId
         let recentTxCount = 5; // 1-14
 
+        // Dashboard "Accounts" widget settings (v75) — persisted via SETTINGS store, loaded in
+        // bootstrap(). Mirrors the Recent Transactions widget above, but instead of a type/account
+        // filter it's a fixed set of numbered slots, each pinned to one specific account (matching
+        // the per-slot account-picker layout the user referenced from another budgeting app) —
+        // pinnedAccountIds[i] is the account id for slot i, or "" if that slot is unset.
+        let pinnedAccountCount = 5; // 1-10
+        let pinnedAccountIds = []; // array of accountId | "", length === pinnedAccountCount
+
+        // "Net Worth by Member" collapse state (v75) — persisted via SETTINGS store, loaded in
+        // bootstrap(). Purely a display toggle; doesn't affect the totals shown elsewhere.
+        let memberNetWorthCollapsed = false;
+
         function populateRecentTxAccountSelect(accounts) {
             const sel = document.getElementById("recentTxAccountSelect");
             if (!sel) return;
             const current = recentTxAccountFilter;
             sel.innerHTML = `<option value="all">All Accounts</option>` +
-                accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))}</option>`).join("");
+                accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
             sel.value = accounts.some(a => a.id === current) ? current : "all";
         }
 
@@ -1010,11 +1099,11 @@
                 const iconBadge = getCategoryIcon(t.cat, t.type);
                 const acc = accounts.find(a => a.id === t.src);
                 return `
-                    <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(t.cat || '')}]</span>
-                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(acc.name) : "(deleted account)"}</span>
+                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
@@ -1038,6 +1127,101 @@
             await writeDB(STORES.SETTINGS, { key: "recentTxAccountFilter", value: recentTxAccountFilter });
             await writeDB(STORES.SETTINGS, { key: "recentTxCount", value: recentTxCount });
             await renderApp();
+        }
+
+        function populatePinnedAccountCountSelect() {
+            const sel = document.getElementById("pinnedAccountCountSelect");
+            if (!sel || sel.options.length > 0) return;
+            for (let i = 1; i <= 10; i++) {
+                sel.innerHTML += `<option value="${i}">${i} item${i === 1 ? '' : 's'}</option>`;
+            }
+        }
+
+        function togglePinnedAccountsSettings() {
+            const panel = document.getElementById("pinnedAccountsSettingsPanel");
+            if (!panel) return;
+            panel.style.display = panel.style.display === "none" ? "flex" : "none";
+        }
+
+        // Builds one account-picker <select> per configured slot (1..pinnedAccountCount), each
+        // pre-selected to whichever account is currently pinned there — mirrors the reference
+        // screenshot's "Number of items shown" + one numbered dropdown per slot layout.
+        function renderPinnedAccountSlotSelects(accounts) {
+            const wrap = document.getElementById("pinnedAccountSlotSelects");
+            if (!wrap) return;
+            let html = "";
+            for (let i = 0; i < pinnedAccountCount; i++) {
+                const current = pinnedAccountIds[i] || "";
+                html += `
+                    <div class="form-row" style="margin-bottom:0;">
+                        <label>${i + 1}:</label>
+                        <select data-change="handlePinnedAccountSlotChange" data-slot="${i}">
+                            <option value="">(None)</option>
+                            ${accounts.map(a => `<option value="${escapeHtml(a.id)}" ${a.id === current ? "selected" : ""}>${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("")}
+                        </select>
+                    </div>
+                `;
+            }
+            wrap.innerHTML = html;
+        }
+
+        async function handlePinnedAccountCountChange() {
+            pinnedAccountCount = parseInt(document.getElementById("pinnedAccountCountSelect").value, 10) || 5;
+            // Trim or pad the pinned list to match the new count — existing picks in slots that
+            // still exist are preserved; slots beyond the new count are simply dropped (not
+            // deleted from anywhere else, they just stop being one of the numbered slots).
+            pinnedAccountIds = pinnedAccountIds.slice(0, pinnedAccountCount);
+            while (pinnedAccountIds.length < pinnedAccountCount) pinnedAccountIds.push("");
+            await writeDB(STORES.SETTINGS, { key: "pinnedAccountCount", value: pinnedAccountCount });
+            await writeDB(STORES.SETTINGS, { key: "pinnedAccountIds", value: pinnedAccountIds });
+            await renderApp();
+        }
+
+        async function handlePinnedAccountSlotChange(el) {
+            const slot = parseInt(el.dataset.slot, 10);
+            if (Number.isNaN(slot)) return;
+            while (pinnedAccountIds.length <= slot) pinnedAccountIds.push("");
+            pinnedAccountIds[slot] = el.value;
+            await writeDB(STORES.SETTINGS, { key: "pinnedAccountIds", value: pinnedAccountIds });
+            await renderApp();
+        }
+
+        // Draws the dashboard's "Accounts" widget — a fixed set of accounts pinned to specific
+        // numbered slots via the settings panel above it, in slot order. Slots left on "(None)"
+        // are just skipped rather than rendered as empty rows.
+        function renderPinnedAccountsWidget(accounts, nativeBalances) {
+            const list = document.getElementById("pinnedAccountsList");
+            if (!list) return;
+
+            populatePinnedAccountCountSelect();
+            const countSel = document.getElementById("pinnedAccountCountSelect");
+            if (countSel) countSel.value = String(pinnedAccountCount);
+            renderPinnedAccountSlotSelects(accounts);
+
+            const rows = pinnedAccountIds
+                .map(id => accounts.find(a => a.id === id))
+                .filter(Boolean);
+
+            if (rows.length === 0) {
+                list.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No accounts pinned yet — tap ⚙ Settings above to choose some.</p>`;
+                return;
+            }
+
+            list.innerHTML = rows.map(a => {
+                const baseVal = accountBaseValue(a, nativeBalances);
+                const metaLine = accountOwnerNamesText(a) + accountRelatedSuffix(a, accounts);
+                return `
+                    <div class="ledger-item" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}">
+                        <div class="item-left">
+                            <span class="item-name">${escapeHtml(a.name)}</span>
+                            <span class="item-meta">${escapeHtml(metaLine)}</span>
+                        </div>
+                        <div class="item-right">
+                            <div class="item-value" style="font-weight:bold;">${formatBalanceHTML(baseVal, baseCurrency)}</div>
+                        </div>
+                    </div>
+                `;
+            }).join("");
         }
 
         function formatCurrency(amount, curr) {
@@ -1126,7 +1310,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -1141,6 +1325,8 @@
             workspaceScrollY = window.scrollY;
             activeLedgerAccountView = accountId;
             activeCategoryView = "all";
+            categoryDrillYear = "all";
+            categoryDrillMonth = "all";
             directTypeView = "all";
             accountLedgerYear = "__fresh__"; // fresh account view — default to its latest year with data
             ledgerBackToPage = backTarget;
@@ -1191,9 +1377,11 @@
             openTransactionForm(el.dataset.type, null, presetAccountId);
         }
 
-        function navigateToCategoryPage(categoryName, backTarget = "workspace") {
+        function navigateToCategoryPage(categoryName, backTarget = "workspace", year = "all", month = "all") {
             if (backTarget === "workspace") workspaceScrollY = window.scrollY;
             activeCategoryView = categoryName;
+            categoryDrillYear = year;
+            categoryDrillMonth = month;
             activeLedgerAccountView = "all";
             directTypeView = "all";
             ledgerBackToPage = backTarget;
@@ -1209,6 +1397,8 @@
             directTypeView = type;
             activeLedgerAccountView = "all";
             activeCategoryView = "all";
+            categoryDrillYear = "all";
+            categoryDrillMonth = "all";
             ledgerBackToPage = "workspace";
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
             showPage("page-ledger");
@@ -1259,12 +1449,18 @@
             await renderCategoriesPage();
         }
 
-        function navigateToBackupPage() {
+        function navigateToBackupPage(backTarget = "datasecurity") {
             workspaceScrollY = window.scrollY;
+            backupBackToPage = backTarget;
             showPage("page-backup");
             window.scrollTo(0, 0);
             pushVirtualState("backup");
             calculateStorageMetrics();
+        }
+
+        function handleBackupBackClick() {
+            if (backupBackToPage === "workspace") navigateToWorkspace();
+            else navigateToDataSecurityPage();
         }
 
         // "All Transactions" — used to be a sidebar item, now a bottom-of-dashboard button (v34).
@@ -1373,6 +1569,7 @@
             const databaseHidden = document.getElementById("page-database").classList.contains("hidden");
             const spendingHidden = document.getElementById("page-spending-breakdown").classList.contains("hidden");
             const incomeHidden = document.getElementById("page-income-breakdown").classList.contains("hidden");
+            const portfolioReportHidden = document.getElementById("page-portfolio-report").classList.contains("hidden");
             const navUpdateHidden = document.getElementById("page-navupdate").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
@@ -1383,6 +1580,7 @@
             else if (!databaseHidden) target = "database";
             else if (!spendingHidden) target = "spending-breakdown";
             else if (!incomeHidden) target = "income-breakdown";
+            else if (!portfolioReportHidden) target = "portfolio-report";
             else if (!navUpdateHidden) target = "navupdate";
             else if (!ledgerHidden) {
                 const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
@@ -1411,6 +1609,7 @@
             else if (target === "database") navigateToDatabasePage();
             else if (target === "spending-breakdown") navigateToSpendingBreakdownPage();
             else if (target === "income-breakdown") navigateToIncomeBreakdownPage();
+            else if (target === "portfolio-report") navigateToPortfolioReportPage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -1439,18 +1638,43 @@
             baseSelect.innerHTML = Object.keys(fxRates).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
             baseSelect.value = baseCurrency;
             renderFxRatesInputs();
+            document.getElementById("fetchFxRatesStatus").textContent = "";
             openModal("currencyModal");
         }
 
-        function renderFxRatesInputs() {
+        // Renders one row per non-base currency in `rates` (defaults to the saved fxRates when
+        // called with no argument — handleBaseCurrencyChange and the initial openCurrencyConfig()
+        // both rely on this default). v68: which side of "=" the base currency sits on now flips
+        // per row based on relative value, matching how people actually quote a pair — a currency
+        // worth MORE than 1 base unit (e.g. 1 USD = 4.20 MYR) is quoted as "1 {that currency} =",
+        // while one worth LESS (e.g. 1 MYR = 8.15 THB) stays "1 {base} =". Each input's data-mode
+        // ("direct" = value already IS fxRates[curr]; "inverted" = value is 1/fxRates[curr]) is
+        // read back by saveFxRates() to convert whatever's on screen back to the stored
+        // convention, so this is purely a display choice — storage/conversion math is unchanged.
+        function renderFxRatesInputs(rates) {
+            rates = rates || fxRates;
             let html = "";
-            Object.keys(fxRates).forEach(curr => {
+            Object.keys(rates).forEach(curr => {
                 if (curr === baseCurrency) return;
+                const perBase = rates[curr] / (rates[baseCurrency] || 1); // units of curr per 1 base
+                let leftLabel, rightLabel, mode, displayValue;
+                if (perBase < 1) {
+                    // Less than 1 unit of curr per base ⇒ 1 curr is worth MORE than 1 base unit.
+                    leftLabel = `1 ${curr} =`;
+                    rightLabel = baseCurrency;
+                    mode = "inverted";
+                    displayValue = 1 / perBase;
+                } else {
+                    leftLabel = `1 ${baseCurrency} =`;
+                    rightLabel = curr;
+                    mode = "direct";
+                    displayValue = perBase;
+                }
                 html += `
                     <div class="form-row" style="display: flex; align-items: center; gap: 8px;">
-                        <span style="width: 80px; font-weight:700; font-size:0.85rem;">1 ${baseCurrency} =</span>
-                        <input type="number" step="0.0001" id="fxRate-${curr}" value="${(fxRates[curr] / fxRates[baseCurrency]).toFixed(4)}" style="flex:1;">
-                        <span style="width: 50px; font-weight:700; font-size:0.85rem;">${curr}</span>
+                        <span style="width: 80px; font-weight:700; font-size:0.85rem;">${escapeHtml(leftLabel)}</span>
+                        <input type="number" step="0.0001" id="fxRate-${curr}" data-mode="${mode}" value="${displayValue.toFixed(4)}" style="flex:1;">
+                        <span style="width: 50px; font-weight:700; font-size:0.85rem;">${escapeHtml(rightLabel)}</span>
                     </div>
                 `;
             });
@@ -1464,6 +1688,7 @@
             fxRates[newBase] = 1.0;
             baseCurrency = newBase;
             renderFxRatesInputs();
+            document.getElementById("fetchFxRatesStatus").textContent = "";
         }
 
         async function saveFxRates() {
@@ -1476,7 +1701,11 @@
                         alert(`Please enter a valid exchange rate for ${curr}.`);
                         return;
                     }
-                    fxRates[curr] = val;
+                    // v68: the field may be showing either the direct value (fxRates[curr] itself)
+                    // or its reciprocal (see renderFxRatesInputs) — data-mode says which, so this
+                    // always converts back to the stored "units of curr per 1 base" convention
+                    // regardless of which way the row happened to be labeled on screen.
+                    fxRates[curr] = el.dataset.mode === "inverted" ? (1 / val) : val;
                 }
             }
 
@@ -1491,6 +1720,55 @@
             document.getElementById("currentBasePill").textContent = baseCurrency;
             closeModal("currencyModal");
             renderApp();
+        }
+
+        // Fetch Live Rates (v67) — pulls today's rates from the same open.er-api.com source the
+        // Wealth Planner app's own "Fetch Live Rates" button uses, so both apps agree when
+        // fetched around the same time instead of drifting apart from separately-typed manual
+        // values. Only fills the visible input fields (matching Wealth Planner's own UX) — still
+        // requires "Save FX Values" below to actually apply. Uses the currently-selected base in
+        // the dropdown (which may not be saved yet), same as Wealth Planner's own version.
+        //
+        // No inversion needed here (unlike Wealth Planner's own fetch code, which stores rates in
+        // "1 curr = ? base" form): the API's data.rates[c] ("1 base = X units of c") already
+        // matches this app's own fxRates[c] storage convention ("units of c per 1 base") directly
+        // — confirmed against convertCurrency()'s formula, (amount / fxRates[fromCurr]) *
+        // fxRates[toCurr].
+        //
+        // v68: re-renders the whole form from a merged {...fxRates, ...fetched} snapshot (instead
+        // of poking each input's .value directly) so every row's "1 X = Y Z" direction is
+        // recomputed fresh against the just-fetched numbers too, not left over from whatever
+        // direction the old stored rate happened to need.
+        async function fetchLiveFxRates() {
+            const base = document.getElementById("baseCurrencySelect").value;
+            const others = Object.keys(fxRates).filter(c => c !== base);
+            const statusEl = document.getElementById("fetchFxRatesStatus");
+            const btn = document.getElementById("fetchFxRatesBtn");
+            if (others.length === 0) {
+                statusEl.textContent = "No other currencies configured — nothing to fetch.";
+                return;
+            }
+            btn.disabled = true;
+            statusEl.textContent = "Fetching latest rates…";
+            try {
+                const res = await fetch("https://open.er-api.com/v6/latest/" + encodeURIComponent(base));
+                if (!res.ok) throw new Error("Request failed (" + res.status + ")");
+                const data = await res.json();
+                if (data.result !== "success" || !data.rates) throw new Error("Unexpected response");
+                const merged = { ...fxRates, [base]: 1.0 };
+                let filled = 0;
+                others.forEach(c => {
+                    const rate = data.rates[c];
+                    if (rate && rate > 0) { merged[c] = rate; filled++; }
+                });
+                renderFxRatesInputs(merged);
+                const missed = others.length - filled;
+                statusEl.textContent = `✅ Filled ${filled} rate${filled !== 1 ? "s" : ""} as of ${data.time_last_update_utc || "just now"}.${missed > 0 ? ` ${missed} currenc${missed !== 1 ? "ies" : "y"} not found — enter manually.` : ""} Review and tap Save FX Values to apply.`;
+            } catch (err) {
+                statusEl.textContent = `⚠️ Could not fetch live rates (${err && err.message ? err.message : err}). Check your internet connection, or enter rates manually below.`;
+            } finally {
+                btn.disabled = false;
+            }
         }
 
         // --- ACCOUNTS MANAGER SETUP (WITH INTEGRATED EDITOR) ---
@@ -1521,7 +1799,7 @@
         async function populateDefaultPaymentAccountSelect() {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const select = document.getElementById("defaultPaymentAccountSelect");
-            select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))} (${escapeHtml(a.currency || a.type)})</option>`).join("");
+            select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))} (${escapeHtml(a.currency || a.type)})</option>`).join("");
             select.value = accounts.some(a => a.id === defaultPaymentAccount) ? defaultPaymentAccount : "";
         }
 
@@ -1613,7 +1891,7 @@
             fdOpeningRowCounter++;
             const rowId = `fdrow_${fdOpeningRowCounter}`;
             const currencyOptions = Object.keys(fxRates).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
-            const today = new Date().toISOString().split("T")[0];
+            const today = todayLocalStr();
 
             const row = document.createElement("div");
             row.id = rowId;
@@ -1676,7 +1954,7 @@
             const start = new Date(startVal + "T00:00:00");
             const maturity = new Date(start);
             maturity.setMonth(maturity.getMonth() + tenure);
-            const maturityStr = maturity.toISOString().split("T")[0];
+            const maturityStr = localDateStr(maturity);
             row.querySelector(".fd-row-maturity").value = maturityStr;
 
             const principal = parseFloat(row.querySelector(".fd-row-amount").value) || 0;
@@ -1691,10 +1969,10 @@
         // Populates the Sub-Group select for whichever Group is currently chosen, and shows/hides
         // the row entirely when that Group has no configured sub-groups (see ACCOUNT_SUBGROUPS).
         // Also shows/hides + populates the Bank Loan "Related Account" select (see
-        // populateLinkedAccountSelect below) whenever the Group is switched to/from "Bank Loan",
-        // and the Real Estate "Include in Net Worth" select whenever it's switched to/from
-        // "Real Estate".
-        async function handleAccGroupChange(preselectSubgroup, preselectLinkedAccountId, preselectIncludeInNetWorth) {
+        // populateLinkedAccountSelect below) and the Redraw Facility checkbox whenever the Group
+        // is switched to/from "Bank Loan", and the Real Estate "Include in Net Worth"/Type/Holding
+        // Period fields whenever it's switched to/from "Real Estate".
+        async function handleAccGroupChange(preselectSubgroup, preselectLinkedAccountId, preselectIncludeInNetWorth, preselectPropertyType, preselectHoldingStartDate, preselectHasRedraw, preselectRedrawAmount, preselectRedrawAsOfDate) {
             const group = document.getElementById("newAccGroup").value;
             const list = subgroupsForGroup(group);
             const row = document.getElementById("newAccSubgroupRow");
@@ -1712,21 +1990,47 @@
             }
 
             const linkedRow = document.getElementById("newAccLinkedAccountRow");
+            const redrawFacilityRow = document.getElementById("newAccRedrawFacilityRow");
             if (group === "Bank Loan") {
                 linkedRow.style.display = "block";
                 await populateLinkedAccountSelect(preselectLinkedAccountId);
+                redrawFacilityRow.style.display = "block";
+                document.getElementById("newAccHasRedraw").checked = !!preselectHasRedraw;
+                document.getElementById("newAccRedrawAmount").value = preselectRedrawAmount || "";
+                document.getElementById("newAccRedrawAsOfDate").value = preselectRedrawAsOfDate || "";
+                toggleRedrawFacilityFields();
             } else {
                 linkedRow.style.display = "none";
                 document.getElementById("newAccLinkedAccount").innerHTML = "";
+                redrawFacilityRow.style.display = "none";
+                document.getElementById("newAccHasRedraw").checked = false;
+                document.getElementById("newAccRedrawDetailsRow").style.display = "none";
             }
 
             const netWorthRow = document.getElementById("newAccNetWorthRow");
+            const propertyTypeRow = document.getElementById("newAccPropertyTypeRow");
+            const holdingStartRow = document.getElementById("newAccHoldingStartRow");
             if (group === "Real Estate") {
                 netWorthRow.style.display = "block";
                 document.getElementById("newAccIncludeNetWorth").value = preselectIncludeInNetWorth === "no" ? "no" : "yes";
+                propertyTypeRow.style.display = "block";
+                document.getElementById("newAccPropertyType").value = preselectPropertyType || "";
+                holdingStartRow.style.display = "block";
+                document.getElementById("newAccHoldingStartDate").value = preselectHoldingStartDate || "";
             } else {
                 netWorthRow.style.display = "none";
+                propertyTypeRow.style.display = "none";
+                holdingStartRow.style.display = "none";
             }
+        }
+
+        // Wired to the "This loan has a Redraw / Bank Withdrawal facility" checkbox — shows/hides
+        // the Current Redraw Amount + As of Date fields underneath it. Kept as its own function
+        // (rather than inline) so handleAccGroupChange can also call it after pre-checking the
+        // box when opening the form to edit an existing loan.
+        function toggleRedrawFacilityFields() {
+            const checked = document.getElementById("newAccHasRedraw").checked;
+            document.getElementById("newAccRedrawDetailsRow").style.display = checked ? "grid" : "none";
         }
 
         // Fills the Bank Loan "Related Account" select with every OTHER account (excluding the
@@ -1740,7 +2044,7 @@
             const candidates = accounts
                 .filter(a => a.id !== excludeId && (a.group || DEFAULT_ACCOUNT_GROUP) !== "Bank Loan")
                 .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
-            sel.innerHTML = `<option value="">(None)</option>` + candidates.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`).join("");
+            sel.innerHTML = `<option value="">(None)</option>` + candidates.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
             sel.value = (preselectId && candidates.some(a => a.id === preselectId)) ? preselectId : "";
         }
 
@@ -1778,7 +2082,24 @@
             if(!name) { alert("Please enter an account name."); return; }
 
             const group = document.getElementById("newAccGroup").value || DEFAULT_ACCOUNT_GROUP;
-            const record = { id, name, type, group, subgroup: document.getElementById("newAccSubgroup").value || "", linkedAccountId: (group === "Bank Loan" ? (document.getElementById("newAccLinkedAccount").value || null) : null), includeInNetWorth: (group === "Real Estate" ? (document.getElementById("newAccIncludeNetWorth").value !== "no") : true), memberIds: getCheckedAccountMemberIds() };
+            const record = {
+                id, name, type, group,
+                subgroup: document.getElementById("newAccSubgroup").value || "",
+                linkedAccountId: (group === "Bank Loan" ? (document.getElementById("newAccLinkedAccount").value || null) : null),
+                includeInNetWorth: (group === "Real Estate" ? (document.getElementById("newAccIncludeNetWorth").value !== "no") : true),
+                // Real Estate (v66): property Type + Holding Period Start Date — purely
+                // informational, cleared out when the account isn't (or is no longer) grouped
+                // under Real Estate so a re-grouped account doesn't carry stale values silently.
+                propertyType: (group === "Real Estate" ? (document.getElementById("newAccPropertyType").value || "") : ""),
+                holdingStartDate: (group === "Real Estate" ? (document.getElementById("newAccHoldingStartDate").value || "") : ""),
+                // Bank Loan (v66): manual Redraw / Bank Withdrawal facility amount — same
+                // clear-on-regroup treatment, and also cleared if the facility checkbox itself is
+                // unticked even while still a Bank Loan.
+                hasRedrawFacility: (group === "Bank Loan" && document.getElementById("newAccHasRedraw").checked),
+                redrawAmount: (group === "Bank Loan" && document.getElementById("newAccHasRedraw").checked) ? (parseFloat(document.getElementById("newAccRedrawAmount").value) || 0) : 0,
+                redrawAsOfDate: (group === "Bank Loan" && document.getElementById("newAccHasRedraw").checked) ? (document.getElementById("newAccRedrawAsOfDate").value || "") : "",
+                memberIds: getCheckedAccountMemberIds()
+            };
 
             if (type === "normal") {
                 const balInput = document.getElementById("newAccBal").value;
@@ -1796,7 +2117,7 @@
             // Collect opening-balance / opening-placement rows BEFORE writing anything, so we can
             // validate everything up front and avoid creating an account with a half-seeded state.
             let openingTransactions = [];
-            const todayStr = new Date().toISOString().split("T")[0];
+            const todayStr = todayLocalStr();
 
             if (isNewAccount && type === "multi") {
                 const rows = Array.from(document.getElementById("multiOpeningRows").children);
@@ -1879,6 +2200,7 @@
             }
 
             resetAccountForm();
+            closeModal("accountsModal");
             await refreshAfterAccountChange();
         }
 
@@ -1912,8 +2234,29 @@
             if (ids.length === 0) return "Unassigned";
             return ids.map(id => getMemberById(id)?.name || "Unknown").join(", ");
         }
-        function accountOptionLabel(a) {
-            return `${a.name} (${accountOwnerNamesText(a)})`;
+        // Bank Loan accounts (v50 linkedAccountId) can end up sharing BOTH the same name AND
+        // the same owner — e.g. two accounts named "HSBC Loan", both tagged to the same family
+        // member, one relating to Property A and the other to Property B. Owner alone doesn't
+        // disambiguate that case, but the Related Account usually does, so this appends
+        // " · <name>" whenever a.linkedAccountId is set. Returns "" when there's nothing to add
+        // (including when the caller didn't pass the full accounts list — some call sites only
+        // have a filtered subset in scope, and guessing wrong would be worse than just omitting
+        // the suffix). Raw text, not HTML-escaped — same contract as accountOwnerNamesText, so
+        // callers escape the combined label themselves.
+        // v71: dropped the "Related: " prefix (just "· <name>" now) — this suffix only ever
+        // shows up right next to the account's own name/owner, so the extra label was noise;
+        // the dedicated "🔗 Related Account: X" banner (Accounts page, Activity page) still
+        // spells it out in full since it's not sitting next to anything else there.
+        function accountRelatedSuffix(a, accounts) {
+            if (!a.linkedAccountId || !Array.isArray(accounts)) return "";
+            const linked = accounts.find(x => x.id === a.linkedAccountId);
+            return linked ? ` · ${linked.name}` : "";
+        }
+        // v68: now takes the full accounts list (optional, for backward compat) so it can also
+        // append the Related Account suffix above — without it, two same-named+same-owner Bank
+        // Loan accounts were indistinguishable in every dropdown and list built from this label.
+        function accountOptionLabel(a, accounts) {
+            return `${a.name} (${accountOwnerNamesText(a)})${accountRelatedSuffix(a, accounts)}`;
         }
 
         function accountOwnerTagHTML(account) {
@@ -1963,6 +2306,14 @@
                 : accounts;
             const sorted = sortAccountsByGroupThenName(filtered);
 
+            // v64: the collapse/expand state (expandedAccountSubrows) used to be keyed by
+            // account id alone, so the same account's subrows showed the same open/closed state
+            // whichever way you reached this page — e.g. via the unfiltered "Financial Accounts"
+            // full list vs. a sidebar shortcut like "Unit Trust" that filters down to the same
+            // account. Prefixing the key with the active filter (or "all" when unfiltered) makes
+            // each of those a separate view with its own independent expand state.
+            const subrowFilterKeyPrefix = (filter ? `${filter.group}_${filter.subgroup || "none"}` : "all").replace(/\s+/g, "-");
+
             const titleEl = document.getElementById("accountsPageListTitle");
             const hintEl = document.getElementById("accountsPageFilterHint");
             if (titleEl) titleEl.textContent = filter ? filter.label : "All Accounts";
@@ -2003,6 +2354,7 @@
             }
 
             sorted.forEach(a => {
+                const subrowKey = `${subrowFilterKeyPrefix}__${a.id}`;
                 const group = a.group || DEFAULT_ACCOUNT_GROUP;
                 const subgroup = a.subgroup || "";
                 if (group !== lastGroup) {
@@ -2056,7 +2408,7 @@
                 // in scope here.
                 const linkedAcc = a.linkedAccountId ? accounts.find(x => x.id === a.linkedAccountId) : null;
                 const linkedLine = linkedAcc
-                    ? `<br><span style="font-size:0.7rem; color:#92400e; font-weight:600;">🔗 Related: ${escapeHtml(linkedAcc.name)}</span>`
+                    ? `<br><span style="font-size:0.7rem; color:#92400e; font-weight:600;">🔗 Related: ${escapeHtml(accountOptionLabel(linkedAcc, accounts))}</span>`
                     : "";
 
                 // Real Estate (v53): flag when a property was explicitly excluded from the
@@ -2065,6 +2417,8 @@
                 const excludedLine = a.includeInNetWorth === false
                     ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
+
+                const extraInfoLine = accountExtraInfoLine(a);
 
                 // v62: subrows collapsed by default (see expandedAccountSubrows) — built into
                 // subrowsHtml first (before the main row, so the row can show a collapse/expand
@@ -2124,37 +2478,51 @@
                     const placements = (fdPlacementsByAccountId[a.id] || []).slice().sort((x, y) => new Date(y.date) - new Date(x.date));
                     if (placements.length > 0) {
                         subrowsHtml += placements.map(t => {
-                            const isOverdue = new Date(t.fdMaturityDate + "T00:00:00").getTime() < new Date(new Date().toISOString().split("T")[0] + "T00:00:00").getTime();
+                            const isOverdue = new Date(t.fdMaturityDate + "T00:00:00").getTime() < new Date(todayLocalStr() + "T00:00:00").getTime();
                             const statusBadge = isOverdue
                                 ? `<span style="font-size:0.62rem; font-weight:700; color:#b91c1c; background:#fee2e2; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">⏰ Due</span>`
                                 : `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">🟢 Active</span>`;
                             const refText = t.fdReferenceNo ? ` (${escapeHtml(t.fdReferenceNo)})` : '';
+                            // v78: an overdue placement gets its own "Resolve Maturity" button right on
+                            // this subrow — previously the only way in was the workspace's maturity
+                            // reminder banner, which only ever surfaces one overdue placement at a time.
+                            // Reuses the same openResolveFdModal action as that banner. No
+                            // stopPropagation needed: the click dispatcher resolves the nearest
+                            // [data-click] ancestor via closest(), so tapping this button fires only
+                            // its own action, never the parent row's openTransactionForm too — same
+                            // reasoning as the subrow-toggle-btn caret above.
+                            const resolveBtnHTML = isOverdue
+                                ? `<button type="button" data-click="openResolveFdModal" data-id="${escapeHtml(t.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#b91c1c; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">⏰ Resolve Maturity</button>`
+                                : "";
                             return `
                                 <div class="config-item fund-subrow" style="cursor:pointer;" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
                                     <span>
                                         Fixed Deposit Placement${refText}${statusBadge}
                                         <br><span style="color:var(--text-muted); font-weight:600;">${formatBalanceHTML(t.amount, t.currency)} · Matures ${escapeHtml(t.fdMaturityDate)}</span>
                                     </span>
-                                    <span style="color:var(--text-muted);">›</span>
+                                    <span style="display:flex; align-items:center; gap:6px;">
+                                        ${resolveBtnHTML}
+                                        <span style="color:var(--text-muted);">›</span>
+                                    </span>
                                 </div>`;
                         }).join("");
                     }
                 }
 
-                const isExpanded = expandedAccountSubrows.has(a.id);
+                const isExpanded = expandedAccountSubrows.has(subrowKey);
                 // Caret toggle only rendered when there's actually a subrow list to collapse —
                 // stopPropagation isn't needed here since the click dispatcher resolves the
                 // nearest [data-click] ancestor via closest(), so tapping the caret fires only
                 // toggleAccountSubrows, not the row's own navigateToLedgerPage.
                 const subrowToggleHTML = subrowsHtml
-                    ? `<button type="button" class="subrow-toggle-btn" data-click="toggleAccountSubrows" data-id="${escapeHtml(a.id)}" aria-label="${isExpanded ? "Collapse" : "Expand"} details" title="${isExpanded ? "Collapse" : "Expand"} details">${isExpanded ? "▾" : "▸"}</button>`
+                    ? `<button type="button" class="subrow-toggle-btn" data-click="toggleAccountSubrows" data-id="${escapeHtml(subrowKey)}" aria-label="${isExpanded ? "Collapse" : "Expand"} details" title="${isExpanded ? "Collapse" : "Expand"} details">${isExpanded ? "▾" : "▸"}</button>`
                     : "";
 
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
                         <span>
                             <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
-                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}
+                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}
                         </span>
                         <span style="display:flex; align-items:center; gap:6px;">
                             ${subrowToggleHTML}
@@ -2163,7 +2531,7 @@
                     </div>`;
 
                 if (subrowsHtml) {
-                    html += `<div id="acctSubrows-${escapeHtml(a.id)}" class="${isExpanded ? "" : "hidden"}">${subrowsHtml}</div>`;
+                    html += `<div id="acctSubrows-${escapeHtml(subrowKey)}" class="${isExpanded ? "" : "hidden"}">${subrowsHtml}</div>`;
                 }
             });
             flushSubgroupTotal();
@@ -2176,13 +2544,18 @@
         // Wired to the ▸/▾ caret on an Accounts-page row that has fund/currency/FD-placement
         // subrows (v62) — toggles just that one account's subrow container + caret glyph
         // directly in the DOM rather than re-rendering the whole list, so the rest of the page
-        // (scroll position, any other account's expand state) is undisturbed.
+        // (scroll position, any other account's expand state) is undisturbed. `id` here is the
+        // composite "<filter>__<accountId>" key (v64), not the raw account id — expand state is
+        // scoped per filtered view (see subrowFilterKeyPrefix in renderAccountsPage), so the same
+        // account can be independently expanded/collapsed in the unfiltered "All Accounts" list
+        // vs. a sidebar-filtered view like "Unit Trust" without one affecting the other.
         function toggleAccountSubrows(el) {
             const id = el.dataset.id;
             const container = document.getElementById(`acctSubrows-${id}`);
             if (!container) return;
             const nowExpanded = container.classList.toggle("hidden") === false;
             if (nowExpanded) expandedAccountSubrows.add(id); else expandedAccountSubrows.delete(id);
+            saveExpandedAccountSubrows();
             el.textContent = nowExpanded ? "▾" : "▸";
             el.setAttribute("aria-label", `${nowExpanded ? "Collapse" : "Expand"} details`);
             el.setAttribute("title", `${nowExpanded ? "Collapse" : "Expand"} details`);
@@ -2201,7 +2574,16 @@
             document.getElementById("editAccountId").value = account.id;
             document.getElementById("newAccName").value = account.name;
             document.getElementById("newAccGroup").value = account.group || DEFAULT_ACCOUNT_GROUP;
-            await handleAccGroupChange(account.subgroup || "", account.linkedAccountId || "", account.includeInNetWorth === false ? "no" : "yes");
+            await handleAccGroupChange(
+                account.subgroup || "",
+                account.linkedAccountId || "",
+                account.includeInNetWorth === false ? "no" : "yes",
+                account.propertyType || "",
+                account.holdingStartDate || "",
+                !!account.hasRedrawFacility,
+                account.redrawAmount || "",
+                account.redrawAsOfDate || ""
+            );
 
             setAccountTypeUI(account.type || "normal");
             if (!account.type || account.type === "normal") {
@@ -2258,7 +2640,13 @@
             const fundId = typeof el === "string" ? el : el.dataset.id;
             workspaceScrollY = window.scrollY;
             activeFundActivityId = fundId;
-            fundActivityBackToPage = activeLedgerAccountView !== "all" ? "ledger" : "accounts";
+            // v78: rows in the Unit Trust Portfolio Report link here too — send Back to that
+            // report instead of misrouting to Ledger/Accounts when that's where the tap came from.
+            if (!document.getElementById("page-portfolio-report").classList.contains("hidden")) {
+                fundActivityBackToPage = "portfolio-report";
+            } else {
+                fundActivityBackToPage = activeLedgerAccountView !== "all" ? "ledger" : "accounts";
+            }
             showPage("page-fundactivity");
             window.scrollTo(0, 0);
             pushVirtualState("fundactivity");
@@ -2269,6 +2657,9 @@
             if (fundActivityBackToPage === "ledger") {
                 showPage("page-ledger");
                 await renderApp();
+            } else if (fundActivityBackToPage === "portfolio-report") {
+                showPage("page-portfolio-report");
+                await renderPortfolioReportPage();
             } else {
                 showPage("page-accounts");
                 await renderAccountsPage();
@@ -2366,7 +2757,7 @@
             if (!account) { handleCurrencyActivityBackClick(); return; }
 
             document.getElementById("currencyActivityTitle").textContent = `${currency} Activity`;
-            document.getElementById("currencyActivityMeta").textContent = `${account.name} · ${currency}`;
+            document.getElementById("currencyActivityMeta").textContent = `${accountOptionLabel(account, accounts)} · ${currency}`;
 
             const basket = nativeBalances[accountId] || {};
             const balance = basket[currency] || 0;
@@ -2375,7 +2766,7 @@
             // Opening Balance entries deliberately leave src blank ("") — the funds originate
             // outside the app, not from a since-deleted account — so an empty id gets its own
             // label rather than being mistaken for a removed account record.
-            const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(a.name) : "(deleted account)"; };
+            const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
 
             const relevantTxs = txs
                 .filter(t => t.currency === currency && (t.src === accountId || t.dest === accountId))
@@ -2395,7 +2786,7 @@
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
 
                 return `
-                    <div class="ledger-item" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
+                    <div class="ledger-item" data-click="openTxQuickView" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
                             <span class="item-meta">${escapeHtml(t.date)} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}</span>
@@ -2428,6 +2819,33 @@
             if (!document.getElementById("page-fundactivity").classList.contains("hidden")) {
                 await renderFundActivityPage();
             }
+        }
+
+        // Same idea as refreshFundActivityPageIfVisible, for the Currency Activity page (a
+        // Multi-Currency account's own per-currency transaction list).
+        async function refreshCurrencyActivityPageIfVisible() {
+            if (!document.getElementById("page-currencyactivity").classList.contains("hidden")) {
+                await renderCurrencyActivityPage();
+            }
+        }
+
+        // v80: general-purpose refresh for anything that can touch a Fixed Deposit placement's
+        // status — saving/editing a transaction, deleting one, or resolving an FD's maturity
+        // (renew/withdraw). renderApp() alone keeps the dashboard reminder banner and the
+        // per-account Activity page (page-ledger, rendered inline inside renderApp) current, but
+        // it does NOT re-run renderAccountsPage() — a separate function — so the Accounts page's
+        // own FD placement subrows (active/due badge, amount, maturity date; added v56) kept
+        // showing stale data until the user navigated away and back. Also covers the Fund/
+        // Currency Activity pages for the same reason, since a transaction edit/delete can affect
+        // those too. Mirrors the existing refreshAfterAccountChange() pattern used for account
+        // create/edit/delete.
+        async function refreshAfterTransactionChange() {
+            await renderApp();
+            if (!document.getElementById("page-accounts").classList.contains("hidden")) {
+                await renderAccountsPage();
+            }
+            await refreshFundActivityPageIfVisible();
+            await refreshCurrencyActivityPageIfVisible();
         }
 
         function openAddFundModal() {
@@ -2532,12 +2950,12 @@
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const cashAccounts = accounts.filter(a => a.id !== accountId);
             const transferSel = document.getElementById("fundTxTransferAccount");
-            transferSel.innerHTML = cashAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))}</option>`).join("");
+            transferSel.innerHTML = cashAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
 
             document.getElementById("fundTxModalTitle").textContent = "Add Transaction";
             document.getElementById("fundTxId").value = "";
             document.getElementById("fundTxType").value = "buy";
-            document.getElementById("fundTxDate").value = new Date().toISOString().split("T")[0];
+            document.getElementById("fundTxDate").value = todayLocalStr();
             document.getElementById("fundTxUnits").value = "";
             document.getElementById("fundTxPrice").value = "";
             document.getElementById("fundTxTotal").value = "";
@@ -2578,7 +2996,7 @@
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const cashAccounts = accounts.filter(a => a.id !== accountId);
             const transferSel = document.getElementById("fundTxTransferAccount");
-            transferSel.innerHTML = cashAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a))}</option>`).join("");
+            transferSel.innerHTML = cashAccounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
 
             document.getElementById("fundTxType").value = tx.fundTxType;
             document.getElementById("fundTxDate").value = tx.date;
@@ -2830,13 +3248,41 @@
 
             const todayMs = Date.now();
 
-            // Groups every fund-linked transaction under this account by fundId — used both to
-            // compute each live fund's invested-cash-basis figure, and to find transactions whose
-            // fundId no longer resolves to any fund record under this account (orphaned).
+            const liveFundIds = new Set(funds.map(f => f.id));
+
+            // Every fund record that currently exists ANYWHERE in the app, not just under this
+            // account — used to tell "this fund still exists, just under a different Unit Trust
+            // account" apart from "this fund was genuinely deleted". `allTxs` here is the
+            // whole-app transaction list (renderApp() passes it in unfiltered), so without this
+            // check every OTHER account's live fund transactions were being swept up below as
+            // orphaned "fund deleted" rows belonging to THIS account too — inflating this
+            // account's Fund Holdings total (and Current Balance) with every other Unit Trust
+            // account's holdings, and showing each of those funds as "deleted" here even while
+            // it's alive and well under its real account.
+            const allFunds = await readAllDB(STORES.FUNDS);
+            const fundExistsElsewhere = new Set(allFunds.filter(f => !liveFundIds.has(f.id)).map(f => f.id));
+
+            // Groups every fund-linked transaction that actually belongs to this account by
+            // fundId — used both to compute each live fund's invested-cash-basis figure, and to
+            // find transactions whose fundId no longer resolves to any fund record under this
+            // account (orphaned).
             const fundTxsByFundId = {};
             allTxs.forEach(t => {
                 if (!t.fundId) return;
-                (fundTxsByFundId[t.fundId] = fundTxsByFundId[t.fundId] || []).push(t);
+                if (liveFundIds.has(t.fundId)) {
+                    // One of this account's own live funds — always relevant, regardless of tx type.
+                    (fundTxsByFundId[t.fundId] = fundTxsByFundId[t.fundId] || []).push(t);
+                    return;
+                }
+                if (fundExistsElsewhere.has(t.fundId)) return; // belongs to a different account's live fund — already shown there, not ours
+                // Fund genuinely deleted everywhere — only attribute it to THIS account if the
+                // transaction itself references this account. Buy/Sell/Dividend(Reinvest)/
+                // Contribution all do via src/dest; Dividend (Cheque Payout) doesn't carry any
+                // account link once its fund is gone, so it's left out here rather than guessed
+                // at (better to drop it than misattribute it to the wrong account).
+                if (t.src === accountId || t.dest === accountId) {
+                    (fundTxsByFundId[t.fundId] = fundTxsByFundId[t.fundId] || []).push(t);
+                }
             });
 
             function computeInvested(fundTxs) {
@@ -2924,7 +3370,6 @@
             // other way). Grouped and shown as their own read-only row so their cash basis still
             // counts toward the Totals row below — there's no live NAV left to value them at, so
             // Value is shown at cost (= Invested, P/L "-") rather than guessed.
-            const liveFundIds = new Set(funds.map(f => f.id));
             const orphanFundIds = Object.keys(fundTxsByFundId).filter(fid => !liveFundIds.has(fid));
             orphanFundIds.forEach(fid => {
                 const fundTxs = fundTxsByFundId[fid].slice().sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -3027,6 +3472,43 @@
             return `${String(d.getDate()).padStart(2, "0")}-${months[d.getMonth()]}-${String(d.getFullYear()).slice(-2)}`;
         }
 
+        // Real Estate (v66): "how long has this been held" computed from Holding Period Start
+        // Date to today — e.g. "15y 10m", or just "3m" for anything under a year. Returns "" for
+        // an unset/invalid/future date so callers can skip the line entirely.
+        function formatHoldingPeriod(startDateStr) {
+            if (!startDateStr) return "";
+            const start = new Date(startDateStr + "T00:00:00");
+            if (isNaN(start.getTime())) return "";
+            const now = new Date();
+            if (start > now) return "";
+            let years = now.getFullYear() - start.getFullYear();
+            let months = now.getMonth() - start.getMonth();
+            if (now.getDate() < start.getDate()) months--;
+            if (months < 0) { years--; months += 12; }
+            return years > 0 ? `${years}y ${months}m` : `${months}m`;
+        }
+
+        // Real Estate (v66): Property Type + Holding Period, or Bank Loan (v66): manual Redraw
+        // Facility amount — one short HTML line (or "" if nothing to show) meant to sit right
+        // under an account's name wherever it's listed. Shared by the Accounts page, a member's
+        // own Accounts list, and the account's own Activity page header banner so all three stay
+        // in sync automatically instead of drifting out of step with separately-written markup.
+        function accountExtraInfoLine(a) {
+            const group = a.group || DEFAULT_ACCOUNT_GROUP;
+            if (group === "Real Estate" && (a.propertyType || a.holdingStartDate)) {
+                const bits = [];
+                if (a.propertyType) bits.push(escapeHtml(a.propertyType));
+                const held = formatHoldingPeriod(a.holdingStartDate);
+                if (held) bits.push(`Held ${held}`);
+                return bits.length ? `<br><span style="font-size:0.7rem; color:#166534; font-weight:600;">🏷️ ${bits.join(" · ")}</span>` : "";
+            }
+            if (group === "Bank Loan" && a.hasRedrawFacility) {
+                const dateStr = a.redrawAsOfDate ? ` (as of ${formatNavHistoryDate(a.redrawAsOfDate)})` : "";
+                return `<br><span style="font-size:0.7rem; color:#0369a1; font-weight:600;">💰 Redraw Available: ${formatBalanceHTML(a.redrawAmount || 0, a.currency || baseCurrency)}${dateStr}</span>`;
+            }
+            return "";
+        }
+
         let navUpdateView = "card"; // "card" | "table" | "history" — which of the 3 views is shown
         let navUpdateFundsCache = []; // funds currently held (units > 0), across every account
 
@@ -3043,7 +3525,7 @@
                 .sort((a, b) => a.name.localeCompare(b.name));
 
             const dateInput = document.getElementById("navUpdateDate");
-            if (dateInput && !dateInput.value) dateInput.value = new Date().toISOString().slice(0, 10);
+            if (dateInput && !dateInput.value) dateInput.value = todayLocalStr();
 
             renderNavUpdateCardView();
             renderNavUpdateTableView();
@@ -3479,6 +3961,13 @@
         // type up front and only offers shortcuts for types actually in use. Tapping one opens
         // the Accounts page filtered to just that group/sub-group (see
         // sidebarFilterAccountsByType / accountsPageTypeFilter).
+        // v63: whether the sidebar's "Financial Accounts" type-shortcut list (Current Account,
+        // Savings Account, ... Bank Loan) is expanded — completely separate state from
+        // expandedAccountSubrows (the Accounts-page fund/currency/FD subrow toggle, v62). The two
+        // toggles look similar but control unrelated parts of the UI (sidebar drawer vs. main
+        // content list) and were built to stay fully independent of each other.
+        let sidebarAccountShortcutsExpanded = true;
+
         async function renderSidebarAccountTypeShortcuts() {
             const wrap = document.getElementById("sidebarAccountTypeShortcuts");
             if (!wrap) return;
@@ -3496,6 +3985,36 @@
                     </button>
                 `;
             }).join("");
+            // wrap.innerHTML above rebuilds the list on every sidebar refresh (e.g. re-opening
+            // the drawer, an active-item update) — re-apply the collapsed/expanded state each
+            // time so a previous collapse doesn't get silently undone by the next render.
+            wrap.classList.toggle("hidden", !sidebarAccountShortcutsExpanded);
+            const toggleBtn = document.getElementById("sidebarAccountShortcutsToggle");
+            if (toggleBtn) {
+                toggleBtn.textContent = sidebarAccountShortcutsExpanded ? "▾" : "▸";
+                const label = `${sidebarAccountShortcutsExpanded ? "Collapse" : "Expand"} account type list`;
+                toggleBtn.setAttribute("aria-label", label);
+                toggleBtn.setAttribute("title", label);
+                // No shortcuts to show at all (no accounts yet) — hide the toggle itself rather
+                // than leaving a caret that expands/collapses an empty list.
+                toggleBtn.classList.toggle("hidden", usedTypes.length === 0);
+            }
+        }
+
+        // Wired to the ▾/▸ beside "Financial Accounts" in the sidebar — purely a local show/hide
+        // of the type-shortcut list; does not touch accountsPageTypeFilter or navigate anywhere,
+        // so it's safe to tap even while a filter from one of those shortcuts is still active.
+        function toggleSidebarAccountShortcuts() {
+            sidebarAccountShortcutsExpanded = !sidebarAccountShortcutsExpanded;
+            const wrap = document.getElementById("sidebarAccountTypeShortcuts");
+            if (wrap) wrap.classList.toggle("hidden", !sidebarAccountShortcutsExpanded);
+            const toggleBtn = document.getElementById("sidebarAccountShortcutsToggle");
+            if (toggleBtn) {
+                toggleBtn.textContent = sidebarAccountShortcutsExpanded ? "▾" : "▸";
+                const label = `${sidebarAccountShortcutsExpanded ? "Collapse" : "Expand"} account type list`;
+                toggleBtn.setAttribute("aria-label", label);
+                toggleBtn.setAttribute("title", label);
+            }
         }
 
         // Wired to each shortcut above — opens the Accounts page filtered to just that
@@ -3541,12 +4060,31 @@
             return { total, currencyTotals };
         }
 
+        // Flips the "Net Worth by Member" section between expanded/collapsed and persists the
+        // choice — purely a display preference, the underlying totals are unaffected.
+        async function toggleMemberNetWorthCollapse() {
+            memberNetWorthCollapsed = !memberNetWorthCollapsed;
+            await writeDB(STORES.SETTINGS, { key: "memberNetWorthCollapsed", value: memberNetWorthCollapsed });
+            applyMemberNetWorthCollapseState();
+        }
+
+        // Applies the current collapse state to the DOM without a full re-render — swaps the
+        // rows container's visibility and the ▾/▸ toggle icon. Safe to call even before the rows
+        // themselves have been populated yet.
+        function applyMemberNetWorthCollapseState() {
+            const wrap = document.getElementById("memberNetWorthRows");
+            const toggleBtn = document.getElementById("memberNetWorthCollapseToggle");
+            if (wrap) wrap.style.display = memberNetWorthCollapsed ? "none" : "";
+            if (toggleBtn) toggleBtn.textContent = memberNetWorthCollapsed ? "▸" : "▾";
+        }
+
         // Draws the dashboard's "Net Worth by Member" report: one row per member (solo-owned
         // accounts only), one row per distinct joint-owned account group, and — only if any exist
         // — a final "Unassigned" row so the breakdown always ties out to the grand total above it.
         function renderMemberNetWorthRows(accounts, nativeBalances) {
             const wrap = document.getElementById("memberNetWorthRows");
             if (!wrap) return;
+            applyMemberNetWorthCollapseState();
 
             if (membersCache.length === 0) {
                 wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem;">No members yet — add one via Sidebar ▸ Manage Members to break this down by person.</p>`;
@@ -3677,7 +4215,7 @@
 
                 const linkedAcc = a.linkedAccountId ? accounts.find(x => x.id === a.linkedAccountId) : null;
                 const linkedLine = linkedAcc
-                    ? ` · <span style="color:#92400e; font-weight:600;">🔗 ${escapeHtml(linkedAcc.name)}</span>`
+                    ? ` · <span style="color:#92400e; font-weight:600;">🔗 ${escapeHtml(accountOptionLabel(linkedAcc, accounts))}</span>`
                     : "";
 
                 // Real Estate (v53): same "excluded from Net Worth" flag renderAccountsPage()
@@ -3687,9 +4225,11 @@
                     ? ` · <span style="color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
+                const extraInfoLine = accountExtraInfoLine(a);
+
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="member">
-                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}${excludedLine}</span>
+                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}${excludedLine}${extraInfoLine}</span>
                         <span style="color:var(--text-muted);">›</span>
                     </div>`;
             });
@@ -3718,6 +4258,7 @@
             document.getElementById("catLabelName").value = "";
             document.getElementById("catSelectedEmoji").value = "🍔";
             document.getElementById("currentSelectedEmojiBadge").textContent = "🍔";
+            document.getElementById("catExcludeFromSavings").checked = false;
             buildEmojiSelectionPanel();
             openModal("categoriesModal");
         }
@@ -3804,14 +4345,16 @@
             }
 
             const categoryId = "cat_" + Date.now();
+            const excludeFromSavings = document.getElementById("catExcludeFromSavings").checked;
             try {
-                await writeDB(STORES.CATEGORIES, { id: categoryId, name, type, icon });
+                await writeDB(STORES.CATEGORIES, { id: categoryId, name, type, icon, excludeFromSavings });
             } catch (err) {
                 alert("Could not save category: " + (err && err.message ? err.message : err));
                 return;
             }
 
             document.getElementById("catLabelName").value = "";
+            document.getElementById("catExcludeFromSavings").checked = false;
             
             await syncAndLoadCategories();
             await refreshAfterCategoryChange();
@@ -3832,10 +4375,19 @@
         async function renderCategoriesPage() {
             populateDefaultCategorySelects();
 
+            // v72: the 📊 toggle flips excludeFromSavings in place (no separate edit modal needed
+            // for existing/default-provisioned categories like "Family") — solid + labeled when a
+            // category is currently excluded, dim when it counts normally in the report.
             const rowHtml = c => `
                 <div class="config-item">
-                    <span class="category-display-badge"><span>${c.icon}</span> <strong>${escapeHtml(c.name)}</strong></span>
-                    <button class="trash-btn" data-click="removeCategory" data-id="${escapeHtml(c.id)}">🗑</button>
+                    <span class="category-display-badge">
+                        <span>${c.icon}</span> <strong>${escapeHtml(c.name)}</strong>
+                        ${c.excludeFromSavings ? '<span style="font-size:0.65rem; color:#92400e; font-weight:700; margin-left:6px;">🚫 Not in Report</span>' : ''}
+                    </span>
+                    <div style="display:flex; align-items:center;">
+                        <button class="trash-btn" data-click="toggleCategoryExcludeFromSavings" data-id="${escapeHtml(c.id)}" title="${c.excludeFromSavings ? 'Included in Net Savings Report' : 'Excluded from Net Savings Report'}" style="opacity:${c.excludeFromSavings ? '1' : '0.3'};">📊</button>
+                        <button class="trash-btn" data-click="removeCategory" data-id="${escapeHtml(c.id)}">🗑</button>
+                    </div>
                 </div>`;
 
             const incomeCats = dynamicCategories.filter(c => c.type === "income");
@@ -3845,6 +4397,22 @@
                 || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No income categories yet.</p>`;
             document.getElementById("categoriesPageExpenseList").innerHTML = expenseCats.map(rowHtml).join("")
                 || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No expense categories yet.</p>`;
+        }
+
+        // v72: flips whether transactions in this category are counted in the Net Savings Report's
+        // Surplus/Deficit or tallied separately as "Excluded from Report" (see renderSavingsStatement).
+        async function toggleCategoryExcludeFromSavings(id) {
+            const cat = dynamicCategories.find(c => c.id === id);
+            if (!cat) return;
+            const updated = { ...cat, excludeFromSavings: !cat.excludeFromSavings };
+            try {
+                await writeDB(STORES.CATEGORIES, updated);
+            } catch (err) {
+                alert("Could not update category: " + (err && err.message ? err.message : err));
+                return;
+            }
+            await syncAndLoadCategories();
+            await refreshAfterCategoryChange();
         }
 
         async function removeCategory(id) {
@@ -3896,6 +4464,7 @@
             }
             await syncAndLoadCategories();
             await migrateOthersCategoryRename();
+            await migrateFdInterestIncomeRename();
             await migrateStaleDestFieldCleanup();
             await migrateStaleCategoryOnTransfersCleanup();
         }
@@ -3912,6 +4481,24 @@
             for (const t of txs) {
                 if (t.cat === "Others" && (t.type === "income" || t.type === "expense")) {
                     t.cat = t.type === "income" ? "Other Income" : "Other Expenses";
+                    await writeDB(STORES.TRANSACTIONS, t);
+                }
+            }
+        }
+
+        // One-time migration: FD Interest Received transactions were previously saved under the
+        // literal category "Interest Income" — a name that was never actually added to
+        // DEFAULT_CATEGORIES, so it showed up in reports (Net Savings Statement, breakdowns) as
+        // an orphaned category invisible in Manage Categories. Renamed to "FD Interest Income"
+        // (now a real, manageable category) both here going forward and on existing records, so
+        // old and new FD interest entries land under the same category instead of splitting into
+        // two. Only touches the exact legacy value — never a category the user has since
+        // re-categorised away from it.
+        async function migrateFdInterestIncomeRename() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            for (const t of txs) {
+                if (t.cat === "Interest Income") {
+                    t.cat = "FD Interest Income";
                     await writeDB(STORES.TRANSACTIONS, t);
                 }
             }
@@ -3958,19 +4545,44 @@
             const accounts = await readAllDB(STORES.ACCOUNTS);
             if(accounts.length === 0) { alert("Add an account first!"); return; }
 
+            // v88: every open of this form starts from a clean slate for the Refund/Split/Category-
+            // lock state a prior Quick View action (Refund, Duplicate) may have left behind — a form
+            // opened normally (the "+" buttons, editing a row) must never silently inherit those.
+            pendingRefundOf = null;
+            document.getElementById("txCategory").disabled = false;
+            resetTxSplitRows();
+
             const srcSelect = document.getElementById("srcAccount"); srcSelect.innerHTML = "";
             const destSelect = document.getElementById("destAccount"); destSelect.innerHTML = "";
             const currSelect = document.getElementById("txCurrency"); currSelect.innerHTML = "";
             const catSelect = document.getElementById("txCategory"); catSelect.innerHTML = "";
 
-            Object.keys(fxRates).forEach(c => { currSelect.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
-            accounts.forEach(a => {
+            // v84: currency options previously listed in Object.keys(fxRates) insertion order
+            // (whatever order currencies were first added to Currency Settings in — not
+            // alphabetical, and unrelated to which one is the Base currency), and nothing
+            // afterward selected a default for a brand-new entry, so the browser just defaulted
+            // to whichever currency happened to land first in that order (e.g. USD) instead of
+            // the account holder's actual Base currency (MYR). Sorted alphabetically for a
+            // predictable list, and the "Account / To Account" dropdowns are sorted by
+            // group-then-name (matching the Accounts page, via the shared
+            // sortAccountsByGroupThenName()) instead of raw IndexedDB read order.
+            Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).forEach(c => { currSelect.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
+            const sortedAccountsForTxForm = sortAccountsByGroupThenName(accounts);
+            sortedAccountsForTxForm.forEach(a => {
                 const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
                 const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
-                const ownerLabel = ` — ${escapeHtml(accountOwnerNamesText(a))}`;
+                // v68: owner alone can still leave two accounts looking identical (e.g. two
+                // "HSBC Loan" accounts under the same family member) — accountRelatedSuffix
+                // tacks on the Related Account too, when one's set, so this list stays
+                // unambiguous even for that case.
+                const ownerLabel = ` — ${escapeHtml(accountOwnerNamesText(a) + accountRelatedSuffix(a, accounts))}`;
                 srcSelect.innerHTML += `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}${ownerLabel}</option>`;
                 destSelect.innerHTML += `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}${ownerLabel}</option>`;
             });
+            if (existingTxId === null && fxRates[baseCurrency] !== undefined) {
+                currSelect.value = baseCurrency;
+            }
+
 
             if (existingTxId !== null) {
                 const txs = await readAllDB(STORES.TRANSACTIONS);
@@ -3993,6 +4605,14 @@
                 document.getElementById("srcAccount").value = tx.src;
                 document.getElementById("destAccount").value = tx.dest || "";
                 document.getElementById("txDate").value = tx.date;
+                document.getElementById("txPayee").value = tx.payee || "";
+                document.getElementById("txPayeeLabel").textContent = tx.type === "income" ? "From (Optional)" : "To (Optional)";
+                document.getElementById("txNotes").value = tx.notes || "";
+                document.getElementById("txChecked").checked = !!tx.checked;
+                // Split Expenses is a new-entry-only affordance (see the comment on #txSplitWrap in
+                // index.html) — an existing record, split or not, is always edited as the single row
+                // it already is.
+                document.getElementById("txSplitWrap").style.display = "none";
 
                 document.getElementById("txManualFxToggle").checked = !!tx.manualFxRate;
                 document.getElementById("txManualFxRate").value = tx.manualFxRate || "";
@@ -4015,7 +4635,18 @@
                 }
 
                 const currentCats = dynamicCategories.filter(c => c.type === tx.type).map(c => c.name);
-                const fallbackGroup = tx.type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+                // v82: previously a hand-picked 4/7-name list that only covered the very original
+                // starter set (Salary/Investments/Freelance/Other Income, etc.) — anything added to
+                // DEFAULT_CATEGORIES since (FD Interest Income, EPF Contrib.(ER)/(EE), Dividend
+                // ASNB, etc.) wasn't in it, so if that category's own record was ever missing,
+                // renamed, or deleted, it silently disappeared from this dropdown with no way to
+                // pick it back for re-categorising an entry. Now unioned with the full
+                // DEFAULT_CATEGORIES list (kept alongside the original legacy names rather than
+                // replacing them, in case an older install still relies on one of those) so every
+                // built-in category is always selectable here regardless of what's actually
+                // persisted in the Categories store.
+                const legacyFallback = tx.type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+                const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === tx.type).map(c => c.name)];
                 
                 // Transfers have no category at all (the Category row is hidden for them below) —
                 // skip populating options entirely rather than leaving the <select> holding
@@ -4055,9 +4686,15 @@
             } else {
                 document.getElementById("txId").value = "";
                 document.getElementById("txType").value = type;
-                document.getElementById("txDate").value = new Date().toISOString().split('T')[0];
+                document.getElementById("txDate").value = todayLocalStr();
                 document.getElementById("txDesc").value = "";
                 document.getElementById("txAmount").value = "";
+                document.getElementById("txPayee").value = "";
+                document.getElementById("txPayeeLabel").textContent = type === "income" ? "From (Optional)" : "To (Optional)";
+                document.getElementById("txNotes").value = "";
+                document.getElementById("txChecked").checked = false;
+                // Split Expenses only makes sense for a brand-new Income/Expense entry.
+                document.getElementById("txSplitWrap").style.display = (type === "transfer") ? "none" : "block";
 
                 // Pre-select the user's default payment account, if one is set and still exists —
                 // new entries only, never when editing (handled above via tx.src). A preset
@@ -4084,7 +4721,11 @@
                 }
 
                 const currentCats = dynamicCategories.filter(c => c.type === type).map(c => c.name);
-                const fallbackGroup = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+                // v82: see matching comment on the "edit entry" branch above — unioned with
+                // DEFAULT_CATEGORIES (kept alongside the legacy names) so every built-in category
+                // is always offered here too.
+                const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+                const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === type).map(c => c.name)];
                 
                 // Transfers have no category (the Category row is hidden for them just above) — skip
                 // populating the <select> entirely for them. Previously this always populated it
@@ -4138,6 +4779,130 @@
             }
 
             openModal("txModal");
+        }
+
+        // --- SPLIT EXPENSES (v88) ---
+        // A split row is its own Category + Amount pair, added via the "➕ Split into another
+        // category" button and removable via its own [-]. On save, if any split rows exist,
+        // handleTransactionSubmitMobile() writes the main row PLUS every split row as separate,
+        // ordinary transaction records (same account/date/desc/notes/payee/checked state) sharing
+        // a generated splitGroupId — so nothing about how the rest of the app aggregates a normal
+        // transaction (account balances, category totals, reports) needs to know split rows exist
+        // at all. Only offered for a brand-new Income/Expense entry — see openTransactionForm().
+
+        function resetTxSplitRows() {
+            document.getElementById("txSplitRows").innerHTML = "";
+            txSplitRowCounter = 0;
+            recalcTxSplitTotal();
+        }
+
+        function buildSplitCategoryOptionsHTML(type) {
+            const currentCats = dynamicCategories.filter(c => c.type === type).map(c => c.name);
+            const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+            const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === type).map(c => c.name)];
+            const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
+            return uniqueMerged.map(c => `<option value="${escapeHtml(c)}">${getCategoryIcon(c, type)} ${escapeHtml(c)}</option>`).join("");
+        }
+
+        function addTxSplitRow() {
+            const type = document.getElementById("txType").value;
+            if (type === "transfer") return;
+            txSplitRowCounter++;
+            const rowId = `txSplitRow_${txSplitRowCounter}`;
+            const row = document.createElement("div");
+            row.className = "split-row";
+            row.id = rowId;
+            row.innerHTML = `
+                <select class="form-input tx-split-cat" style="flex:1.2;">${buildSplitCategoryOptionsHTML(type)}</select>
+                <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" placeholder="Amount" style="flex:1;" data-input="recalcTxSplitTotal">
+                <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">🧮</button>
+                <button type="button" class="calc-btn" data-click="removeTxSplitRow" data-row-id="${rowId}" title="Remove" style="color:var(--expense-color);">−</button>
+            `;
+            document.getElementById("txSplitRows").appendChild(row);
+            row.querySelector(".tx-split-amt").id = `${rowId}_amt`;
+            recalcTxSplitTotal();
+        }
+
+        function removeTxSplitRow(el) {
+            const rowId = el.dataset.rowId;
+            const row = document.getElementById(rowId);
+            if (row) row.remove();
+            recalcTxSplitTotal();
+        }
+
+        function recalcTxSplitTotal() {
+            const mainAmt = parseFloat(document.getElementById("txAmount").value) || 0;
+            let splitTotal = mainAmt;
+            document.querySelectorAll("#txSplitRows .tx-split-amt").forEach(inp => {
+                splitTotal += parseFloat(inp.value) || 0;
+            });
+            const currency = document.getElementById("txCurrency").value || baseCurrency;
+            const display = document.getElementById("txSplitTotalDisplay");
+            if (display) display.textContent = formatCurrency(splitTotal, currency);
+        }
+
+        // Collects every split row into [{cat, amount}] — rows with no category or a non-positive
+        // amount are skipped rather than blocking save, since a half-filled row the user is still
+        // typing into shouldn't stop the main entry from being saved.
+        function collectTxSplitRows() {
+            const rows = [];
+            document.querySelectorAll("#txSplitRows .split-row").forEach(rowEl => {
+                const cat = rowEl.querySelector(".tx-split-cat").value;
+                const amt = parseFloat(rowEl.querySelector(".tx-split-amt").value);
+                if (cat && !isNaN(amt) && amt > 0) rows.push({ cat, amount: amt });
+            });
+            return rows;
+        }
+
+        // --- CALCULATOR / NUMPAD (v88) ---
+        function openCalcPad(el) {
+            calcPadTargetId = el.dataset.target;
+            const targetInput = document.getElementById(calcPadTargetId);
+            const existing = targetInput ? targetInput.value : "";
+            calcPadExpr = (existing && !isNaN(parseFloat(existing))) ? String(existing) : "";
+            updateCalcPadDisplay();
+            openModal("calcPadModal");
+        }
+
+        function updateCalcPadDisplay() {
+            document.getElementById("calcPadDisplay").textContent = calcPadExpr || "0";
+        }
+
+        function calcPadPress(el) {
+            const val = el.dataset.val;
+            if (val === "C") {
+                calcPadExpr = "";
+            } else if (val === "⌫") {
+                calcPadExpr = calcPadExpr.slice(0, -1);
+            } else if (val === "=") {
+                try {
+                    const sanitized = calcPadExpr.replace(/×/g, "*").replace(/÷/g, "/").replace(/−/g, "-");
+                    // Only digits/operators/dot/space allowed — this is a plain arithmetic
+                    // calculator, not a general expression evaluator, and the input is the user's
+                    // own typing (via these fixed buttons), not external data.
+                    if (!/^[0-9+\-*/.\s]*$/.test(sanitized) || sanitized.trim() === "") { return; }
+                    const result = Function('"use strict"; return (' + sanitized + ')')();
+                    if (typeof result === "number" && isFinite(result)) {
+                        calcPadExpr = String(Math.round(result * 100) / 100);
+                    }
+                } catch (e) { /* invalid expression — leave display as-is */ }
+            } else {
+                calcPadExpr += val;
+            }
+            updateCalcPadDisplay();
+        }
+
+        function calcPadApply() {
+            if (calcPadTargetId) {
+                const num = parseFloat(calcPadExpr);
+                const input = document.getElementById(calcPadTargetId);
+                if (input && !isNaN(num)) {
+                    input.value = num;
+                    input.dispatchEvent(new Event("input", { bubbles: true }));
+                    input.dispatchEvent(new Event("change", { bubbles: true }));
+                }
+            }
+            closeModal("calcPadModal");
         }
 
         // --- RECEIPT / PHOTO ATTACHMENT ---
@@ -4257,7 +5022,7 @@
             wrap.style.display = showFd ? "block" : "none";
 
             if (showFd && !document.getElementById("txFdStartDate").value) {
-                document.getElementById("txFdStartDate").value = document.getElementById("txDate").value || new Date().toISOString().split("T")[0];
+                document.getElementById("txFdStartDate").value = document.getElementById("txDate").value || todayLocalStr();
                 recalcTxFdMaturity();
             }
 
@@ -4322,7 +5087,7 @@
             const start = new Date(startVal + "T00:00:00");
             const maturity = new Date(start);
             maturity.setMonth(maturity.getMonth() + tenure);
-            const maturityStr = maturity.toISOString().split("T")[0];
+            const maturityStr = localDateStr(maturity);
             document.getElementById("txFdMaturityDate").value = maturityStr;
 
             const principal = parseFloat(document.getElementById("txAmount").value) || 0;
@@ -4523,7 +5288,7 @@
 
             const refText = tx.fdReferenceNo ? ` · Ref: ${tx.fdReferenceNo}` : '';
             document.getElementById("resolveFdSummary").textContent =
-                `${formatCurrency(tx.amount, tx.currency)} placement in "${holdingAccount.name}"${refText}`;
+                `${formatCurrency(tx.amount, tx.currency)} placement in "${accountOptionLabel(holdingAccount, accounts)}"${refText}`;
             document.getElementById("resolveFdMeta").textContent =
                 `Commenced ${tx.fdStartDate} · ${tx.fdTenureMonths} months · ${tx.fdInterestRate}% p.a. · Matures ${tx.fdMaturityDate}`;
 
@@ -4532,12 +5297,20 @@
             const projectedInterest = tx.amount * (tx.fdInterestRate / 100) * (tx.fdTenureMonths / 12);
             document.getElementById("resolveFdInterest").value = projectedInterest.toFixed(2);
 
+            // v81: dates every transaction this modal creates (withdrawal/renewal/interest legs).
+            // Defaults to the placement's own maturity date rather than today — when a placement
+            // has sat overdue for a while before you get around to resolving it, the entries
+            // should reflect when the FD actually matured, not whatever day you happened to log
+            // into the app. Still fully editable for the (more common) case of resolving it
+            // right on/near maturity, or when the bank actually settled it on a different date.
+            document.getElementById("resolveFdResolutionDate").value = tx.fdMaturityDate || todayLocalStr();
+
             // Destination account pickers for both flows — any account except this same FD placement's
             // holding account makes sense as a target (though we don't hard-block picking it either).
             const destOptions = accounts.map(a => {
                 const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
                 const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
-                return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel} — ${escapeHtml(accountOwnerNamesText(a))}</option>`;
+                return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel} — ${escapeHtml(accountOwnerNamesText(a) + accountRelatedSuffix(a, accounts))}</option>`;
             }).join("");
             document.getElementById("resolveFdInterestDest").innerHTML = destOptions;
             document.getElementById("resolveFdWithdrawDest").innerHTML = destOptions;
@@ -4608,7 +5381,7 @@
             const start = new Date(startVal + "T00:00:00");
             const maturity = new Date(start);
             maturity.setMonth(maturity.getMonth() + tenure);
-            const maturityStr = maturity.toISOString().split("T")[0];
+            const maturityStr = localDateStr(maturity);
             document.getElementById("resolveFdNewMaturity").value = maturityStr;
 
             const txId = parseInt(document.getElementById("resolveFdTxId").value);
@@ -4651,7 +5424,8 @@
             if (isNaN(interest) || interest < 0) { alert("Please enter a valid interest amount (0 if none)."); return; }
 
             const action = document.getElementById("resolveFdAction").value;
-            const today = new Date().toISOString().split("T")[0];
+            const resolutionDate = document.getElementById("resolveFdResolutionDate").value;
+            if (!resolutionDate) { alert("Please select a resolution date."); return; }
             const refLabel = tx.fdReferenceNo ? `Ref: ${tx.fdReferenceNo}` : `#${tx.id}`;
 
             try {
@@ -4665,7 +5439,7 @@
                     await writeDB(STORES.TRANSACTIONS, {
                         type: "transfer", desc: `FD Withdrawal — Principal (${refLabel})`,
                         amount: tx.amount, src: holdingAccountId, dest: destId, currency: tx.currency,
-                        cat: "Fixed Deposit", date: today, image: null,
+                        cat: "Fixed Deposit", date: resolutionDate, image: null,
                         fdReferenceNo: tx.fdReferenceNo || null,
                         fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null
                     });
@@ -4675,7 +5449,7 @@
                         await writeDB(STORES.TRANSACTIONS, {
                             type: "income", desc: `FD Interest Received (${refLabel})`,
                             amount: interest, src: destId, dest: "", currency: tx.currency,
-                            cat: "Interest Income", date: today, image: null,
+                            cat: "FD Interest Income", date: resolutionDate, image: null,
                             fdReferenceNo: tx.fdReferenceNo || null,
                             fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null
                         });
@@ -4701,7 +5475,7 @@
                     await writeDB(STORES.TRANSACTIONS, {
                         type: "transfer", desc: `FD Placement Closed for Renewal (${refLabel})`,
                         amount: tx.amount, src: holdingAccountId, dest: "", currency: tx.currency,
-                        cat: "Fixed Deposit", date: today, image: null,
+                        cat: "Fixed Deposit", date: resolutionDate, image: null,
                         fdReferenceNo: tx.fdReferenceNo || null,
                         fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null
                     });
@@ -4710,7 +5484,7 @@
                     await writeDB(STORES.TRANSACTIONS, {
                         type: "transfer", desc: `FD Renewal Placement`,
                         amount: newPrincipal, src: "", dest: holdingAccountId, currency: tx.currency,
-                        cat: "Fixed Deposit", date: today, image: null,
+                        cat: "Fixed Deposit", date: resolutionDate, image: null,
                         fdReferenceNo: newReference,
                         fdStartDate: newStart, fdTenureMonths: newTenure, fdInterestRate: newRate, fdMaturityDate: newMaturity
                     });
@@ -4721,7 +5495,7 @@
                         await writeDB(STORES.TRANSACTIONS, {
                             type: "income", desc: `FD Interest Received (${refLabel})`,
                             amount: interest, src: interestDestId, dest: "", currency: tx.currency,
-                            cat: "Interest Income", date: today, image: null,
+                            cat: "FD Interest Income", date: resolutionDate, image: null,
                             fdReferenceNo: tx.fdReferenceNo || null,
                             fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null
                         });
@@ -4737,7 +5511,7 @@
             }
 
             closeModal("resolveFdModal");
-            renderApp();
+            await refreshAfterTransactionChange();
         }
 
         // Direct Mobile Save execution avoiding forms issues
@@ -4817,6 +5591,11 @@
                 cat: document.getElementById("txType").value === "transfer" ? preservedTransferCat : document.getElementById("txCategory").value,
                 date: dateVal,
                 image: currentTxImageData || null,
+                // v88: To/From (payee) and free-text Notes — optional on every type, blank stored as
+                // null (not "") so existing code that checks `t.notes` truthy keeps working unchanged.
+                payee: document.getElementById("txPayee").value.trim() || null,
+                notes: document.getElementById("txNotes").value.trim() || null,
+                checked: document.getElementById("txChecked").checked,
                 fdReferenceNo: null,
                 fdStartDate: null,
                 fdTenureMonths: null,
@@ -4834,6 +5613,19 @@
                 // the app renders, as before (see computeAccountBalances()/applyToAccountBalance()).
                 destAmount: transferDestAmountOverride
             };
+
+            // v88: Refund — set only by openRefundFromOptions(), which opens this same form as a
+            // plain Income entry with the category locked to the original expense's category.
+            // Tagging it here (rather than a separate save path) means it inherits every other
+            // field/validation above for free; renderApp()/renderSavingsStatement()/the Spending
+            // & Income Breakdown pages special-case isRefund so it reduces the original expense
+            // category instead of counting as income (see those functions), while
+            // computeAccountBalances() needs no change at all — crediting the account back is
+            // exactly what an ordinary income record already does.
+            if (pendingRefundOf !== null && record.type === "income") {
+                record.isRefund = true;
+                record.refundOf = pendingRefundOf;
+            }
 
             const fdFieldsVisible = document.getElementById("txFdFieldsWrap").style.display !== "none";
             if (fdFieldsVisible) {
@@ -4859,8 +5651,34 @@
                 record.id = parseInt(txIdInput);
             }
 
+            // v88: Split Expenses — only reachable for a brand-new Income/Expense entry (the
+            // #txSplitWrap UI is hidden for Transfers and for any edit — see openTransactionForm()
+            // and index.html's comment on #txSplitWrap), so this never fires for an edit or a
+            // Transfer even if stale rows were somehow left in the DOM. Each split row becomes its
+            // own ordinary transaction record — same account/date/desc/payee/notes/checked as the
+            // main row above, just its own category+amount — sharing a generated splitGroupId
+            // purely for traceability. Because every row is a completely normal record, every
+            // existing balance/report calculation already handles it correctly with no changes.
+            const isNewEntry = txIdInput === "";
+            const splitEligible = isNewEntry && (record.type === "income" || record.type === "expense");
+            const splitRows = splitEligible ? collectTxSplitRows() : [];
+
             try {
-                await writeDB(STORES.TRANSACTIONS, record);
+                if (splitRows.length > 0) {
+                    const splitGroupId = "split_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+                    record.splitGroupId = splitGroupId;
+                    await writeDB(STORES.TRANSACTIONS, record);
+                    for (const row of splitRows) {
+                        const extraRecord = Object.assign({}, record, { cat: row.cat, amount: row.amount, splitGroupId });
+                        delete extraRecord.id;
+                        // Only the first (main) row in a split carries the receipt photo, if any —
+                        // attaching the same image to every split part would be misleading.
+                        extraRecord.image = null;
+                        await writeDB(STORES.TRANSACTIONS, extraRecord);
+                    }
+                } else {
+                    await writeDB(STORES.TRANSACTIONS, record);
+                }
             } catch (err) {
                 const msg = (err && err.name === "QuotaExceededError")
                     ? "Not enough storage space to save this photo. Try removing the image or freeing up space."
@@ -4868,8 +5686,9 @@
                 alert(msg);
                 return;
             }
+            pendingRefundOf = null;
             closeModal("txModal");
-            renderApp();
+            await refreshAfterTransactionChange();
         }
 
         // Delete button inside the "Edit Ledger Entry" modal itself — the ledger list no longer
@@ -4879,18 +5698,242 @@
         async function deleteTxFromEditModal() {
             const txIdInput = document.getElementById("txId").value;
             if (!txIdInput) return;
+            const ok = await deleteTransactionById(parseInt(txIdInput), /* alreadyConfirmed */ false, /* skipModalClose */ true);
+            if (ok) closeModal("txModal");
+        }
 
-            const ok = await customConfirm("Delete this transaction item?");
-            if (!ok) return;
-
+        // Shared delete-by-id, used by the Edit modal's own Delete button above and by "Delete
+        // transaction" in the Quick View Options menu (deleteTransactionFromOptions()). Confirms
+        // first unless the caller already did (the Options menu path shows its own confirm-free
+        // flow through customConfirm here too, so alreadyConfirmed is currently always false —
+        // kept as a parameter in case a future caller has already confirmed some other way).
+        async function deleteTransactionById(id, alreadyConfirmed = false, skipModalClose = false) {
+            if (!id) return false;
+            if (!alreadyConfirmed) {
+                const ok = await customConfirm("Delete this transaction item?");
+                if (!ok) return false;
+            }
             try {
-                await deleteDB(STORES.TRANSACTIONS, parseInt(txIdInput));
+                await deleteDB(STORES.TRANSACTIONS, id);
             } catch (err) {
                 alert("Could not delete transaction: " + (err && err.message ? err.message : err));
+                return false;
+            }
+            if (!skipModalClose) closeModal("txModal");
+            await refreshAfterTransactionChange();
+            return true;
+        }
+
+        // --- TRANSACTION QUICK VIEW / OPTIONS (v88) ---
+        // Tapping a ledger row opens this Quick View instead of jumping straight into the full
+        // Edit form — a glance at the amount/account/payee/notes, a one-tap Checked toggle
+        // (matching a credit-card-style "tally against statement" workflow), and a ⋮ menu for
+        // Duplicate / Edit / Refund / Delete. "Edit transaction" from that menu still opens the
+        // exact same txModal as before; nothing about editing itself changed.
+        async function openTxQuickView(el) {
+            const id = Number(el.dataset.id);
+            if (!id) return;
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = txs.find(t => t.id === id);
+            if (!tx) return;
+            // Fund transactions (Buy/Sell/Dividend/Contribution) keep a linked fund's unit balance
+            // in sync and already have their own dedicated editor — Quick View doesn't apply to
+            // them (no Checked/Refund/Duplicate concept for a fund-linked row), so fall straight
+            // through to the normal edit flow exactly as tapping used to do everywhere.
+            if (tx.fundId) {
+                await openTransactionForm(tx.type, id);
                 return;
             }
-            closeModal("txModal");
-            renderApp();
+
+            activeQuickViewTxId = id;
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const accountName = accId => { if (!accId) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === accId); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
+
+            let headerColor, sgn;
+            if (tx.type === "income") { headerColor = "var(--income-color)"; sgn = "+"; }
+            else if (tx.type === "expense") { headerColor = "var(--expense-color)"; sgn = "-"; }
+            else { headerColor = "var(--primary)"; sgn = "🔄"; }
+
+            document.getElementById("txQuickViewHeader").style.background = headerColor;
+            document.getElementById("txQuickViewAmount").textContent = `${sgn}${formatCurrency(tx.amount, tx.currency)}`;
+            document.getElementById("txQuickViewDate").textContent = tx.date;
+
+            const icon = tx.type === "transfer" ? "🔄" : getCategoryIcon(tx.cat, tx.type);
+            document.getElementById("txQuickViewDesc").textContent = `${icon} ${tx.desc}`;
+
+            let destLine = "";
+            if (tx.type === "transfer") {
+                destLine = `<div>To Account: ${tx.dest ? accountName(tx.dest) : "(unknown)"}</div>`;
+            }
+            const payeeLabel = tx.type === "income" ? "From" : "To";
+            const refundLine = tx.isRefund ? `<div style="color:var(--income-color); font-weight:700;">↩️ Refund entry</div>` : "";
+
+            document.getElementById("txQuickViewDetails").innerHTML = `
+                <div>Account: ${accountName(tx.src)}</div>
+                ${destLine}
+                ${tx.cat ? `<div>Category: ${escapeHtml(tx.cat)}</div>` : ""}
+                <div>${payeeLabel}: ${tx.payee ? escapeHtml(tx.payee) : "-"}</div>
+                <div>Notes: ${tx.notes ? escapeHtml(tx.notes) : "-"}</div>
+                ${refundLine}
+            `;
+
+            updateTxQuickViewCheckedBtn(!!tx.checked);
+            // Refund only makes sense for an ordinary expense — not for a Transfer, not for
+            // another refund (no "refund of a refund"), and not for Income.
+            document.getElementById("txOptionsRefundBtn").style.display = (tx.type === "expense" && !tx.isRefund) ? "flex" : "none";
+
+            openModal("txQuickViewModal");
+        }
+
+        function updateTxQuickViewCheckedBtn(isChecked) {
+            const btn = document.getElementById("txQuickViewCheckedBtn");
+            if (!btn) return;
+            if (isChecked) {
+                btn.textContent = "✅ CHECKED — tap to unmark";
+                btn.style.background = "#dcfce7";
+                btn.style.color = "#15803d";
+            } else {
+                btn.textContent = "☐ Mark as Checked";
+                btn.style.background = "#e2e8f0";
+                btn.style.color = "var(--text-main)";
+            }
+        }
+
+        async function toggleTxCheckedFromQuickView() {
+            if (!activeQuickViewTxId) return;
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = txs.find(t => t.id === activeQuickViewTxId);
+            if (!tx) return;
+            tx.checked = !tx.checked;
+            await writeDB(STORES.TRANSACTIONS, tx);
+            closeModal("txQuickViewModal");
+            await refreshAfterTransactionChange();
+        }
+
+        // Options is a layer on top of Quick View, not its own navigable step — it shares Quick
+        // View's single pushed history entry (see openModal()/pushVirtualState()) rather than
+        // pushing a second one. A single back-press (or closeModal("txQuickViewModal") call)
+        // pops that one entry and the popstate handler's own forEach already clears every
+        // currently-active modal in one shot, so Options disappears along with Quick View either
+        // way. Pushing a second entry here would instead leave a "phantom" extra history step
+        // behind every time this menu is used to jump into Edit/Duplicate/Refund below — see
+        // closeModalAndThen() for why that matters.
+        function openTxOptionsMenu() {
+            document.getElementById("txOptionsModal").classList.add("active");
+        }
+
+        // Dismisses just the Options submenu, back to Quick View underneath — not a history
+        // navigation (see the comment on openTxOptionsMenu() above for why Options doesn't have
+        // its own history entry), so this only ever removes its own "active" class.
+        function closeTxOptionsMenu() {
+            document.getElementById("txOptionsModal").classList.remove("active");
+        }
+
+        // Used only when a Quick View/Options action needs to hand off into a freshly-opened
+        // txModal (Edit / Duplicate / Refund below). A plain closeModal() + openModal() pair
+        // would race: closeModal()'s history.back() doesn't take effect until its popstate event
+        // fires on a later tick, but openModal()'s pushState() runs immediately — so the new
+        // entry would land before the pop actually happened, leaving the browser's back-stack
+        // permanently one step longer than the visible modal stack every time this runs. Waiting
+        // for the real popstate event before pushing the next state keeps the two in lockstep.
+        function closeModalAndThen(id, then) {
+            const onPop = () => {
+                window.removeEventListener("popstate", onPop);
+                then();
+            };
+            window.addEventListener("popstate", onPop);
+            closeModal(id);
+        }
+
+
+        function editTransactionFromOptions() {
+            const id = activeQuickViewTxId;
+            closeModalAndThen("txQuickViewModal", async () => {
+                if (!id) return;
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                const tx = txs.find(t => t.id === id);
+                if (!tx) return;
+                await openTransactionForm(tx.type, id);
+            });
+        }
+
+        // Opens a brand-new entry of the same type, pre-filled from the tapped transaction —
+        // everything except the id (so it saves as a new record) and the Checked state (a
+        // duplicate is, by definition, not yet reconciled against a statement).
+        function duplicateTransactionFromOptions() {
+            const id = activeQuickViewTxId;
+            closeModalAndThen("txQuickViewModal", async () => {
+                if (!id) return;
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                const tx = txs.find(t => t.id === id);
+                if (!tx || tx.fundId) return;
+
+                await openTransactionForm(tx.type, null);
+                document.getElementById("txDesc").value = tx.desc;
+                document.getElementById("txAmount").value = tx.amount;
+                document.getElementById("txCurrency").value = tx.currency;
+                document.getElementById("srcAccount").value = tx.src || "";
+                if (tx.type === "transfer") {
+                    document.getElementById("destAccount").value = tx.dest || "";
+                } else {
+                    document.getElementById("txCategory").value = tx.cat || "";
+                }
+                document.getElementById("txPayee").value = tx.payee || "";
+                document.getElementById("txNotes").value = tx.notes || "";
+                document.getElementById("txDate").value = tx.date;
+                document.getElementById("txChecked").checked = false;
+                syncTransactionCurrency();
+                document.getElementById("txModalTitle").textContent = "Duplicate Entry";
+            });
+        }
+
+        async function deleteTransactionFromOptions() {
+            const id = activeQuickViewTxId;
+            closeModal("txQuickViewModal");
+            if (!id) return;
+            await deleteTransactionById(id);
+        }
+
+        // Opens a new Income entry, pre-filled from the tapped expense and locked to its exact
+        // category — the category is forced (not just pre-selected) because the Income category
+        // dropdown otherwise only ever lists Income categories, and the Spending/Income Breakdown
+        // + Net Savings Statement + dashboard totals all key their refund offset off `t.cat`
+        // matching the original expense's category exactly (see the isRefund handling in
+        // renderApp()/renderSavingsStatement()/renderSpendingBreakdownPage()/
+        // renderIncomeBreakdownPage()). pendingRefundOf (read by handleTransactionSubmitMobile) is
+        // the actual flag that makes this save as a refund rather than an ordinary Income entry.
+        function openRefundFromOptions() {
+            const id = activeQuickViewTxId;
+            closeModalAndThen("txQuickViewModal", async () => {
+                if (!id) return;
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                const tx = txs.find(t => t.id === id);
+                if (!tx || tx.type !== "expense") return;
+
+                await openTransactionForm("income", null);
+                document.getElementById("txDesc").value = `Refund: ${tx.desc}`;
+                document.getElementById("txAmount").value = tx.amount;
+                document.getElementById("txCurrency").value = tx.currency;
+                document.getElementById("srcAccount").value = tx.src || "";
+
+                const catSelect = document.getElementById("txCategory");
+                const catName = tx.cat || "Other Expenses";
+                const icon = getCategoryIcon(catName, "expense");
+                catSelect.innerHTML = `<option value="${escapeHtml(catName)}">${icon} ${escapeHtml(catName)}</option>`;
+                catSelect.value = catName;
+                catSelect.disabled = true;
+
+                document.getElementById("txDate").value = todayLocalStr();
+                document.getElementById("txSplitWrap").style.display = "none";
+                syncTransactionCurrency();
+
+                document.getElementById("txModalTitle").textContent = `Refund: ${tx.desc}`;
+                document.getElementById("txSubmitBtn").textContent = "Save Refund";
+
+                // Set last — openTransactionForm() itself resets pendingRefundOf to null on
+                // every call, so this has to happen after it returns, not before.
+                pendingRefundOf = id;
+            });
         }
 
         // Populates the Year filter with only years that actually have a transaction, plus the
@@ -4980,6 +6023,7 @@
             const unitTrustAccounts = accounts.filter(a => a.type === "unittrust");
             if (unitTrustAccounts.length > 0) {
                 const funds = await readAllDB(STORES.FUNDS);
+                const allFundIds = new Set(funds.map(f => f.id));
                 const fundsByAccountId = {};
                 funds.forEach(f => { (fundsByAccountId[f.accountId] = fundsByAccountId[f.accountId] || []).push(f); });
 
@@ -4995,10 +6039,22 @@
                     // account's balance. There's no live NAV left to mark them at, so they're
                     // valued at remaining cost basis, exactly like the Fund Holdings table's own
                     // "(fund deleted)" row.
+                    //
+                    // `txs` here is the whole-app transaction list, so a transaction's fundId can
+                    // belong to a fund that's still alive under a DIFFERENT unit trust account —
+                    // that's not orphaned, it's just not ours, and must be excluded rather than
+                    // counted here too (otherwise every account's balance silently includes every
+                    // other account's fund holdings — see renderFundHoldingsTable() for the same fix).
                     const liveFundIds = new Set(accFunds.map(f => f.id));
                     const orphanTxsByFundId = {};
                     txs.forEach(t => {
                         if (!t.fundId || liveFundIds.has(t.fundId)) return;
+                        if (allFundIds.has(t.fundId)) return; // alive under a different account — shown/counted there instead
+                        // Fund deleted everywhere — only attribute it to this account if the
+                        // transaction itself references this account (true for Buy/Sell/
+                        // Dividend(Reinvest)/Contribution; Dividend Cheque Payout carries no
+                        // account link once its fund is gone, so it's left out rather than guessed).
+                        if (t.src !== acc.id && t.dest !== acc.id) return;
                         (orphanTxsByFundId[t.fundId] = orphanTxsByFundId[t.fundId] || []).push(t);
                     });
                     Object.values(orphanTxsByFundId).forEach(fTxs => {
@@ -5052,6 +6108,7 @@
             // joint-owned account group, and — only if any exist — one row for unassigned accounts,
             // so the breakdown always ties out to the grand total above.
             renderMemberNetWorthRows(accounts, nativeBalances);
+            renderPinnedAccountsWidget(accounts, nativeBalances);
             renderRecentTransactionsWidget(accounts, txs);
 
             // --- Fixed Deposit maturity reminders ---
@@ -5059,7 +6116,7 @@
             // account itself — an FD account can hold several tranches, each maturing separately.
             // Placements the user has already renewed or withdrawn are flagged fdResolved and
             // dropped from this scan so the reminder clears once acted upon.
-            const todayMs = new Date(new Date().toISOString().split("T")[0] + "T00:00:00").getTime();
+            const todayMs = new Date(todayLocalStr() + "T00:00:00").getTime();
             const MS_PER_DAY = 86400000;
             let reminderHTML = "";
             txs.filter(t => t.fdMaturityDate && !t.fdResolved).forEach(t => {
@@ -5079,7 +6136,7 @@
                         : (daysLeft === 0 ? `matures today` : `matures in ${daysLeft} day${daysLeft === 1 ? '' : 's'} (${t.fdMaturityDate})`);
                     reminderHTML += `
                         <div data-click="openResolveFdModal" data-id="${escapeHtml(t.id)}" style="cursor:pointer; background:${bg}; border:1px solid ${border}; color:${textCol}; border-radius:12px; padding:12px 14px; margin-bottom:8px; font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-                            <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(t.amount, t.currency)} placement in "${escapeHtml(holdingAccount.name)}" ${label} — plan renewal or withdrawal.</span>
+                            <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(t.amount, t.currency)} placement in "${escapeHtml(accountOptionLabel(holdingAccount, accounts))}" ${label} — plan renewal or withdrawal.</span>
                             <span style="font-size:1.1rem;">›</span>
                         </div>
                     `;
@@ -5184,6 +6241,24 @@
                 linkedBanner.style.display = "none";
             }
 
+            // Property Type/Holding Period or Redraw Facility banner (v66) — accountExtraInfoLine()
+            // already returns a "<br>..." prefixed line meant to sit under an account name, so the
+            // leading "<br>" is stripped here since this banner is its own standalone block, not a
+            // continuation of another line.
+            const extraInfoBanner = document.getElementById("ledgerExtraInfoBanner");
+            if (showFullAccountHistory) {
+                const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
+                const infoHtml = viewingAcc ? accountExtraInfoLine(viewingAcc).replace(/^<br>/, "") : "";
+                if (infoHtml) {
+                    extraInfoBanner.innerHTML = infoHtml;
+                    extraInfoBanner.style.display = "block";
+                } else {
+                    extraInfoBanner.style.display = "none";
+                }
+            } else {
+                extraInfoBanner.style.display = "none";
+            }
+
             // Fund Holdings section (Unit Trust accounts only) — shown above the normal
             // transaction ledger list, which still displays every Buy/Sell/Dividend/Contribution
             // as an ordinary-looking entry (they ARE ordinary transfer/income transactions under
@@ -5218,7 +6293,12 @@
             // Compute structural titles
             if (activeCategoryView !== "all") {
                 const icon = getCategoryIcon(activeCategoryView);
-                document.getElementById("ledgerTargetTitle").textContent = `${icon} ${activeCategoryView.toUpperCase()}`;
+                const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                let periodSuffix = "";
+                if (categoryDrillMonth !== "all" && categoryDrillYear !== "all") periodSuffix = ` · ${monthNames[parseInt(categoryDrillMonth)]} ${categoryDrillYear}`;
+                else if (categoryDrillYear !== "all") periodSuffix = ` · ${categoryDrillYear}`;
+                else if (categoryDrillMonth !== "all") periodSuffix = ` · ${monthNames[parseInt(categoryDrillMonth)]} (All Years)`;
+                document.getElementById("ledgerTargetTitle").textContent = `${icon} ${activeCategoryView.toUpperCase()}${periodSuffix}`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
             } else if (directTypeView !== "all") {
                 document.getElementById("ledgerTargetTitle").textContent = `All ${directTypeView.charAt(0).toUpperCase() + directTypeView.slice(1)} Log`;
@@ -5227,13 +6307,23 @@
                 document.getElementById("ledgerTargetTitle").textContent = "Portfolio General Log";
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
             } else {
-                const currentActiveAccName = accounts.find(a => a.id === activeLedgerAccountView)?.name || "Vault";
+                const activeAcc = accounts.find(a => a.id === activeLedgerAccountView);
+                // v71: name + owner only here, no Related-account suffix — the dedicated
+                // "🔗 Related Account: X" banner already shows that right below this title,
+                // so repeating it in the title itself was just noise (see Image 2 feedback).
+                const currentActiveAccName = activeAcc ? `${activeAcc.name} (${accountOwnerNamesText(activeAcc)})` : "Vault";
                 document.getElementById("ledgerTargetTitle").textContent = `${currentActiveAccName} Activity`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "inline-block";
             }
 
             let incBaseTotal = 0, expBaseTotal = 0;
             let catSummary = { income: {}, expense: {} };
+            // v73: categories flagged "Exclude from Net Savings Report" (Manage Categories) are
+            // left out of the dashboard's own Income/Expense/Savings banner totals too, so it
+            // matches the dedicated Net Savings Statement page rather than quietly disagreeing
+            // with it. catSummary below is intentionally left untouched — nothing on this page
+            // renders it, so there's nothing for the exclusion to affect there.
+            const excludedCatNamesForBanner = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
             
             // Prime fallback and custom categories
             const currentIncomeCategories = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), "Salary", "Investments", "Freelance", "Other Income"])];
@@ -5350,35 +6440,45 @@
 
             let matchedCount = 0;
 
-            // The dashboard's month/year filter is meant to scope PERIOD-based reporting — the
-            // Total Income/Expenses stat boxes above, and the category/type breakdowns drilled into
-            // via navigateToCategoryPage()/navigateToDirectTypePage() (which were themselves built
-            // from that same filtered breakdown, so staying filtered there is consistent). It was
-            // also being applied to the per-ACCOUNT ledger view, which is wrong: that page's whole
-            // job is to show the complete history behind the account's balance (itself computed
-            // above from the FULL unfiltered transaction set), so filtering it by month/year meant
-            // the visible list and the balance could never be reconciled — a transaction dated
-            // outside the selected period still counted toward the balance but silently vanished
-            // from the list, with no indication anything was hidden. Viewing a specific account
-            // (activeLedgerAccountView !== "all") now always shows its full history regardless of
-            // the dashboard filter (scoped to one year at a time via the year nav above); category/
-            // type views keep the previous filtered behaviour.
+            // v74: the dashboard's own month/year filter is meant to scope PERIOD-based reporting
+            // on THIS page (the Total Income/Expenses stat boxes above). It used to also gate
+            // category/type drill-ins reached via navigateToCategoryPage()/navigateToDirectTypePage()
+            // — on the (now stale) assumption those always originated from a breakdown built with
+            // this same filter. They don't anymore: the Net Savings Statement and Spending/Income
+            // Breakdown pages each have their own independent year/month filters, completely
+            // decoupled from this one, so a category click from any of them was silently re-filtered
+            // by whatever this dashboard filter happened to be set to — with no indication anything
+            // was hidden, sometimes landing on "No matches found" for a category that clearly has
+            // transactions. Same root problem as the per-account view fix below: a drill-in's whole
+            // job is to show the complete history behind the number you clicked, so category/type
+            // views now always show full history too, exactly like the account view already does.
+            const showFullHistoryForThisView = showFullAccountHistory || activeCategoryView !== "all" || directTypeView !== "all";
 
             txs.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(t => {
                 const d = new Date(t.date);
                 const withinPeriodFilter = (filterM === "all" || d.getMonth().toString() === filterM) && (filterY === "all" || d.getFullYear().toString() === filterY);
-                if (!withinPeriodFilter && !showFullAccountHistory) return;
+                if (!withinPeriodFilter && !showFullHistoryForThisView) return;
 
                 const tBase = convertTxAmountToBase(t, accounts);
 
                 if (withinPeriodFilter) {
-                    if (t.type === "income") { 
-                        incBaseTotal += tBase; 
+                    if (t.type === "income" && t.isRefund) {
+                        // v88: a refund is credited back to its account like any Income record
+                        // (that part needs no special-casing — see applyToAccountBalance() above),
+                        // but per-spec it must NOT count as income, and instead reduce the expense
+                        // total of the category it refunds. refundOf/openRefundFromOptions() force
+                        // t.cat to match the original expense's category exactly, so this simply
+                        // subtracts from that category the same way an expense would add to it.
+                        if (!excludedCatNamesForBanner.has(t.cat)) expBaseTotal -= tBase;
+                        if (catSummary.expense[t.cat] !== undefined) catSummary.expense[t.cat] -= tBase;
+                        else catSummary.expense[t.cat] = -tBase;
+                    } else if (t.type === "income") {
+                        if (!excludedCatNamesForBanner.has(t.cat)) incBaseTotal += tBase; 
                         if(catSummary.income[t.cat] !== undefined) catSummary.income[t.cat] += tBase;
                         else catSummary.income[t.cat] = tBase;
                     }
                     if (t.type === "expense") { 
-                        expBaseTotal += tBase; 
+                        if (!excludedCatNamesForBanner.has(t.cat)) expBaseTotal += tBase; 
                         if(catSummary.expense[t.cat] !== undefined) catSummary.expense[t.cat] += tBase;
                         else catSummary.expense[t.cat] = tBase;
                     }
@@ -5391,7 +6491,13 @@
 
                 let isBound = false;
                 if (activeCategoryView !== "all") {
-                    isBound = t.cat === activeCategoryView;
+                    // v85: categoryDrillYear/Month carry the year/month filter that was active on
+                    // the page this category was clicked from (Net Savings Statement, Spending/
+                    // Income Breakdown) — "all" when not set, so a category reached any other way
+                    // still shows its complete history exactly as before.
+                    isBound = t.cat === activeCategoryView
+                        && (categoryDrillYear === "all" || d.getFullYear().toString() === categoryDrillYear)
+                        && (categoryDrillMonth === "all" || d.getMonth().toString() === categoryDrillMonth);
                 } else if (directTypeView !== "all") {
                     isBound = t.type === directTypeView;
                 } else if (activeLedgerAccountView !== "all") {
@@ -5421,6 +6527,15 @@
 
                 const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(tBase, baseCurrency)}</span>` : '';
                 const iconBadge = t.type === "transfer" ? "🔄" : getCategoryIcon(t.cat, t.type);
+                // v88: a small ✅ overlay on the category icon flags a transaction the user has
+                // already reconciled against a bank/card statement (see the Checked toggle in
+                // Quick View / the entry form) — purely a visual cue, no effect on any total.
+                const checkedIconHTML = t.checked
+                    ? `<span title="Checked" style="display:inline-block; position:relative; margin-right:2px;">${iconBadge}<span style="position:absolute; bottom:-4px; right:-6px; font-size:0.6rem; background:#15803d; color:white; border-radius:50%; width:13px; height:13px; line-height:13px; text-align:center;">✓</span></span>`
+                    : iconBadge;
+                const refundBadge = t.isRefund
+                    ? `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">↩️ Refund</span>`
+                    : '';
                 const receiptBadge = t.image
                     ? `<span data-click="openImageViewer" data-image="${escapeHtml(t.image)}" style="cursor:pointer; margin-left:4px;" title="View attached photo">📎</span>`
                     : '';
@@ -5461,7 +6576,7 @@
                 // src blank ("") — the funds originate outside the app, not from a since-deleted
                 // account — so an empty id is labelled distinctly from an id that actually points
                 // at a removed account record.
-                const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(a.name) : "(deleted account)"; };
+                const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
                 let accountText;
                 if (t.type === "transfer") {
                     accountText = `🏦 ${accountName(t.src)} → ${t.dest ? accountName(t.dest) : "(unknown)"}`;
@@ -5474,9 +6589,9 @@
                 let fdStatusBadge = '';
                 if (t.fdMaturityDate) {
                     if (t.fdResolved) {
-                        fdStatusBadge = `<span style="font-size:0.62rem; font-weight:700; color:#64748b; background:#e2e8f0; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">✅ Closed</span>`;
+                        fdStatusBadge = `<span style="font-size:0.62rem; font-weight:700; color:#b91c1c; background:#e2e8f0; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">✅ Closed</span>`;
                     } else {
-                        const isOverdue = new Date(t.fdMaturityDate + "T00:00:00").getTime() < new Date(new Date().toISOString().split("T")[0] + "T00:00:00").getTime();
+                        const isOverdue = new Date(t.fdMaturityDate + "T00:00:00").getTime() < new Date(todayLocalStr() + "T00:00:00").getTime();
                         fdStatusBadge = isOverdue
                             ? `<span style="font-size:0.62rem; font-weight:700; color:#b91c1c; background:#fee2e2; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">⏰ Due</span>`
                             : `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">🟢 Active</span>`;
@@ -5484,9 +6599,9 @@
                 }
 
                 ledgerHTML += `
-                    <div class="ledger-item" data-click="openTransactionForm" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
-                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}</span>
+                            <span class="item-name">${checkedIconHTML} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${maturityText}${receiptBadge}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                         </div>
@@ -5615,20 +6730,56 @@
             const currentIncomeCategories = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), "Salary", "Investments", "Freelance", "Other Income"])];
             const currentExpenseCategories = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), "Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"])];
 
+            // v72: categories flagged "Exclude from Net Savings Report" (Manage Categories) —
+            // their transactions are pulled out of incBaseTotal/expBaseTotal/catSummary below and
+            // tallied separately into excludedSummary/excludedNetTotal instead, so they don't move
+            // the Surplus/Deficit but still show up as their own total on this page.
+            const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
+
             const catSummary = { income: {}, expense: {} };
             currentIncomeCategories.forEach(c => catSummary.income[c] = 0);
             currentExpenseCategories.forEach(c => catSummary.expense[c] = 0);
+
+            const excludedSummary = {};
+            let excludedNetTotal = 0;
 
             let incBaseTotal = 0, expBaseTotal = 0;
             txs.forEach(t => {
                 if (filterY !== "all" && new Date(t.date).getFullYear().toString() !== filterY) return;
 
                 const tBase = convertTxAmountToBase(t, accounts);
+                if (t.type === "income" && t.isRefund) {
+                    // v88: refund — reduces the original expense category (matched via t.cat, see
+                    // openRefundFromOptions()) instead of counting as income. Still respects the
+                    // same "exclude from savings" category setting an ordinary expense in that
+                    // category would.
+                    if (excludedCatNames.has(t.cat)) {
+                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "expense" };
+                        excludedSummary[t.cat].value -= tBase;
+                        excludedNetTotal += tBase;
+                        return;
+                    }
+                    expBaseTotal -= tBase;
+                    catSummary.expense[t.cat] = (catSummary.expense[t.cat] || 0) - tBase;
+                    return;
+                }
                 if (t.type === "income") {
+                    if (excludedCatNames.has(t.cat)) {
+                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "income" };
+                        excludedSummary[t.cat].value += tBase;
+                        excludedNetTotal += tBase;
+                        return;
+                    }
                     incBaseTotal += tBase;
                     catSummary.income[t.cat] = (catSummary.income[t.cat] || 0) + tBase;
                 }
                 if (t.type === "expense") {
+                    if (excludedCatNames.has(t.cat)) {
+                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "expense" };
+                        excludedSummary[t.cat].value += tBase;
+                        excludedNetTotal -= tBase;
+                        return;
+                    }
                     expBaseTotal += tBase;
                     catSummary.expense[t.cat] = (catSummary.expense[t.cat] || 0) + tBase;
                 }
@@ -5640,7 +6791,7 @@
                 if (Math.abs(val) < SAVINGS_ZERO_EPS) return;
                 const icon = getCategoryIcon(c, "income");
                 incRowsHTML += `
-                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings">
+                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}">
                         <strong>${icon} ${escapeHtml(c)}</strong>
                         <span style="color: var(--income-color); font-weight:700;">+${formatCurrency(val, baseCurrency)}</span>
                     </div>
@@ -5655,7 +6806,7 @@
                 if (Math.abs(val) < SAVINGS_ZERO_EPS) return;
                 const icon = getCategoryIcon(c, "expense");
                 expRowsHTML += `
-                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings">
+                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}">
                         <strong>${icon} ${escapeHtml(c)}</strong>
                         <span style="color: var(--expense-color); font-weight:700;">-${formatCurrency(val, baseCurrency)}</span>
                     </div>
@@ -5668,6 +6819,34 @@
             document.getElementById("savingsSurplusLabel").textContent = statementDiff >= 0 ? "Surplus Margin (Savings):" : "Deficit (Shortfall Margin):";
             document.getElementById("savingsSurplusValue").textContent = formatCurrency(statementDiff, baseCurrency);
             document.getElementById("savingsSurplusValue").style.color = statementDiff >= 0 ? "var(--income-color)" : "var(--expense-color)";
+
+            // v72: "Excluded from Report" card — categories flagged excludeFromSavings (e.g.
+            // "Family" gifts), tallied but kept out of the Surplus/Deficit above. Hidden entirely
+            // when nothing's excluded so the page looks exactly like before for anyone not using
+            // the feature.
+            let excludedRowsHTML = "";
+            Object.keys(excludedSummary).sort((a, b) => a.localeCompare(b)).forEach(c => {
+                const entry = excludedSummary[c];
+                if (Math.abs(entry.value) < SAVINGS_ZERO_EPS) return;
+                const icon = getCategoryIcon(c, entry.type);
+                const sign = entry.type === "income" ? "+" : "-";
+                const color = entry.type === "income" ? "var(--income-color)" : "var(--expense-color)";
+                excludedRowsHTML += `
+                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}">
+                        <strong>${icon} ${escapeHtml(c)}</strong>
+                        <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(entry.value, baseCurrency)}</span>
+                    </div>
+                `;
+            });
+            const excludedCard = document.getElementById("savingsExcludedCard");
+            if (excludedRowsHTML) {
+                excludedCard.style.display = "";
+                document.getElementById("savingsExcludedRows").innerHTML = excludedRowsHTML;
+                document.getElementById("savingsExcludedTotal").textContent = formatCurrency(Math.abs(excludedNetTotal) < SAVINGS_ZERO_EPS ? 0 : excludedNetTotal, baseCurrency);
+                document.getElementById("savingsExcludedTotal").style.color = excludedNetTotal >= 0 ? "var(--income-color)" : "var(--expense-color)";
+            } else {
+                excludedCard.style.display = "none";
+            }
         }
 
         // --- SPENDING / INCOME BREAKDOWN PAGES (moved out of dashboard + Income Breakdown added, v32) ---
@@ -5677,13 +6856,13 @@
 
         // Builds the shared "List" view (category rows with a % progress bar) — the same markup
         // the old dashboard Spending Breakdown used, now reused by both breakdown pages.
-        function buildBreakdownListHTML(entries, total, type) {
+        function buildBreakdownListHTML(entries, total, type, year = "all", month = "all") {
             if (entries.length === 0) return '<p style="font-size: 0.75rem; text-align: center; color: var(--text-muted);">Nothing categorised yet.</p>';
             return entries.map(e => {
                 const pct = total > 0 ? ((e.value / total) * 100).toFixed(0) : 0;
                 const icon = getCategoryIcon(e.label, type);
                 return `
-                    <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(e.label)}" style="font-size:0.75rem; margin-top:4px;">
+                    <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(e.label)}" data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}" style="font-size:0.75rem; margin-top:4px;">
                         <div style="display:flex; justify-content:space-between; margin-bottom: 2px;">
                             <strong>${icon} ${escapeHtml(e.label.toUpperCase())}</strong>
                             <span>${formatCurrency(e.value, baseCurrency)} (${pct}%)</span>
@@ -5754,19 +6933,26 @@
 
         // Fills a breakdown page's "Member" filter dropdown with every member. "All Members"
         // (default) includes everyone plus joint accounts; picking one member restricts to that
-        // member's solo-owned accounts only (joint accounts are excluded), per spec.
+        // member's solo-owned accounts only (joint accounts are excluded); "Joint" (v87) is the
+        // mirror image — restricts to accounts/funds with 2+ owners only, excluding every
+        // solo-owned account.
         function populateBreakdownMemberFilter(selectId) {
             const select = document.getElementById(selectId);
             const prevValue = select.value || "all";
             select.innerHTML = `<option value="all">All Members (everyone, incl. joint)</option>` +
+                `<option value="joint">Joint (2+ owners)</option>` +
                 membersCache.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join("");
-            select.value = membersCache.some(m => m.id === prevValue) ? prevValue : "all";
+            select.value = (prevValue === "joint" || membersCache.some(m => m.id === prevValue)) ? prevValue : "all";
         }
 
-        // Returns the set of account IDs solo-owned by a given member — used to scope the
-        // Spending/Income Breakdown pages when a specific member is selected.
-        function accountIdsForMember(accounts, memberId) {
-            return new Set(accounts.filter(a => Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberId).map(a => a.id));
+        // Returns the set of account IDs matching a breakdown page's Member filter value: solo-
+        // owned by that member for a specific member id, 2+ owners for "joint". Caller only calls
+        // this when filterValue !== "all" (that case needs no restriction at all).
+        function accountIdsForMemberFilter(accounts, filterValue) {
+            if (filterValue === "joint") {
+                return new Set(accounts.filter(a => Array.isArray(a.memberIds) && a.memberIds.length > 1).map(a => a.id));
+            }
+            return new Set(accounts.filter(a => Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === filterValue).map(a => a.id));
         }
 
         async function renderSpendingBreakdownPage() {
@@ -5778,20 +6964,37 @@
             const filterY = document.getElementById("spendingYearFilter").value;
             const filterMember = document.getElementById("spendingMemberFilter").value;
             const chartType = document.getElementById("spendingChartType").value;
-            const memberAccountIds = filterMember !== "all" ? accountIdsForMember(accounts, filterMember) : null;
+            const memberAccountIds = filterMember !== "all" ? accountIdsForMemberFilter(accounts, filterMember) : null;
+
+            // v73: categories flagged "Exclude from Net Savings Report" (Manage Categories) are
+            // pulled out of the chart/total below and tallied into their own card instead —
+            // matches the same treatment on the Net Savings Statement page.
+            const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
 
             const catTotals = {};
-            let total = 0;
+            const excludedTotals = {};
+            let total = 0, excludedTotal = 0;
             txs.forEach(t => {
-                if (t.type !== "expense") return;
+                // v88: a refund (income-type, isRefund:true) is folded into this same Spending
+                // Breakdown — as a negative contribution to the category it refunds — instead of
+                // being excluded outright, so a fully-refunded category correctly nets to zero/
+                // disappears from the chart rather than still showing the original full spend.
+                const isRefundCredit = t.type === "income" && t.isRefund;
+                if (t.type !== "expense" && !isRefundCredit) return;
                 if (memberAccountIds && !memberAccountIds.has(t.src)) return;
                 const d = new Date(t.date);
                 if (filterM !== "all" && d.getMonth().toString() !== filterM) return;
                 if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
                 const tBase = convertTxAmountToBase(t, accounts);
+                const signedBase = isRefundCredit ? -tBase : tBase;
                 const cat = t.cat || "Other Expenses";
-                catTotals[cat] = (catTotals[cat] || 0) + tBase;
-                total += tBase;
+                if (excludedCatNames.has(cat)) {
+                    excludedTotals[cat] = (excludedTotals[cat] || 0) + signedBase;
+                    excludedTotal += signedBase;
+                    return;
+                }
+                catTotals[cat] = (catTotals[cat] || 0) + signedBase;
+                total += signedBase;
             });
 
             const entries = Object.keys(catTotals)
@@ -5801,7 +7004,20 @@
 
             document.getElementById("spendingBreakdownTotal").textContent = formatCurrency(total, baseCurrency);
             renderBreakdownChart("spendingBreakdownChartWrap", chartType, entries, total, "expense");
-            document.getElementById("spendingBreakdownList").innerHTML = buildBreakdownListHTML(entries, total, "expense");
+            document.getElementById("spendingBreakdownList").innerHTML = buildBreakdownListHTML(entries, total, "expense", filterY, filterM);
+
+            const excludedEntries = Object.keys(excludedTotals)
+                .filter(c => excludedTotals[c] > 0)
+                .sort((a, b) => excludedTotals[b] - excludedTotals[a])
+                .map((c, i) => ({ label: c, value: excludedTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+            const excludedCard = document.getElementById("spendingBreakdownExcludedCard");
+            if (excludedEntries.length) {
+                excludedCard.style.display = "";
+                document.getElementById("spendingBreakdownExcludedTotal").textContent = formatCurrency(excludedTotal, baseCurrency);
+                document.getElementById("spendingBreakdownExcludedList").innerHTML = buildBreakdownListHTML(excludedEntries, excludedTotal, "expense", filterY, filterM);
+            } else {
+                excludedCard.style.display = "none";
+            }
         }
 
         async function renderIncomeBreakdownPage() {
@@ -5813,18 +7029,30 @@
             const filterY = document.getElementById("incomeYearFilter").value;
             const filterMember = document.getElementById("incomeMemberFilter").value;
             const chartType = document.getElementById("incomeChartType").value;
-            const memberAccountIds = filterMember !== "all" ? accountIdsForMember(accounts, filterMember) : null;
+            const memberAccountIds = filterMember !== "all" ? accountIdsForMemberFilter(accounts, filterMember) : null;
+
+            const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
 
             const catTotals = {};
-            let total = 0;
+            const excludedTotals = {};
+            let total = 0, excludedTotal = 0;
             txs.forEach(t => {
                 if (t.type !== "income") return;
+                // v88: a refund is credited to the account like income, but per-spec must not
+                // count as income anywhere — see the isRefund handling in
+                // renderSpendingBreakdownPage()/renderApp()/renderSavingsStatement().
+                if (t.isRefund) return;
                 if (memberAccountIds && !memberAccountIds.has(t.src)) return;
                 const d = new Date(t.date);
                 if (filterM !== "all" && d.getMonth().toString() !== filterM) return;
                 if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
                 const tBase = convertTxAmountToBase(t, accounts);
                 const cat = t.cat || "Other Income";
+                if (excludedCatNames.has(cat)) {
+                    excludedTotals[cat] = (excludedTotals[cat] || 0) + tBase;
+                    excludedTotal += tBase;
+                    return;
+                }
                 catTotals[cat] = (catTotals[cat] || 0) + tBase;
                 total += tBase;
             });
@@ -5836,7 +7064,20 @@
 
             document.getElementById("incomeBreakdownTotal").textContent = formatCurrency(total, baseCurrency);
             renderBreakdownChart("incomeBreakdownChartWrap", chartType, entries, total, "income");
-            document.getElementById("incomeBreakdownList").innerHTML = buildBreakdownListHTML(entries, total, "income");
+            document.getElementById("incomeBreakdownList").innerHTML = buildBreakdownListHTML(entries, total, "income", filterY, filterM);
+
+            const excludedEntries = Object.keys(excludedTotals)
+                .filter(c => excludedTotals[c] > 0)
+                .sort((a, b) => excludedTotals[b] - excludedTotals[a])
+                .map((c, i) => ({ label: c, value: excludedTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+            const excludedCard = document.getElementById("incomeBreakdownExcludedCard");
+            if (excludedEntries.length) {
+                excludedCard.style.display = "";
+                document.getElementById("incomeBreakdownExcludedTotal").textContent = formatCurrency(excludedTotal, baseCurrency);
+                document.getElementById("incomeBreakdownExcludedList").innerHTML = buildBreakdownListHTML(excludedEntries, excludedTotal, "income", filterY, filterM);
+            } else {
+                excludedCard.style.display = "none";
+            }
         }
 
         // Generic year-filter populator (mirrors populateYearFilterOptions/populateSavingsYearFilterOptions)
@@ -5868,6 +7109,146 @@
             }
         }
 
+        // --- UNIT TRUST PORTFOLIO REPORT (new, v78) ---
+        // Rolls up every live fund across every "unittrust" account into one report — the
+        // per-account Fund Holdings table (renderFundHoldingsTable, on an account's Activity
+        // page) only ever shows a single account's funds, so there was previously no page
+        // that answered "how is my investment portfolio doing" across the whole ledger.
+        //
+        // Reuses the exact same Invested/Recovered/P&L formula as that table: Buy is the only
+        // thing that counts as "Invested" (cost basis); Sell and Dividend (Cheque Payout) are
+        // folded into `recovered` and combined into P/L instead of being subtracted from
+        // Invested, so Return % stays stable across partial sells. See the full rationale on
+        // computeInvested() inside renderFundHoldingsTable — deliberately duplicated here
+        // rather than shared, so a future change to the per-account table can't silently alter
+        // this report's numbers (or vice versa) without both being touched on purpose.
+        function computePortfolioFundPL(fundTxs) {
+            let invested = 0, recovered = 0;
+            fundTxs.forEach(t => {
+                if (t.fundTxType === "buy") invested += t.amount;
+                else if (t.fundTxType === "sell" || t.fundTxType === "dividend_payout") recovered += t.amount;
+            });
+            return { invested, recovered };
+        }
+
+        // Solo-owned funds only when a specific member is picked — mirrors accountIdsForMemberFilter's
+        // "solo only, joint excluded" convention already used by the Spending/Income Breakdown
+        // member filter, so this report's filter behaves the same way a user already expects.
+        // "joint" (v87) mirrors it back the other way — only funds with 2+ owners.
+        function fundMatchesMemberFilter(fund, memberId) {
+            if (memberId === "all") return true;
+            const ids = Array.isArray(fund.ownerMemberIds) ? fund.ownerMemberIds : [];
+            if (memberId === "joint") return ids.length > 1;
+            return ids.length === 1 && ids[0] === memberId;
+        }
+
+        async function renderPortfolioReportPage() {
+            const [accounts, funds, allTxs] = await Promise.all([
+                readAllDB(STORES.ACCOUNTS),
+                readAllDB(STORES.FUNDS),
+                readAllDB(STORES.TRANSACTIONS)
+            ]);
+
+            populateBreakdownMemberFilter("portfolioMemberFilter");
+            const filterMember = document.getElementById("portfolioMemberFilter").value;
+            document.getElementById("portfolioBaseCurrLabel").textContent = baseCurrency;
+
+            const unitTrustAccountIds = new Set(accounts.filter(a => a.type === "unittrust").map(a => a.id));
+            const liveFunds = funds.filter(f => unitTrustAccountIds.has(f.accountId) && fundMatchesMemberFilter(f, filterMember));
+
+            const fundTxsByFundId = {};
+            allTxs.forEach(t => {
+                if (t.fundId) (fundTxsByFundId[t.fundId] = fundTxsByFundId[t.fundId] || []).push(t);
+            });
+
+            let totalValueBase = 0, totalInvestedBase = 0, totalPlBase = 0;
+            const rowsByAccount = {};
+
+            liveFunds.forEach(f => {
+                const fundTxs = (fundTxsByFundId[f.id] || []).slice().sort((a, b) => new Date(a.date) - new Date(b.date));
+                const { invested, recovered } = computePortfolioFundPL(fundTxs);
+                const value = (f.units || 0) * (f.currentNav || 0);
+                const pl = value + recovered - invested; // total return: unrealised + already-recovered cash, minus principal ever put in
+                const returnPct = invested > 0 ? (pl / invested) * 100 : 0;
+                const ownerLabel = accountOwnerNamesText({ memberIds: f.ownerMemberIds });
+                const plColor = pl >= 0 ? "var(--income-color)" : "var(--expense-color)";
+
+                totalValueBase += convertCurrency(value, f.currency, baseCurrency);
+                totalInvestedBase += convertCurrency(invested, f.currency, baseCurrency);
+                totalPlBase += convertCurrency(pl, f.currency, baseCurrency);
+
+                const acc = accounts.find(a => a.id === f.accountId);
+                const accName = acc ? acc.name : "(unknown account)";
+                (rowsByAccount[accName] = rowsByAccount[accName] || []).push(`
+                    <tr style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}">
+                        <td style="padding:8px 10px;">
+                            <strong>${escapeHtml(f.name)}</strong><br>
+                            <span style="font-size:0.68rem; color:var(--text-muted);">${escapeHtml(f.code || "")}</span><br>
+                            <span style="font-size:0.68rem; color:var(--primary); font-weight:700;">${escapeHtml(ownerLabel)}</span>
+                        </td>
+                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(value, f.currency)}</strong></td>
+                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested, f.currency)}</td>
+                        <td style="padding:8px 10px; text-align:right; color:${plColor}; font-weight:700;">${pl >= 0 ? "+" : ""}${formatCurrency(pl, f.currency)}</td>
+                        <td style="padding:8px 10px; text-align:right; color:${plColor};">${returnPct.toFixed(2)}%</td>
+                    </tr>`);
+            });
+
+            document.getElementById("portfolioValueTotal").textContent = formatCurrency(totalValueBase, baseCurrency);
+            document.getElementById("portfolioInvestedTotal").textContent = formatCurrency(totalInvestedBase, baseCurrency);
+            const totalReturnPctBase = totalInvestedBase > 0 ? (totalPlBase / totalInvestedBase) * 100 : 0;
+
+            const plBox = document.getElementById("portfolioPlBox");
+            const returnBox = document.getElementById("portfolioReturnBox");
+            const c = totalPlBase >= 0
+                ? { bg: "#f0fdf4", border: "#bbf7d0", text: "#15803d" }
+                : { bg: "#fef2f2", border: "#fecaca", text: "#b91c1c" };
+            plBox.style.background = c.bg; plBox.style.border = `1px solid ${c.border}`;
+            returnBox.style.background = c.bg; returnBox.style.border = `1px solid ${c.border}`;
+            document.getElementById("portfolioPlTotal").style.color = c.text;
+            document.getElementById("portfolioReturnTotal").style.color = c.text;
+            document.getElementById("portfolioPlTotal").textContent = (totalPlBase >= 0 ? "+" : "") + formatCurrency(totalPlBase, baseCurrency);
+            document.getElementById("portfolioReturnTotal").textContent = totalReturnPctBase.toFixed(2) + "%";
+
+            const detailWrap = document.getElementById("portfolioDetailWrap");
+            const accNames = Object.keys(rowsByAccount).sort();
+            if (accNames.length === 0) {
+                detailWrap.innerHTML = '<p style="padding:12px 4px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No unit trust funds match this filter.</p>';
+                return;
+            }
+            // Grouped by account (rather than one flat list) since the whole point of this report
+            // is spanning multiple Unit Trust accounts — a flat list would make it hard to tell
+            // which account each fund actually sits under.
+            detailWrap.innerHTML = accNames.map(accName => `
+                <div style="margin-bottom:14px;">
+                    <div style="font-size:0.72rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">📊 ${escapeHtml(accName)}</div>
+                    <table style="width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
+                        <thead>
+                            <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase;">
+                                <th style="padding:6px 10px;">Fund</th>
+                                <th style="padding:6px 10px; text-align:right;">Value</th>
+                                <th style="padding:6px 10px; text-align:right;">Invested</th>
+                                <th style="padding:6px 10px; text-align:right;">P/L</th>
+                                <th style="padding:6px 10px; text-align:right;">Return</th>
+                            </tr>
+                        </thead>
+                        <tbody>${rowsByAccount[accName].join("")}</tbody>
+                    </table>
+                </div>`).join("");
+        }
+
+        // Detail table starts collapsed — a portfolio spanning several accounts/funds can get
+        // long, and the summary tiles above already answer the headline question. Same
+        // collapse/expand pattern as the sidebar's account-type shortcuts list.
+        function togglePortfolioDetail() {
+            const wrap = document.getElementById("portfolioDetailWrap");
+            const btn = document.getElementById("portfolioDetailToggle");
+            const expanded = wrap.style.display !== "none";
+            wrap.style.display = expanded ? "none" : "";
+            btn.textContent = expanded ? "▸" : "▾";
+            btn.title = expanded ? "Expand fund detail" : "Collapse fund detail";
+            btn.setAttribute("aria-label", btn.title);
+        }
+
         function navigateToSpendingBreakdownPage() {
             workspaceScrollY = window.scrollY;
             showPage("page-spending-breakdown");
@@ -5882,6 +7263,14 @@
             window.scrollTo(0, 0);
             pushVirtualState("income-breakdown");
             renderIncomeBreakdownPage();
+        }
+
+        function navigateToPortfolioReportPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-portfolio-report");
+            window.scrollTo(0, 0);
+            pushVirtualState("portfolio-report");
+            renderPortfolioReportPage();
         }
 
         function navigateToAutoLockPage() {
@@ -5940,6 +7329,20 @@
             const storedRecentTxCount = await readKeyDB("settings", "recentTxCount");
             if (storedRecentTxCount) recentTxCount = storedRecentTxCount.value || 5;
 
+            const storedPinnedCount = await readKeyDB("settings", "pinnedAccountCount");
+            if (storedPinnedCount) pinnedAccountCount = storedPinnedCount.value || 5;
+
+            const storedPinnedIds = await readKeyDB("settings", "pinnedAccountIds");
+            if (storedPinnedIds && Array.isArray(storedPinnedIds.value)) pinnedAccountIds = storedPinnedIds.value;
+
+            const storedMemberNwCollapsed = await readKeyDB("settings", "memberNetWorthCollapsed");
+            if (storedMemberNwCollapsed) memberNetWorthCollapsed = !!storedMemberNwCollapsed.value;
+
+            const storedExpandedSubrows = await readKeyDB("settings", "expandedAccountSubrows");
+            if (storedExpandedSubrows && Array.isArray(storedExpandedSubrows.value)) {
+                expandedAccountSubrows = new Set(storedExpandedSubrows.value);
+            }
+
             await syncAndLoadCategories();
             await ensureDefaultCategories();
 
@@ -5991,6 +7394,12 @@
                 members: await readAllDB(STORES.MEMBERS),
                 funds: await readAllDB(STORES.FUNDS),
                 navHistory: await readAllDB(STORES.NAV_HISTORY),
+                // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
+                // defaultIncomeCategory, defaultExpenseCategory, recentTx* widget filters,
+                // expandedAccountSubrows, plus baseCurrency/fxRates which are also kept below as
+                // their own top-level fields for backward compatibility with older backups/import
+                // code that reads them directly off the bundle).
+                settings: await readAllDB(STORES.SETTINGS),
                 baseCurrency: baseCurrency,
                 fxRates: fxRates
             };
@@ -6020,7 +7429,7 @@
             const blob = new Blob([JSON.stringify(outputPayload)], { type: "application/json" });
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
-            a.href = url; a.download = `ledger_backup_${new Date().toISOString().split('T')[0]}${filenameSuffix}.json`;
+            a.href = url; a.download = `ledger_backup_${todayLocalStr()}${filenameSuffix}.json`;
             a.click(); URL.revokeObjectURL(url);
         }
 
@@ -6147,6 +7556,34 @@
                         for (const rec of bundle.navHistory) await writeDB(STORES.NAV_HISTORY, rec);
                     }
 
+                    // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
+                    // defaultIncomeCategory, defaultExpenseCategory, recentTx* widget filters,
+                    // expandedAccountSubrows). Absent on older backups, so this is skipped entirely
+                    // for those — accounts/transactions/etc. still import fine, just without prefs.
+                    // baseCurrency/fxRates rows are included in this dump too but are already
+                    // applied above from bundle.baseCurrency/bundle.fxRates; writing them again here
+                    // is harmless (same values, same store row).
+                    if (bundle.settings && Array.isArray(bundle.settings)) {
+                        for (const rec of bundle.settings) {
+                            if (!rec || !rec.key) continue;
+                            await writeDB(STORES.SETTINGS, rec);
+                            switch (rec.key) {
+                                case "defaultPaymentAccount": defaultPaymentAccount = rec.value || ""; break;
+                                case "defaultIncomeCategory": defaultIncomeCategory = rec.value || ""; break;
+                                case "defaultExpenseCategory": defaultExpenseCategory = rec.value || ""; break;
+                                case "recentTxTypeFilter": recentTxTypeFilter = rec.value || "both"; break;
+                                case "recentTxAccountFilter": recentTxAccountFilter = rec.value || "all"; break;
+                                case "recentTxCount": recentTxCount = rec.value || 5; break;
+                                case "pinnedAccountCount": pinnedAccountCount = rec.value || 5; break;
+                                case "pinnedAccountIds": pinnedAccountIds = Array.isArray(rec.value) ? rec.value : []; break;
+                                case "memberNetWorthCollapsed": memberNetWorthCollapsed = !!rec.value; break;
+                                case "expandedAccountSubrows":
+                                    expandedAccountSubrows = new Set(Array.isArray(rec.value) ? rec.value : []);
+                                    break;
+                            }
+                        }
+                    }
+
                     await syncAndLoadCategories();
                     await loadMembersCache();
                     renderSidebarMembers();
@@ -6184,6 +7621,8 @@
             navigateToAccountsPage: () => navigateToAccountsPage(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
             navigateToBackupPage: () => navigateToBackupPage(),
+            navigateToBackupPageFromDashboard: () => navigateToBackupPage("workspace"),
+            handleBackupBackClick: () => handleBackupBackClick(),
             navigateToAllLedgerPage: () => navigateToAllLedgerPage(),
             navigateToDataSecurityPage: () => navigateToDataSecurityPage(),
             navigateToMembersPage: () => navigateToMembersPage(),
@@ -6191,12 +7630,15 @@
             sidebarFilterAccountsByType: (el) => sidebarFilterAccountsByType(el),
             clearAccountsPageTypeFilter: () => clearAccountsPageTypeFilter(),
             toggleAccountSubrows: (el) => toggleAccountSubrows(el),
+            toggleSidebarAccountShortcuts: () => toggleSidebarAccountShortcuts(),
             openMemberFormModal: () => openMemberFormModal(),
             handleCreateMemberMobile: () => handleCreateMemberMobile(),
             deleteMemberFromForm: () => deleteMemberFromForm(),
             editMember: (el) => editMember(el.dataset.id),
             openAddAccountForMember: () => openAddAccountForMember(),
             toggleRecentTxSettings: () => toggleRecentTxSettings(),
+            togglePinnedAccountsSettings: () => togglePinnedAccountsSettings(),
+            toggleMemberNetWorthCollapse: () => toggleMemberNetWorthCollapse(),
             selectMemberColor: (el) => selectMemberColor(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
@@ -6235,11 +7677,12 @@
             editAccount: (el) => editAccount(el.dataset.id),
             removeAccount: (el) => removeAccount(el.dataset.id),
             removeCategory: (el) => removeCategory(el.dataset.id),
+            toggleCategoryExcludeFromSavings: (el) => toggleCategoryExcludeFromSavings(el.dataset.id),
             openResolveFdModal: (el) => openResolveFdModal(Number(el.dataset.id)),
             navigateToLedgerPage: (el) => navigateToLedgerPage(el.dataset.id, el.dataset.back || "workspace"),
             openImageViewer: (el, e) => openImageViewer(el.dataset.image, e),
             deleteTxFromEditModal: () => deleteTxFromEditModal(),
-            navigateToCategoryPage: (el) => navigateToCategoryPage(el.dataset.category, el.dataset.back || "workspace"),
+            navigateToCategoryPage: (el) => navigateToCategoryPage(el.dataset.category, el.dataset.back || "workspace", el.dataset.year || "all", el.dataset.month || "all"),
             numpadDigit: (el) => numpadDigit(el.dataset.digit),
             numpadBackspace: () => numpadBackspace(),
             numpadClear: () => numpadClear(),
@@ -6248,6 +7691,8 @@
             openAddFundTxModalForActiveFund: () => openAddFundTxModalForActiveFund(),
             editFund: (el) => editFund(el.dataset.id),
             navigateToFundActivityPage: (el) => navigateToFundActivityPage(el),
+            navigateToPortfolioReportPage: () => navigateToPortfolioReportPage(),
+            togglePortfolioDetail: () => togglePortfolioDetail(),
             handleFundActivityBackClick: () => handleFundActivityBackClick(),
             editFundFromActivityHeader: () => editFundFromActivityHeader(),
             navigateToCurrencyActivityPage: (el) => navigateToCurrencyActivityPage(el),
@@ -6259,6 +7704,22 @@
             navigateToNavUpdatePage: () => navigateToNavUpdatePage(),
             setNavUpdateView: (el) => setNavUpdateView(el),
             handleSaveAllNav: () => handleSaveAllNav(),
+            scrollToTop: () => scrollToTop(),
+            fetchLiveFxRates: () => fetchLiveFxRates(),
+            // v88: split expenses, calculator/numpad, transaction quick view/options/refund.
+            addTxSplitRow: () => addTxSplitRow(),
+            removeTxSplitRow: (el) => removeTxSplitRow(el),
+            openCalcPadFor: (el) => openCalcPad(el),
+            calcPadPress: (el) => calcPadPress(el),
+            calcPadApply: () => calcPadApply(),
+            openTxQuickView: (el) => openTxQuickView(el),
+            toggleTxCheckedFromQuickView: () => toggleTxCheckedFromQuickView(),
+            openTxOptionsMenu: () => openTxOptionsMenu(),
+            closeTxOptionsMenu: () => closeTxOptionsMenu(),
+            editTransactionFromOptions: () => editTransactionFromOptions(),
+            duplicateTransactionFromOptions: () => duplicateTransactionFromOptions(),
+            deleteTransactionFromOptions: () => deleteTransactionFromOptions(),
+            openRefundFromOptions: () => openRefundFromOptions(),
         };
 
         const CHANGE_ACTIONS = {
@@ -6267,7 +7728,7 @@
             handleExportEncryptToggleChange: () => handleExportEncryptToggleChange(),
             handleBiometricToggleChange: () => handleBiometricToggleChange(),
             handleBaseCurrencyChange: () => handleBaseCurrencyChange(),
-            recalcTxFdMaturity: () => recalcTxFdMaturity(),
+            recalcTxFdMaturity: () => { recalcTxFdMaturity(); recalcTxSplitTotal(); },
             syncTransactionCurrency: () => syncTransactionCurrency(),
             handleTxImageSelected: (el, e) => handleTxImageSelected(e),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
@@ -6281,16 +7742,20 @@
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
             renderSpendingBreakdownPage: () => renderSpendingBreakdownPage(),
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
+            renderPortfolioReportPage: () => renderPortfolioReportPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
+            handlePinnedAccountCountChange: () => handlePinnedAccountCountChange(),
+            handlePinnedAccountSlotChange: (el) => handlePinnedAccountSlotChange(el),
             ledgerYearSelectChange: () => ledgerYearSelectChange(),
             handleAccGroupChange: () => handleAccGroupChange(),
+            toggleRedrawFacilityFields: () => toggleRedrawFacilityFields(),
             handleFundTxTypeChange: () => handleFundTxTypeChange(),
             handleFundTxFundChange: () => handleFundTxFundChange(),
         };
 
         const INPUT_ACTIONS = {
-            recalcTxFdMaturity: () => { recalcTxFdMaturity(); syncTransferFxOnAmountChange(); },
+            recalcTxFdMaturity: () => { recalcTxFdMaturity(); syncTransferFxOnAmountChange(); recalcTxSplitTotal(); },
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
@@ -6299,6 +7764,7 @@
             recalcFundTxTotal: () => recalcFundTxTotal(),
             recalcFundTxPriceFromTotal: () => recalcFundTxPriceFromTotal(),
             handleNavPriceInput: (el) => handleNavPriceInput(el),
+            recalcTxSplitTotal: () => recalcTxSplitTotal(),
         };
 
         document.addEventListener("click", (e) => {
@@ -6322,7 +7788,41 @@
             if (action) action(el, e);
         });
 
+        // v83: number inputs (Amount, Interest Rate, Tenure, etc.) silently change value when the
+        // mouse wheel/trackpad scrolls over them WHILE FOCUSED — this is standard browser behavior
+        // for <input type="number">, not a bug in this app's code, but it's a well-known footgun:
+        // type a value into a field near the top of a long form (e.g. Amount in the Add/Edit
+        // Transaction modal), then scroll the page down to reach fields further below, and if the
+        // cursor happens to pass over that still-focused number field while scrolling, each wheel
+        // notch nudges the value by one `step` — e.g. 3 notches over a step="0.01" field quietly
+        // turns 50000.00 into 49999.97. Fixed by blurring any number input the instant a wheel
+        // event reaches it; this does not block the page scroll itself (no preventDefault), it
+        // just stops that scroll from being interpreted as a value change.
+        document.addEventListener("wheel", () => {
+            const active = document.activeElement;
+            if (active && active.tagName === "INPUT" && active.type === "number") {
+                active.blur();
+            }
+        }, { passive: true });
+
         window.addEventListener("load", bootstrap);
+
+        // Floating "back to top" button (v66) — scrolls the page (this app scrolls at the
+        // document/window level, not an inner container) smoothly back to the top when tapped.
+        function scrollToTop() {
+            window.scrollTo({ top: 0, behavior: "smooth" });
+        }
+
+        // Shows/hides the back-to-top button based on scroll position — hidden near the top of a
+        // page (nothing to scroll back up to), visible once scrolled down past a small threshold.
+        // Passive listener registered once at load time, independent of bootstrap() / page
+        // switches since the button itself lives outside every .page div.
+        function toggleBackToTopVisibility() {
+            const btn = document.getElementById("backToTopBtn");
+            if (!btn) return;
+            btn.classList.toggle("visible", window.scrollY > 300);
+        }
+        window.addEventListener("scroll", toggleBackToTopVisibility, { passive: true });
 
         // Register the Service Worker for offline support. Only works when served over http(s)
         // (e.g. GitHub Pages) — silently does nothing when opened as a local file:// page.

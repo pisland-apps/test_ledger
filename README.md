@@ -1280,3 +1280,247 @@ the Accounts page
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v56.
+
+## v65: Preferences (default payment account, collapse/expand state,
+etc.) now travel with backup/restore
+
+Previously, `exportBackup()` only bundled financial data (accounts,
+transactions, categories, members, funds, navHistory) plus
+`baseCurrency`/`fxRates`. Everything else in the `settings` object
+store — Default Payment Account, Default Income/Expense Category, the
+dashboard "Recent Transactions" widget filters — lived on-device only
+and was silently dropped on import to a new device.
+
+- **Backup export**: `exportBackup()` now also includes a `settings`
+  array (a full dump of the `settings` object store's `{key, value}`
+  rows). `baseCurrency`/`fxRates` remain as their own top-level bundle
+  fields too, for backward compatibility with anything reading them
+  directly off older-style bundles — they're just duplicated into the
+  `settings` dump as well, harmlessly.
+- **Backup import**: `importBackup()` now applies each row in
+  `bundle.settings` back into the `settings` store and the matching
+  in-memory variable (`defaultPaymentAccount`,
+  `defaultIncomeCategory`, `defaultExpenseCategory`,
+  `recentTxTypeFilter`, `recentTxAccountFilter`, `recentTxCount`,
+  `expandedAccountSubrows`). Older backups without a `settings` field
+  still import fine — this block is simply skipped, exactly as before.
+- **Collapse/expand toggle state** (`expandedAccountSubrows`, the
+  ▸/▾ caret on Accounts-page fund/currency/FD-placement subrows,
+  since v62/v64): this used to be in-memory only and reset on every
+  page reload, even on the same device. It's now persisted to the
+  `settings` store on every toggle (key `expandedAccountSubrows`,
+  value: array of composite `<filter>__<accountId>` keys), loaded back
+  in `bootstrap()`, and included in the `settings` backup dump above —
+  so it now survives a reload *and* carries over to a new device.
+- No IndexedDB schema/version changes (`settings` store already
+  existed) and no changes to the encrypted-backup wrapper format —
+  just a larger plaintext bundle inside it. Verified with `node
+  --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v65.
+
+## v66: Real Estate Type & Holding Period, Bank Loan Redraw Facility,
+floating "back to top" button
+
+- **Real Estate — Type**: a new dropdown (Residential / Commercial /
+  Land / Industrial) on any account grouped under "Real Estate".
+  Purely informational — doesn't affect any calculation. Stored as
+  `account.propertyType`.
+- **Real Estate — Holding Period Start Date**: a new date field, also
+  Real-Estate-only. The app computes "how long held" from this date to
+  today (e.g. "15y 10m") rather than storing a duration directly, so
+  it stays correct as time passes. Stored as `account.holdingStartDate`.
+- **Bank Loan — Redraw / Bank Withdrawal Facility**: a new checkbox on
+  any account grouped under "Bank Loan"; when ticked, reveals a manual
+  "Current Redraw Amount" + "As of Date" pair to key in straight off a
+  bank statement. This is manual-entry only — there's no automatic
+  calculation of an available redraw amount from transaction history,
+  since this app has no existing concept of which transactions count
+  as an over-payment vs. a redraw. Stored as `account.hasRedrawFacility`
+  / `account.redrawAmount` / `account.redrawAsOfDate`.
+- **Shown under the account name**: all of the above now appears as a
+  small line under the account name on the Accounts page, on a
+  member's own Accounts list, and on the account's own Activity page
+  (new banner, same spot as the existing "Related Account" banner).
+  One shared helper, `accountExtraInfoLine()`, builds this line so all
+  three surfaces stay in sync.
+- **New fields are ordinary account fields** — no IndexedDB schema
+  change, and they ride along automatically in backup export/import
+  (v65's `settings` addition was separate; these are on the account
+  record itself, in the `accounts` array that was already backed up).
+  A field is blanked out if the account is later re-grouped away from
+  Real Estate / Bank Loan, or (for the redraw fields) if the facility
+  checkbox is unticked while still a Bank Loan — so stale values don't
+  linger silently.
+- **Floating "back to top" button**: a small circular button, fixed
+  above the existing "+" FAB on the right edge, appears once a page
+  is scrolled down more than ~300px and smooth-scrolls back to the
+  top on tap. Global — lives outside every `.page` div, so it works
+  the same on every page (Ledger, Accounts, Dashboard, etc.) without
+  being wired up per-page.
+- Verified with `node --check` on both changed JS files.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v66.
+
+## v67: "Fetch Live Rates" button — same source as Wealth Planner
+
+Previously, Ledger's Currency Settings had no way to pull live
+exchange rates — every rate had to be typed in by hand, which drifts
+out of accuracy over time and (more to the point) doesn't match
+whatever the companion Wealth Planner app shows, since that app *does*
+fetch live rates.
+
+- **New "🔄 Fetch Live Rates" button** in the Global Currency Settings
+  modal, right above the rate input fields. Calls the exact same
+  `https://open.er-api.com/v6/latest/{base}` endpoint the Wealth
+  Planner app's own "Fetch Live Rates" button already uses — so when
+  both are fetched around the same time, the two apps' rates agree
+  instead of drifting apart. No API key required.
+- Only fills the visible input fields (same UX as Wealth Planner's
+  version) — nothing is written to storage until "Save FX Values" is
+  tapped, so a bad fetch can't silently overwrite good manual rates.
+- **No inversion needed** in this app's fetch code (unlike Wealth
+  Planner's own, which stores rates the opposite way round): this
+  app's `fxRates[c]` already means "units of `c` per 1 base", which is
+  exactly what the API returns directly for the requested base — see
+  the comment on `fetchLiveFxRates()` for the arithmetic that confirms
+  this against `convertCurrency()`'s formula.
+- **CSP updated**: `connect-src` was `'self'` only (this app was fully
+  offline-first — no fetch/XHR calls at all until now). It's now
+  `'self' https://open.er-api.com`, matching the Wealth Planner app's
+  own CSP for the identical reason. This is the one and only outbound
+  network call anywhere in the app; everything else remains
+  IndexedDB-only.
+- Verified with `node --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v67.
+
+## v68: Exchange rate rows now quote in whichever direction reads
+naturally
+
+Previously every row in Currency Settings was quoted as "1 {base} =
+{rate} {currency}" regardless of which currency was actually worth
+more — e.g. with MYR as base, USD showed as "1 MYR = 0.2464 USD",
+which is correct but not how anyone actually says it ("1 USD = 4.06
+MYR" reads naturally instead).
+
+- **Each row's direction is now decided per-currency**: a currency
+  worth MORE than 1 unit of the base (e.g. USD, EUR, GBP against MYR)
+  is now quoted as "1 {currency} = {rate} {base}"; a currency worth
+  LESS (e.g. KRW, JPY, THB against MYR) stays "1 {base} = {rate}
+  {currency}" — matching the screenshot example (1 USD = ** MYR / 1
+  MYR = *** KRW).
+- Purely a display change — `fxRates[curr]`'s stored convention
+  ("units of curr per 1 base") is untouched, and so is
+  `convertCurrency()`. Each input now carries a `data-mode` attribute
+  ("direct" or "inverted") recording which way that row is currently
+  showing its number; `saveFxRates()` reads it back to convert
+  whatever's on screen to the stored convention correctly regardless
+  of direction.
+- **Fetch Live Rates (v67) updated to match**: it now re-renders the
+  whole rate list from the freshly-fetched numbers (rather than just
+  overwriting each input's value in place), so every row's direction
+  is recalculated fresh against the new numbers too — a currency that
+  happens to cross the 1.0 threshold since the last fetch won't be
+  left showing the wrong direction.
+- Verified with `node --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v68.
+
+## v88: Reworked entry form (Category above Account, Notes/To/From,
+Checked toggle), Split Expenses, Calculator/Numpad, and a Transaction
+Quick View with Duplicate/Edit/Refund/Delete
+
+Requested via a set of reference screenshots from another ledger app;
+implemented as follows.
+
+- **Entry form reordered**: Category now sits above Account (previously
+  the other way round). Description moved to the bottom of the form,
+  and two new optional fields sit next to it: **To/From** (a
+  payee/counterparty field — labelled "From" for Income, "To"
+  otherwise) and **Notes** (free text). Both save as `t.payee`/
+  `t.notes`, `null` when left blank so existing code checking either
+  field for truthiness is unaffected.
+- **Checked toggle**: every transaction now carries `t.checked`
+  (default `false` for a new entry). A small ✅ badge overlays the
+  category icon on any checked row. Meant for reconciling entries
+  against a bank/credit-card statement — purely a display flag, no
+  effect on any balance or report total.
+- **Transaction Quick View**: tapping a ledger row now opens a compact
+  summary (amount, account, category, To/From, Notes, a Checked
+  toggle button) instead of jumping straight into the full edit form.
+  A ⋮ button opens an **Options** menu — Duplicate transaction / Edit
+  transaction / Refund / Delete transaction — mirroring the reference
+  screenshots. "Edit transaction" opens the same edit form as before;
+  nothing about editing itself changed. Fund-linked transactions
+  (Buy/Sell/Dividend/Contribution) skip Quick View entirely and go
+  straight to their existing dedicated editor, since Checked/Refund/
+  Duplicate don't apply to them.
+  - New history-stack handling: Options is a layer over Quick View
+    sharing its one pushed state rather than pushing a second (see
+    `openTxOptionsMenu()`), and a new `closeModalAndThen()` helper
+    properly waits for a modal's close to actually complete (its real
+    `popstate` event) before pushing the next one — Edit/Duplicate/
+    Refund all use it — so the back-button stack never drifts out of
+    sync with what's visibly open, which a naive
+    `closeModal(); closeModal(); openModal();` chain would have
+    caused (each `closeModal()` triggers an async `history.back()`, so
+    two in a row plus an immediate `pushState()` would race).
+- **Split Expenses**: a "➕ Split into another category" button (shown
+  only for a brand-new Income/Expense entry — not Transfers, not while
+  editing) adds Category+Amount row pairs with their own `[-]` to
+  remove, and a live Split Total. On save, each row becomes its own
+  ordinary transaction record (same account/date/desc/payee/notes/
+  checked state) sharing a generated `splitGroupId` purely for
+  traceability — every existing balance/report calculation already
+  handles a normal transaction correctly, so nothing about how they
+  aggregate needed to change.
+- **Calculator / Numpad**: a 🧮 button beside every Amount field (main
+  and split rows) opens a small popup calculator (`+ − × ÷ =`, doubling
+  as an on-screen numpad); `inputmode="decimal"` on the fields
+  themselves also brings up the OS's own numeric keyboard when tapped
+  directly. The popup only evaluates a strictly digit/operator-only
+  string (regex-checked before `Function(...)`) — it's a fixed-button
+  calculator, not a general expression evaluator.
+- **Refund**: "Refund" in Quick View → Options (expense entries only)
+  opens a new Income entry pre-filled from the original expense, with
+  Category **forced** to the exact same category (the Income category
+  dropdown is replaced with a single locked option) — this is what
+  lets it "reduce the expense" rather than "count as income": the
+  saved record is tagged `isRefund: true, refundOf: <original id>`,
+  and:
+  - `computeAccountBalances()` needs **no change** — crediting the
+    account back is exactly what an ordinary Income record already
+    does.
+  - The dashboard, Net Savings Statement, and Spending Breakdown pages
+    each special-case `isRefund` to subtract it from the matching
+    expense category's total instead of adding it to income (see the
+    `isRefund` branches added to each — they key strictly off `t.cat`
+    matching the original expense's category, which is why the
+    category is force-locked on the refund's own entry above).
+  - The Income Breakdown page excludes `isRefund` entries outright, so
+    they never appear as income there.
+  - A refund row displays as an ordinary green Income entry (with a
+    small "↩️ Refund" badge) everywhere else, e.g. the dashboard's
+    recent-transactions widget — only the aggregation totals above
+    treat it specially.
+- Verified with `node --check` plus a script cross-referencing every
+  `data-click`/`data-change`/`data-input` attribute in `index.html`
+  against `CLICK_ACTIONS`/`CHANGE_ACTIONS`/`INPUT_ACTIONS`, and every
+  `getElementById(...)` call against actual element ids — all clean.
+
+**Known scope limits, by design** (flagged rather than silently
+dropped): Split Expenses is new-entry-only, not available when editing
+an existing transaction or for Transfers. The calculator is a plain
+arithmetic popup, not a fully custom on-screen numpad widget — mobile's
+native numeric keyboard (via `inputmode="decimal"`) handles direct
+typing. A refund's "residual/remaining balance" preview shown live
+during entry (as in one of the reference screenshots) was not
+implemented.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v88.

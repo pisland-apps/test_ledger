@@ -17,13 +17,16 @@
          - style-src 'self' 'unsafe-inline': left loose — this app uses inline style="..."
            attributes throughout for one-off layout tweaks. Migrating all of those to CSS
            classes was judged high-effort/low-value: CSS injection has a much smaller blast
-           radius than script injection, and connect-src below already blocks the network
+           radius than script injection, and connect-src below already limits the network
            requests that would make it useful to an attacker anyway.
          - img-src 'self' data:: receipt/transaction photos are stored as base64 data URLs
            in IndexedDB and displayed directly via <img src="data:...">; app icons are local.
-         - connect-src 'self': app makes no fetch/XHR calls (offline-first, IndexedDB only) —
-           kept as 'self' rather than 'none' so the Service Worker's own requests aren't
-           affected by this policy.
+         - connect-src 'self' https://open.er-api.com (v67): the app is otherwise offline-first
+           (IndexedDB only) — the one exception is the optional "Fetch Live Rates" button in
+           Currency Settings, which calls this single exchange-rate API (no key required, no
+           request body — just a GET of today's rates for a given base currency). Same API/host
+           the companion Wealth Planner app already calls for the same purpose, kept in sync here
+           deliberately so both apps' rates agree when fetched around the same time.
          - object-src/base-uri/form-action 'none': no plugins, no dynamic <base>, no real
            <form> submissions — safe to fully lock down.
          - frame-ancestors is intentionally NOT set here: it's ignored by browsers when
@@ -35,7 +38,7 @@
         style-src 'self' 'unsafe-inline';
         img-src 'self' data:;
         font-src 'self';
-        connect-src 'self';
+        connect-src 'self' https://open.er-api.com;
         worker-src 'self';
         manifest-src 'self';
         object-src 'none';
@@ -570,6 +573,32 @@
         }
         .fab-btn:active { background: #4f46e5; }
 
+        /* Floating "back to top" button (v66) — global, sits above the "+" FAB on the right edge
+           so the two never overlap. Hidden by default; JS toggles it visible once the page has
+           been scrolled down past a threshold (see toggleBackToTopVisibility). Neutral white/gray
+           styling (not --primary) so it doesn't compete with the FAB for attention. */
+        .back-to-top-btn {
+            position: fixed;
+            right: 20px;
+            bottom: 92px;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: #fff;
+            color: var(--text-muted);
+            border: 1.5px solid var(--border-color);
+            font-size: 1.3rem;
+            line-height: 1;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+            cursor: pointer;
+            z-index: 49;
+        }
+        .back-to-top-btn.visible { display: flex; }
+        .back-to-top-btn:active { background: #f1f5f9; }
+
         /* Quick-add type picker used on the Account Activity page's "+" FAB (v34). A lightweight
            popover, not a full history-tracked modal — avoids the modal system's history-stack
            bookkeeping since it only ever leads into openTransactionForm(), which pushes its own
@@ -657,16 +686,6 @@
         .owner-chip input[type="checkbox"] {
             width: 15px; height: 15px; min-width: 15px; flex-shrink: 0; margin: 0; cursor: pointer;
         }
-
-        /* Bottom "More" action buttons on the dashboard — icon-only, one row */
-        .dashboard-bottom-actions { display: flex; flex-direction: row; gap: 10px; margin-bottom: 8px; }
-        .dash-bottom-btn {
-            display: flex; align-items: center; justify-content: center; flex: 1;
-            background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
-            padding: 18px 0; cursor: pointer;
-        }
-        .dash-bottom-btn:active { background: #f1f5f9; }
-        .dash-bottom-btn-icon { font-size: 1.7rem; }
 
         /* Sidebar member rows */
         .sidebar-member-item {
@@ -802,6 +821,15 @@
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: #f8fafc; height: 44px; }
         .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
+        .calc-btn { flex-shrink:0; width: 44px; height: 44px; border-radius: 8px; border: 1.5px solid var(--border-color); background: #f8fafc; font-size: 1.1rem; cursor: pointer; }
+        .calc-btn:active { background: #eef2ff; }
+        .split-row { display:flex; gap:6px; align-items:flex-end; margin-bottom: 10px; }
+        .split-row select.form-input { margin: 0; }
+        .calc-key { height: 48px; border-radius: 8px; border: none; background: #f1f5f9; font-size: 1.05rem; font-weight: 700; cursor: pointer; color: var(--text-main); }
+        .calc-key:active { opacity: 0.8; }
+        .calc-key-op { background: #e0e7ff; color: var(--primary); }
+        .option-menu-btn { display:flex; align-items:center; padding: 14px; border-radius: 10px; border: none; background: #f1f5f9; color: var(--text-main); font-weight: 700; font-size: 0.88rem; cursor: pointer; text-align: left; width: 100%; }
+        .option-menu-btn:active { opacity: 0.85; }
         .config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
         .config-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); }
         /* Fund holding listed under its Unit Trust account row on the Accounts page — indented,
@@ -961,6 +989,11 @@
          Text is filled in by ledger.js (APP_VERSION / APP_VERSION_DATE), not hardcoded here. -->
     <div id="versionBadge"></div>
 
+    <!-- Floating "back to top" button (v66) — global (outside every .page div) so it persists
+         across page switches instead of needing to be re-added per page; visibility is purely
+         scroll-driven (see toggleBackToTopVisibility), not tied to which page is active. -->
+    <button type="button" class="back-to-top-btn" id="backToTopBtn" data-click="scrollToTop" aria-label="Back to top" title="Back to top">&uarr;</button>
+
     <!-- ================= SIDEBAR NAVIGATION DRAWER ================= -->
     <div class="sidebar-overlay" id="sidebarOverlay" data-click="closeSidebar"></div>
     <div class="sidebar-drawer" id="sidebarDrawer">
@@ -973,9 +1006,12 @@
             <button class="sidebar-item" data-click="sidebarGo" data-target="workspace">
                 <span class="sidebar-item-icon">🏠</span> Dashboard
             </button>
-            <button class="sidebar-item" data-click="navigateToAccountsPage">
-                <span class="sidebar-item-icon">🏦</span> Financial Accounts
-            </button>
+            <div class="sidebar-item-row" style="display:flex; align-items:center;">
+                <button class="sidebar-item" style="flex:1;" data-click="navigateToAccountsPage">
+                    <span class="sidebar-item-icon">🏦</span> Financial Accounts
+                </button>
+                <button type="button" class="subrow-toggle-btn" id="sidebarAccountShortcutsToggle" data-click="toggleSidebarAccountShortcuts" aria-label="Collapse account type list" title="Collapse account type list">▾</button>
+            </div>
             <div id="sidebarAccountTypeShortcuts"></div>
             <button class="sidebar-item" data-click="navigateToNavUpdatePage">
                 <span class="sidebar-item-icon">📊</span> Daily NAV Update
@@ -988,6 +1024,9 @@
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="income-breakdown">
                 <span class="sidebar-item-icon">📈</span> Income Breakdown
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="portfolio-report">
+                <span class="sidebar-item-icon">🧺</span> Unit Trust Portfolio
             </button>
 
             <div class="sidebar-divider"></div>
@@ -1059,12 +1098,14 @@
                 <button class="currency-pill" data-click="openCurrencyConfig">
                     Base: <span id="currentBasePill">USD</span> ⚙
                 </button>
+                <button class="lock-btn-header" title="Export &amp; Import" aria-label="Export and Import" data-click="navigateToBackupPageFromDashboard">💾</button>
                 <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
             </div>
         </header>
 
         <div class="section-header" style="margin-top: 0;">
             <span class="section-title">Net Worth by Member</span>
+            <button class="text-btn" id="memberNetWorthCollapseToggle" data-click="toggleMemberNetWorthCollapse" aria-label="Collapse or expand this section">▾</button>
         </div>
         <div class="member-networth-rows" id="memberNetWorthRows"></div>
 
@@ -1119,6 +1160,19 @@
             </div>
         </div>
 
+        <div class="section-header" style="cursor:pointer;" data-click="navigateToAccountsPage">
+            <span class="section-title">Accounts</span>
+            <button class="text-btn" data-click="togglePinnedAccountsSettings">⚙ Settings</button>
+        </div>
+        <div id="pinnedAccountsSettingsPanel" style="display:none; flex-direction:column; gap:8px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+            <div class="form-row" style="margin-bottom:0;">
+                <label>Number of items shown</label>
+                <select id="pinnedAccountCountSelect" data-change="handlePinnedAccountCountChange"></select>
+            </div>
+            <div id="pinnedAccountSlotSelects" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+        <div class="ledger-container" id="pinnedAccountsList"></div>
+
         <div class="section-header">
             <span class="section-title">Recent Transactions</span>
             <button class="text-btn" data-click="toggleRecentTxSettings">⚙ Settings</button>
@@ -1144,21 +1198,6 @@
             </div>
         </div>
         <div class="ledger-container" id="recentTxList"></div>
-
-        <div class="section-header">
-            <span class="section-title">More</span>
-        </div>
-        <div class="dashboard-bottom-actions">
-            <button class="dash-bottom-btn" data-click="navigateToAccountsPage" title="Financial Accounts" aria-label="Financial Accounts">
-                <span class="dash-bottom-btn-icon">🏦</span>
-            </button>
-            <button class="dash-bottom-btn" data-click="sidebarGo" data-target="backup" title="Export &amp; Import" aria-label="Export &amp; Import">
-                <span class="dash-bottom-btn-icon">💾</span>
-            </button>
-            <button class="dash-bottom-btn" data-click="navigateToDataSecurityPage" title="Setting" aria-label="Setting">
-                <span class="dash-bottom-btn-icon">⚙️</span>
-            </button>
-        </div>
     </div>
 
 
@@ -1180,6 +1219,10 @@
         <div id="ledgerLinkedAccountBanner" style="display:none; cursor:pointer; font-size:0.78rem; font-weight:700; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:8px 12px; margin:-6px 0 14px; text-align:center;" data-click="navigateToLinkedAccountFromLedgerHeader">
             🔗 Related Account: <span id="ledgerLinkedAccountValue"></span>
         </div>
+        <!-- Real Estate Type/Holding Period or Bank Loan Redraw Facility info (v66) — same
+             accountExtraInfoLine() helper used on the Accounts page and member pages, so this
+             banner is populated with its raw HTML rather than a single text value. -->
+        <div id="ledgerExtraInfoBanner" style="display:none; font-size:0.78rem; font-weight:700; border-radius:10px; padding:8px 12px; margin:-6px 0 14px; text-align:center; background:#f0fdf4; border:1px solid #bbf7d0; color:#166534;"></div>
         <div id="ledgerYearNav" style="display:none; align-items:center; justify-content:center; gap:16px; padding:10px 0 14px;">
             <button type="button" class="btn-util" id="ledgerYearPrevBtn" data-click="ledgerYearPrev" style="padding:6px 14px; font-size:1rem;">&lt;</button>
             <select id="ledgerYearLabel" data-change="ledgerYearSelectChange" style="font-weight:800; font-size:1.05rem; min-width:100px; text-align:center; text-align-last:center; padding:6px 8px; border-radius:8px; border:1.5px solid var(--border-color); background:var(--bg-color); color:var(--text-main);"></select>
@@ -1312,7 +1355,7 @@
     <!-- ================= PAGE 6: BACKUP & RESTORE ================= -->
     <div id="page-backup" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
+            <button class="back-btn" data-click="handleBackupBackClick">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">Backup &amp; Restore</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Export &amp; import your data</p>
@@ -1438,6 +1481,17 @@
             <div id="spendingBreakdownChartWrap"></div>
             <div id="spendingBreakdownList" style="display:flex; flex-direction:column; gap:8px; margin-top:10px;"></div>
         </div>
+
+        <!-- v73: categories flagged "Exclude from Net Savings Report" (Manage Categories) are left
+             out of the total/chart above and tallied here instead, matching the Net Savings
+             Statement page. Hidden entirely when nothing is excluded. -->
+        <div class="report-card" id="spendingBreakdownExcludedCard" style="display:none; background:#f8fafc; margin-top:10px;">
+            <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted); margin-bottom:2px;">
+                Excluded from Report: <span id="spendingBreakdownExcludedTotal" style="color:var(--text-muted);">0.00</span>
+            </div>
+            <p style="font-size:0.7rem; color:var(--text-muted); margin-bottom:8px;">Not counted in Total Spending above.</p>
+            <div id="spendingBreakdownExcludedList" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
     </div>
 
     <!-- ================= PAGE: INCOME BREAKDOWN (new, v32) ================= -->
@@ -1484,6 +1538,16 @@
             <div id="incomeBreakdownChartWrap"></div>
             <div id="incomeBreakdownList" style="display:flex; flex-direction:column; gap:8px; margin-top:10px;"></div>
         </div>
+
+        <!-- v73: mirrors the Excluded card on the Spending Breakdown page above, for income-side
+             excluded categories (rare, but the toggle in Manage Categories isn't type-restricted). -->
+        <div class="report-card" id="incomeBreakdownExcludedCard" style="display:none; background:#f8fafc; margin-top:10px;">
+            <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted); margin-bottom:2px;">
+                Excluded from Report: <span id="incomeBreakdownExcludedTotal" style="color:var(--text-muted);">0.00</span>
+            </div>
+            <p style="font-size:0.7rem; color:var(--text-muted); margin-bottom:8px;">Not counted in Total Income above.</p>
+            <div id="incomeBreakdownExcludedList" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
     </div>
 
     <!-- ================= PAGE 3: NET SAVINGS STATEMENT SHEET ================= -->
@@ -1527,6 +1591,76 @@
                 <span id="savingsSurplusValue">0.00</span>
             </div>
         </div>
+
+        <!-- v72: categories flagged "Exclude from Net Savings Report" (Manage Categories) are left
+             out of the Income/Expense totals and Surplus above, and tallied here instead — e.g.
+             gifts to family that leave your account but shouldn't count as personal spending.
+             Hidden entirely when nothing is excluded. -->
+        <div class="statement-card" id="savingsExcludedCard" style="display:none; background:#f8fafc;">
+            <h4 style="margin-bottom:4px; color:var(--text-muted);">EXCLUDED FROM REPORT</h4>
+            <p style="font-size:0.7rem; color:var(--text-muted); margin-bottom:10px;">Not counted in the Surplus/Deficit above.</p>
+            <div id="savingsExcludedRows"></div>
+            <div class="statement-row" style="border-top:2px solid var(--border-color); margin-top:8px; padding-top:8px;">
+                <strong>Total Excluded</strong>
+                <span id="savingsExcludedTotal" style="color: var(--text-muted); font-weight:800;">0.00</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================= PAGE: UNIT TRUST PORTFOLIO REPORT (new, v78) =================
+         Rolls up every live fund across every Unit Trust account into one report — the
+         per-account Fund Holdings table (Activity page) only ever shows one account at a
+         time, so this is the only place to see a true portfolio-wide total. Reuses the
+         same Invested/Recovered/P&L formula as that table (see computeInvested() there);
+         values are converted to base currency for the summary tiles, native currency is
+         kept in the per-fund detail rows below. -->
+    <div id="page-portfolio-report" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Unit Trust Portfolio</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">All funds, across every Unit Trust account</p>
+            </div>
+        </div>
+
+        <div class="form-row" style="margin-bottom:14px;">
+            <label>Member</label>
+            <select id="portfolioMemberFilter" class="form-input" data-change="renderPortfolioReportPage">
+                <option value="all">All Members (everyone, incl. joint)</option>
+            </select>
+        </div>
+
+        <div class="report-card">
+            <div class="report-summary-grid">
+                <div class="stat-box income">
+                    <span class="stat-title" style="color:#166534;">Portfolio Value</span>
+                    <div class="stat-amount" id="portfolioValueTotal" style="color:#15803d;">0.00</div>
+                </div>
+                <div class="stat-box" style="background:#f5f3ff; border:1px solid #ddd6fe;">
+                    <span class="stat-title" style="color:#5b21b6;">Total Invested</span>
+                    <div class="stat-amount" id="portfolioInvestedTotal" style="color:#6d28d9;">0.00</div>
+                </div>
+            </div>
+            <div class="report-summary-grid" style="margin-bottom:0;">
+                <div class="stat-box" id="portfolioPlBox">
+                    <span class="stat-title">Profit / Loss</span>
+                    <div class="stat-amount" id="portfolioPlTotal">0.00</div>
+                </div>
+                <div class="stat-box" id="portfolioReturnBox">
+                    <span class="stat-title">Return</span>
+                    <div class="stat-amount" id="portfolioReturnTotal">0.00%</div>
+                </div>
+            </div>
+            <p style="font-size:0.68rem; color:var(--text-muted); margin-top:8px; margin-bottom:0;">
+                Value, Invested, P/L and Return above are converted to <span id="portfolioBaseCurrLabel">base currency</span> so funds in different currencies can be totalled together.
+            </p>
+        </div>
+
+        <div class="section-header">
+            <span class="section-title">Fund Detail</span>
+            <button type="button" class="subrow-toggle-btn" id="portfolioDetailToggle" data-click="togglePortfolioDetail" aria-label="Expand fund detail" title="Expand fund detail">▸</button>
+        </div>
+        <div class="report-card" id="portfolioDetailWrap" style="display:none; overflow-x:auto;"></div>
     </div>
 
     <!-- ================= PAGE: DATA SECURITY HUB (replaces sidebar "Data & Security" section) ================= -->
@@ -1646,7 +1780,13 @@
                     <option value="MYR">MYR (RM)</option>
                 </select>
             </div>
-            <p style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; text-transform: uppercase;">Exchange Rates (Per 1 Base Unit)</p>
+            <p style="font-size: 0.72rem; color: var(--text-muted); font-weight: 700; margin-bottom: 8px; text-transform: uppercase;">Exchange Rates</p>
+            <!-- Fetch Live Rates (v67) — same open.er-api.com source as the Wealth Planner app's
+                 own "Fetch Live Rates" button, so both apps' rates agree when fetched around the
+                 same time instead of drifting apart from manually-typed values. Only fills the
+                 input fields below; still requires "Save FX Values" to actually apply. -->
+            <button type="button" id="fetchFxRatesBtn" data-click="fetchLiveFxRates" class="btn-util" style="width:100%; margin-bottom:10px;">🔄 Fetch Live Rates</button>
+            <p id="fetchFxRatesStatus" style="font-size:0.7rem; color:var(--text-muted); margin:-4px 0 10px; min-height:1em;"></p>
             <div id="fxRatesFormContainer"></div>
             <button type="button" data-click="saveFxRates" class="submit-btn" style="margin-top: 10px;">Save FX Values</button>
         </div>
@@ -1693,6 +1833,8 @@
                         <option value="Investment">📈 Investment</option>
                         <option value="Real Estate">🏠 Real Estate</option>
                         <option value="Bank Loan">💸 Bank Loan</option>
+                        <option value="Account Payable">📤 Account Payable</option>
+                        <option value="Account Receivable">📥 Account Receivable</option>
                     </select>
                 </div>
 
@@ -1723,6 +1865,46 @@
                         <option value="no">🚫 Exclude</option>
                     </select>
                     <p style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">Exclude if this property's recorded cost shouldn't count toward the Dashboard's Net Worth total.</p>
+                </div>
+
+                <!-- Real Estate (v66): the kind of property, and how long it's been held — both
+                     purely informational, shown only when Group = "Real Estate", surfaced under
+                     the account name wherever it's listed (Accounts page, member pages, the
+                     account's own Activity page header). -->
+                <div class="form-row" id="newAccPropertyTypeRow" style="display:none;">
+                    <label>Type</label>
+                    <select id="newAccPropertyType" class="form-input">
+                        <option value="">(Not set)</option>
+                        <option value="Residential">Residential</option>
+                        <option value="Commercial">Commercial</option>
+                        <option value="Land">Land</option>
+                        <option value="Industrial">Industrial</option>
+                    </select>
+                </div>
+                <div class="form-row" id="newAccHoldingStartRow" style="display:none;">
+                    <label>Holding Period Start Date <span style="text-transform:none; font-weight:600; color:var(--text-muted);">(date you started holding this property — used to show how long it's been held)</span></label>
+                    <input type="date" id="newAccHoldingStartDate">
+                </div>
+
+                <!-- Bank Loan (v66): loans with a redraw / bank-withdrawal facility can have the
+                     currently available redraw amount keyed in manually from the latest bank
+                     statement — shown only when Group = "Bank Loan" AND the facility checkbox
+                     below is ticked, surfaced under the account name wherever it's listed. -->
+                <div class="form-row" id="newAccRedrawFacilityRow" style="display:none;">
+                    <label style="display:flex; align-items:center; gap:8px; text-transform:none; font-size:0.85rem;">
+                        <input type="checkbox" id="newAccHasRedraw" data-change="toggleRedrawFacilityFields" style="width:auto; height:auto;">
+                        This loan has a Redraw / Bank Withdrawal facility
+                    </label>
+                </div>
+                <div class="form-row-inline" id="newAccRedrawDetailsRow" style="display:none;">
+                    <div>
+                        <label>Current Redraw Amount <span style="text-transform:none; font-weight:600; color:var(--text-muted);">(manual — from your bank statement)</span></label>
+                        <input type="number" id="newAccRedrawAmount" step="0.01" placeholder="0.00">
+                    </div>
+                    <div>
+                        <label>As of Date</label>
+                        <input type="date" id="newAccRedrawAsOfDate">
+                    </div>
                 </div>
 
                 <!-- Currency + Opening Balance — only applicable to "Normal" (single-currency) accounts. -->
@@ -1818,6 +2000,18 @@
                     <input type="hidden" id="catSelectedEmoji" value="🍔">
                 </div>
 
+                <div class="form-row" style="margin-bottom: 8px;">
+                    <label style="display:flex; align-items:center; gap:8px; font-weight:600; cursor:pointer;">
+                        <input type="checkbox" id="catExcludeFromSavings" style="width:auto;">
+                        Exclude from Net Savings Report
+                    </label>
+                    <p style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">
+                        For money that leaves your account but isn't really "spending" — e.g. gifts to family.
+                        Transactions in this category are left out of the Surplus/Deficit calculation and
+                        shown as a separate total instead.
+                    </p>
+                </div>
+
                 <!-- Rich Emoji Directory Grid -->
                 <div class="emoji-picker-container" id="emojiPickerPanel"></div>
 
@@ -1837,11 +2031,34 @@
             <div>
                 <input type="hidden" id="txId">
                 <input type="hidden" id="txType">
-                <div class="form-row" id="txDescRow"><label>Description</label><input type="text" id="txDesc" required></div>
                 <div class="form-row-inline">
-                    <div><label>Amount</label><input type="number" id="txAmount" step="0.01" required data-input="recalcTxFdMaturity"></div>
+                    <div>
+                        <label>Amount</label>
+                        <div style="display:flex; gap:6px;">
+                            <input type="number" id="txAmount" step="0.01" inputmode="decimal" required data-input="recalcTxFdMaturity" style="flex:1;">
+                            <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad">🧮</button>
+                        </div>
+                    </div>
                     <div><label>Currency</label><select id="txCurrency" class="form-input" data-change="recalcTxFdMaturity"></select></div>
                 </div>
+
+                <div class="form-row" id="categoryRow"><label>Category</label><select id="txCategory" class="form-input"></select></div>
+
+                <!-- Split Expenses (v88) — only offered for a brand-new Income/Expense entry (not
+                     Transfer, not while editing an existing record — see openTxSplitAddRow() /
+                     handleTransactionSubmitMobile() for why editing is out of scope). Each added
+                     row is its own Category + Amount pair; on save every row becomes its own
+                     transaction record sharing a splitGroupId, so nothing about how existing
+                     reports/balances aggregate a normal transaction needs to change. -->
+                <div id="txSplitWrap" style="display:none;">
+                    <div id="txSplitRows"></div>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 12px; font-size:0.82rem; font-weight:700; color:var(--text-main);">
+                        <span>Split Total</span>
+                        <span id="txSplitTotalDisplay">—</span>
+                    </div>
+                    <button type="button" class="submit-btn" style="background:#eef2ff; color:var(--primary); margin-top:0; margin-bottom:12px;" data-click="addTxSplitRow">➕ Split into another category</button>
+                </div>
+
                 <div class="form-row" id="srcAccRow"><label id="srcAccLabel">Account</label><select id="srcAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
                 <div class="form-row" id="destAccRow" style="display:none;"><label>To Account</label><select id="destAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
 
@@ -1898,7 +2115,6 @@
                     <p id="txManualFxAutoHint" style="font-size:0.7rem; color:var(--text-muted); margin:0;"></p>
                 </div>
 
-                <div class="form-row" id="categoryRow"><label>Category</label><select id="txCategory" class="form-input"></select></div>
                 <div class="form-row"><label>Date</label><input type="date" id="txDate" required></div>
 
                 <!-- Fixed Deposit placement terms — shown only when this entry deposits funds into an FD account -->
@@ -1941,6 +2157,19 @@
                     <p id="txFdMaturityPreview" style="font-size:0.72rem; color:#6d28d9; margin-top:2px;"></p>
                 </div>
 
+                <div class="form-row" id="txDescRow"><label>Description</label><input type="text" id="txDesc" required></div>
+                <div class="form-row"><label id="txPayeeLabel">To (Optional)</label><input type="text" id="txPayee" placeholder="e.g. merchant or contact name"></div>
+                <div class="form-row"><label>Notes (Optional)</label><input type="text" id="txNotes"></div>
+                <div class="form-row">
+                    <div class="toggle-switch-row">
+                        <span class="toggle-switch-label">Checked</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="txChecked">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
                 <div class="form-row">
                     <label>Receipt / Photo (optional)</label>
                     <div style="display:flex; gap:8px;">
@@ -1963,6 +2192,86 @@
         </div>
     </div>
 
+    <!-- MODAL: Calculator / Numpad — opened from the 🧮 button beside any Amount field in the
+         transaction form (main amount or a split row). Basic arithmetic entry doubles as an
+         on-screen numpad; typing directly into the field still opens the OS's own numeric
+         keyboard via inputmode="decimal" on that field. -->
+    <div class="modal" id="calcPadModal" style="z-index:1500;">
+        <div class="modal-sheet" style="max-width:320px; padding:16px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                <h3 style="font-weight:800;">Calculator</h3>
+                <button data-click="closeModal" data-modal="calcPadModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+            </div>
+            <div id="calcPadDisplay" style="background:#f8fafc; border:1.5px solid var(--border-color); border-radius:8px; padding:14px; text-align:right; font-size:1.4rem; font-weight:700; margin-bottom:10px; min-height:28px; word-break:break-all;">0</div>
+            <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px;">
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="C" style="grid-column:span 2;">C</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="⌫">⌫</button>
+                <button type="button" class="calc-key calc-key-op" data-click="calcPadPress" data-val="÷">÷</button>
+
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="7">7</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="8">8</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="9">9</button>
+                <button type="button" class="calc-key calc-key-op" data-click="calcPadPress" data-val="×">×</button>
+
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="4">4</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="5">5</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="6">6</button>
+                <button type="button" class="calc-key calc-key-op" data-click="calcPadPress" data-val="−">−</button>
+
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="1">1</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="2">2</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="3">3</button>
+                <button type="button" class="calc-key calc-key-op" data-click="calcPadPress" data-val="+">+</button>
+
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="0" style="grid-column:span 2;">0</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val=".">.</button>
+                <button type="button" class="calc-key" data-click="calcPadPress" data-val="=" style="background:var(--primary); color:white;">=</button>
+            </div>
+            <button type="button" class="submit-btn" data-click="calcPadApply">Use This Value</button>
+        </div>
+    </div>
+
+    <!-- MODAL: Transaction Quick View — tapping a ledger row opens this instead of jumping
+         straight into the edit form, so a glance/CHECKED-toggle/duplicate/refund/delete doesn't
+         require entering the full editor. "Edit transaction" in the Options menu still opens the
+         normal txModal unchanged. -->
+    <div class="modal" id="txQuickViewModal">
+        <div class="modal-sheet" style="max-width:380px; padding:0; overflow:hidden;">
+            <div id="txQuickViewHeader" style="padding:20px; color:white;">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                    <span id="txQuickViewAmount" style="font-size:1.5rem; font-weight:800;"></span>
+                    <span id="txQuickViewDate" style="font-size:0.8rem; opacity:0.9; margin-top:4px;"></span>
+                </div>
+            </div>
+            <div style="padding:20px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+                    <span id="txQuickViewDesc" style="font-weight:800; font-size:1rem;"></span>
+                    <button type="button" data-click="openTxOptionsMenu" title="More options" style="background:#eef2ff; border:none; width:34px; height:34px; border-radius:8px; font-weight:900; cursor:pointer; font-size:1.1rem; color:var(--primary);">⋮</button>
+                </div>
+                <div id="txQuickViewDetails" style="font-size:0.85rem; line-height:2; color:var(--text-main); margin-bottom:16px;"></div>
+                <button type="button" id="txQuickViewCheckedBtn" data-click="toggleTxCheckedFromQuickView" class="submit-btn" style="margin-top:0;"></button>
+                <button type="button" data-click="closeModal" data-modal="txQuickViewModal" class="submit-btn" style="background:#e2e8f0; color:var(--text-main);">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Options popover (Duplicate / Edit / Refund / Delete) reached from the ⋮ button
+         on the Quick View above. -->
+    <div class="modal" id="txOptionsModal" style="z-index:1400;">
+        <div class="modal-sheet" style="max-width:320px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                <h3 style="font-weight:800;">Options</h3>
+                <button data-click="closeTxOptionsMenu" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+                <button type="button" class="option-menu-btn" data-click="duplicateTransactionFromOptions">📂 &nbsp;Duplicate transaction</button>
+                <button type="button" class="option-menu-btn" data-click="editTransactionFromOptions">✏️ &nbsp;Edit transaction</button>
+                <button type="button" id="txOptionsRefundBtn" class="option-menu-btn" data-click="openRefundFromOptions">↩️ &nbsp;Refund</button>
+                <button type="button" class="option-menu-btn" style="background:#fee2e2; color:var(--expense-color);" data-click="deleteTransactionFromOptions">🗑 &nbsp;Delete transaction</button>
+            </div>
+        </div>
+    </div>
+
     <!-- MODAL: Resolve Fixed Deposit Maturity (renew or withdraw) -->
     <div class="modal" id="resolveFdModal">
         <div class="modal-sheet">
@@ -1980,6 +2289,12 @@
             <div class="form-row">
                 <label>Actual Interest Received</label>
                 <input type="number" id="resolveFdInterest" step="0.01" min="0">
+            </div>
+
+            <div class="form-row">
+                <label>Resolution Date</label>
+                <input type="date" id="resolveFdResolutionDate">
+                <p style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;">Dates every entry created below (withdrawal/renewal/interest). Defaults to this placement's maturity date — change it if you're recording this later than it actually happened.</p>
             </div>
 
             <div class="form-row">
