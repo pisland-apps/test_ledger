@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v88";
+        const APP_VERSION = "v89";
         const APP_VERSION_DATE = "2026-08-21";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -754,6 +754,11 @@
         // Calculator/numpad popup — which input field "Use This Value" writes back into.
         let calcPadTargetId = null;
         let calcPadExpr = "";
+        // v88 fix: LIFO stack of currently-open modal ids, in the order openModal() was called.
+        // Needed once a modal can be opened ON TOP of another already-open modal (calcPadModal
+        // over txModal) — see the popstate handler below for why a flat "which of these ids has
+        // .active" scan broke as soon as two modals could be active at the same time.
+        let modalStack = [];
         // Split Expenses — incrementing counter for unique split-row DOM ids within one form session.
         let txSplitRowCounter = 0;
 
@@ -909,15 +914,23 @@
                 return;
             }
 
-            const activeModals = ["txModal", "accountsModal", "currencyModal", "categoriesModal", "imageViewerModal", "resolveFdModal", "memberModal", "fundModal", "fundTxModal", "txQuickViewModal", "txOptionsModal", "calcPadModal"];
+            // v88 fix: previously this scanned every known modal id and removed "active" from
+            // ALL of them that happened to be open. That's correct when at most one modal is ever
+            // open at a time, but v88 introduced calcPadModal, which opens ON TOP of an
+            // already-open txModal (tap 🧮 in Add/Edit Transaction) — so both had the "active"
+            // class simultaneously. Tapping the calculator's × or "Use This Value" called
+            // closeModal("calcPadModal") → history.back() → this handler → the old loop closed
+            // BOTH modals in one shot, since it didn't distinguish "the modal that should close
+            // now" from "any modal that's currently open" — so the whole Add/Edit Transaction
+            // form was discarded along with the calculator. Now only the most-recently-opened
+            // modal (top of modalStack) is closed per back-navigation, matching how it was opened.
             let modalClosed = false;
-            activeModals.forEach(id => {
-                const modal = document.getElementById(id);
-                if (modal && modal.classList.contains("active")) {
-                    modal.classList.remove("active");
-                    modalClosed = true;
-                }
-            });
+            if (modalStack.length > 0) {
+                const topId = modalStack.pop();
+                const modal = document.getElementById(topId);
+                if (modal) modal.classList.remove("active");
+                modalClosed = true;
+            }
             if (modalClosed) return;
 
             const ledgerPage = document.getElementById("page-ledger");
@@ -1268,20 +1281,29 @@
 
         function openModal(id) { 
             document.getElementById(id).classList.add("active"); 
+            modalStack.push(id);
             pushVirtualState(id);
         }
         
         // Closing a modal is just "go back" — the popstate listener above is the single place
-        // that actually removes the "active" class (see its activeModals loop). Previously this
+        // that actually removes the "active" class (see its modalStack.pop() above). Previously this
         // function removed "active" itself before calling history.back(), which meant by the time
         // popstate fired, every modal already looked inactive — so the listener's own "was a modal
         // open?" check always came back false and fell through to page-level back navigation
         // instead (e.g. leaving an account's ledger view for the workspace right after Save/Cancel
         // on the transaction editor, rather than just closing that editor). Letting popstate do the
         // actual closing keeps the visible UI and the history stack in lockstep.
+        //
+        // v88 fix: if id isn't on top of modalStack (e.g. a modal was dismissed some other way —
+        // shouldn't normally happen, but don't let the stack get out of sync with reality), drop
+        // any stale entries above it first so history.back() pops the right number of states.
         function closeModal(id) { 
             const el = document.getElementById(id);
             if (el && el.classList.contains("active")) {
+                const idx = modalStack.lastIndexOf(id);
+                if (idx !== -1 && idx !== modalStack.length - 1) {
+                    modalStack.splice(idx + 1);
+                }
                 window.history.back();
             }
         }
