@@ -17,7 +17,7 @@
         // inconsistently across platforms/fonts). Used by the static Amount field button
         // in index.html and the per-split-row button built dynamically below. Keep both
         // in sync if this ever changes — see calc-btn CSS comment in index.html.
-        const CALC_ICON_SVG = `<svg width="20" height="20" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;">
+        const CALC_ICON_SVG = `<svg width="36" height="36" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;">
             <rect x="3" y="3" width="30" height="30" rx="8" fill="#475569"/>
             <rect x="7" y="7" width="11" height="8" rx="2.5" fill="#e2e8f0"/>
             <rect x="7" y="19.5" width="11" height="8.5" rx="2.5" fill="#64748b"/>
