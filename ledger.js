@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v94";
+        const APP_VERSION = "v95";
         const APP_VERSION_DATE = "2026-08-22";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -6088,6 +6088,13 @@
 
         function editTransactionFromOptions() {
             const id = activeQuickViewTxId;
+            // v95 fix: txOptionsModal is a plain overlay with no history entry of its own (see
+            // openTxOptionsMenu()/closeTxOptionsMenu() above), so closeModalAndThen("txQuickViewModal", ...)
+            // below only ever pops Quick View off the history stack — it never touches Options'
+            // "active" class. Left open, Options stayed visible and on top of whatever opened next
+            // (e.g. the Edit form), making that new page look like it "hid behind" Options. Every
+            // Options action that hands off into a new screen needs this same explicit close first.
+            closeTxOptionsMenu();
             closeModalAndThen("txQuickViewModal", async () => {
                 if (!id) return;
                 const txs = await readAllDB(STORES.TRANSACTIONS);
@@ -6102,6 +6109,7 @@
         // duplicate is, by definition, not yet reconciled against a statement).
         function duplicateTransactionFromOptions() {
             const id = activeQuickViewTxId;
+            closeTxOptionsMenu(); // v95 fix — see editTransactionFromOptions() above.
             closeModalAndThen("txQuickViewModal", async () => {
                 if (!id) return;
                 const txs = await readAllDB(STORES.TRANSACTIONS);
@@ -6129,6 +6137,7 @@
 
         async function deleteTransactionFromOptions() {
             const id = activeQuickViewTxId;
+            closeTxOptionsMenu(); // v95 fix — see editTransactionFromOptions() above.
             closeModal("txQuickViewModal");
             if (!id) return;
             await deleteTransactionById(id);
@@ -6144,6 +6153,7 @@
         // the actual flag that makes this save as a refund rather than an ordinary Income entry.
         function openRefundFromOptions() {
             const id = activeQuickViewTxId;
+            closeTxOptionsMenu(); // v95 fix — see editTransactionFromOptions() above.
             closeModalAndThen("txQuickViewModal", async () => {
                 if (!id) return;
                 const txs = await readAllDB(STORES.TRANSACTIONS);
