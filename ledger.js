@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v102";
+        const APP_VERSION = "v103";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7278,6 +7278,98 @@
         // conversion) that would otherwise display as a misleading "-0.00" row.
         const SAVINGS_ZERO_EPS = 0.005;
 
+        // v103: which Main Categories currently have their Subcategory breakdown expanded on the
+        // Net Savings Statement — keyed by category id (unique across income/expense, so one Set
+        // covers both sections). Module-level state, not persisted: resets to all-collapsed on
+        // reload, same lifetime as e.g. activeCategoryView. Toggled by toggleSavingsMainExpand().
+        let savingsExpandedMains = new Set();
+
+        function toggleSavingsMainExpand(id) {
+            if (savingsExpandedMains.has(id)) savingsExpandedMains.delete(id);
+            else savingsExpandedMains.add(id);
+            renderSavingsStatement();
+        }
+
+        // v103: builds one section's (income or expense) rows for the Net Savings Statement.
+        // A Main Category with its own Subcategories now shows ONE combined row summing its own
+        // directly-assigned total plus every Subcategory's total, with a ▼/▲ toggle to reveal the
+        // Subcategories underneath (each with its own individual total) — see
+        // savingsExpandedMains/toggleSavingsMainExpand() above for the expand/collapse state.
+        // A Main Category with no Subcategories, or a legacy/fallback category name with no
+        // matching record at all, still renders exactly as a single flat row like before v103.
+        function buildSavingsSectionRowsHTML(catSummary, type, filterY) {
+            const catRecords = dynamicCategories.filter(c => c.type === type);
+            const mains = catRecords.filter(c => !c.parentId).sort((a, b) => a.name.localeCompare(b.name));
+            const subsByMainId = new Map();
+            catRecords.filter(c => c.parentId).forEach(s => {
+                if (!subsByMainId.has(s.parentId)) subsByMainId.set(s.parentId, []);
+                subsByMainId.get(s.parentId).push(s);
+            });
+
+            const sign = type === "income" ? "+" : "-";
+            const color = type === "income" ? "var(--income-color)" : "var(--expense-color)";
+            const rendered = new Set();
+            let html = "";
+
+            mains.forEach(main => {
+                const subs = (subsByMainId.get(main.id) || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+                rendered.add(main.name);
+                const directVal = catSummary[main.name] || 0;
+                let combined = directVal;
+                const subRowsData = [];
+                subs.forEach(s => {
+                    rendered.add(s.name);
+                    const v = catSummary[s.name] || 0;
+                    combined += v;
+                    if (Math.abs(v) >= SAVINGS_ZERO_EPS) subRowsData.push({ name: s.name, value: v, icon: s.icon });
+                });
+
+                if (Math.abs(combined) < SAVINGS_ZERO_EPS && subRowsData.length === 0) return;
+
+                const icon = main.icon || getCategoryIcon(main.name, type);
+                const hasSubs = subRowsData.length > 0;
+                const expanded = savingsExpandedMains.has(main.id);
+
+                html += `
+                    <div class="statement-row" style="align-items:center;">
+                        <span style="cursor:pointer;" data-click="navigateToCategoryPage" data-category="${escapeHtml(main.name)}" data-back="savings" data-year="${escapeHtml(filterY)}">
+                            <strong>${icon} ${escapeHtml(main.name)}</strong>
+                        </span>
+                        <span style="display:flex; align-items:center; gap:8px;">
+                            <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(combined, baseCurrency)}</span>
+                            ${hasSubs ? `<button type="button" class="trash-btn" data-click="toggleSavingsMainExpand" data-id="${escapeHtml(main.id)}" title="${expanded ? 'Hide subcategories' : 'Show subcategories'}" style="padding:2px 6px; font-size:0.7rem;">${expanded ? '▲' : '▼'}</button>` : ''}
+                        </span>
+                    </div>
+                `;
+
+                if (hasSubs && expanded) {
+                    subRowsData.forEach(s => {
+                        html += `
+                            <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(s.name)}" data-back="savings" data-year="${escapeHtml(filterY)}" style="padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;">
+                                <span><span style="color:var(--text-muted);">↳</span> ${s.icon} ${escapeHtml(s.name)}</span>
+                                <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(s.value, baseCurrency)}</span>
+                            </div>
+                        `;
+                    });
+                }
+            });
+
+            Object.keys(catSummary).sort((a, b) => a.localeCompare(b)).forEach(name => {
+                if (rendered.has(name)) return;
+                const val = catSummary[name];
+                if (Math.abs(val) < SAVINGS_ZERO_EPS) return;
+                const icon = getCategoryIcon(name, type);
+                html += `
+                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(name)}" data-back="savings" data-year="${escapeHtml(filterY)}">
+                        <strong>${icon} ${escapeHtml(name)}</strong>
+                        <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(val, baseCurrency)}</span>
+                    </div>
+                `;
+            });
+
+            return html;
+        }
+
         async function renderSavingsStatement() {
             const txs = await readAllDB(STORES.TRANSACTIONS);
             const accounts = await readAllDB(STORES.ACCOUNTS);
@@ -7342,33 +7434,11 @@
                 }
             });
 
-            let incRowsHTML = "";
-            Object.keys(catSummary.income).sort((a, b) => a.localeCompare(b)).forEach(c => {
-                const val = catSummary.income[c];
-                if (Math.abs(val) < SAVINGS_ZERO_EPS) return;
-                const icon = getCategoryIcon(c, "income");
-                incRowsHTML += `
-                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}">
-                        <strong>${icon} ${escapeHtml(c)}</strong>
-                        <span style="color: var(--income-color); font-weight:700;">+${formatCurrency(val, baseCurrency)}</span>
-                    </div>
-                `;
-            });
+            let incRowsHTML = buildSavingsSectionRowsHTML(catSummary.income, "income", filterY);
             document.getElementById("savingsIncomeRows").innerHTML = incRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No income entries logged.</p>';
             document.getElementById("savingsIncomeTotal").textContent = `+${formatCurrency(Math.abs(incBaseTotal) < SAVINGS_ZERO_EPS ? 0 : incBaseTotal, baseCurrency)}`;
 
-            let expRowsHTML = "";
-            Object.keys(catSummary.expense).sort((a, b) => a.localeCompare(b)).forEach(c => {
-                const val = catSummary.expense[c];
-                if (Math.abs(val) < SAVINGS_ZERO_EPS) return;
-                const icon = getCategoryIcon(c, "expense");
-                expRowsHTML += `
-                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}">
-                        <strong>${icon} ${escapeHtml(c)}</strong>
-                        <span style="color: var(--expense-color); font-weight:700;">-${formatCurrency(val, baseCurrency)}</span>
-                    </div>
-                `;
-            });
+            let expRowsHTML = buildSavingsSectionRowsHTML(catSummary.expense, "expense", filterY);
             document.getElementById("savingsExpenseRows").innerHTML = expRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No expense entries logged.</p>';
             document.getElementById("savingsExpenseTotal").textContent = `-${formatCurrency(Math.abs(expBaseTotal) < SAVINGS_ZERO_EPS ? 0 : expBaseTotal, baseCurrency)}`;
 
@@ -8206,6 +8276,7 @@
             openAccountFormModal: () => openAccountFormModal(),
             openCategoryFormModal: () => openCategoryFormModal(),
             editCategory: (el) => editCategory(el.dataset.id),
+            toggleSavingsMainExpand: (el) => toggleSavingsMainExpand(el.dataset.id),
             deleteAccountFromForm: () => deleteAccountFromForm(),
             editAccountFromLedgerHeader: () => editAccountFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
