@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v93";
+        const APP_VERSION = "v94";
         const APP_VERSION_DATE = "2026-08-22";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -6784,7 +6784,13 @@
                 const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(tBase, baseCurrency)}</span>` : '';
                 // v91: a representative Split Expense row shows the combined category icons and
                 // joined category label — see getSplitGroupInfo().
-                const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
+                // v93 fix: only pull in the whole group's aggregate (combined icons/label/total)
+                // when this row is being shown as part of a multi-category view (All / account /
+                // type). Inside one specific category's own drill-down, `t` already *is* that
+                // category's own split part — showing the group total there was the RM190-for-a-
+                // RM90-or-RM100-part bug from Images 1/3/4, so those views must use this record's
+                // own cat/amount instead, exactly like a non-split transaction would.
+                const splitInfo = (t.splitGroupId && activeCategoryView === "all") ? getSplitGroupInfo(t, txs) : null;
                 const iconBadge = t.type === "transfer"
                     ? "🔄"
                     : (splitInfo ? splitInfo.members.map(m => getCategoryIcon(m.cat, t.type)).join("") : getCategoryIcon(t.cat, t.type));
