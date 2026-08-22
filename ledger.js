@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v95";
+        const APP_VERSION = "v96";
         const APP_VERSION_DATE = "2026-08-22";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -1158,12 +1158,18 @@
                     ? splitInfo.members.map(m => getCategoryIcon(m.cat, t.type)).join("")
                     : getCategoryIcon(t.cat, t.type);
                 const acc = accounts.find(a => a.id === t.src);
+                // v96: Notes now doubles as the free-text "who/what" line that the removed To/From
+                // field used to cover (see the txPayee removal above), so it's worth surfacing right
+                // on the row — not just inside Quick View — matching the reference screenshot's
+                // merchant/description line under the account.
+                const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">${escapeHtml(t.notes)}</span>` : '';
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(displayCat)}]</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(displayAmount, t.currency)}</div>
@@ -2865,6 +2871,7 @@
                     ? `🏦 ${accountName(t.src)} → ${t.dest ? accountName(t.dest) : "(unknown)"}`
                     : `🏦 ${accountName(t.src)}`;
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
+                const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">${escapeHtml(t.notes)}</span>` : '';
 
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
@@ -2872,6 +2879,7 @@
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
                             <span class="item-meta">${escapeHtml(t.date)} [${escapeHtml(displayCat)}]${referenceText}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(displayAmount, t.currency)}</div>
@@ -4686,8 +4694,6 @@
                 document.getElementById("srcAccount").value = tx.src;
                 document.getElementById("destAccount").value = tx.dest || "";
                 document.getElementById("txDate").value = tx.date;
-                document.getElementById("txPayee").value = tx.payee || "";
-                document.getElementById("txPayeeLabel").textContent = tx.type === "income" ? "From (Optional)" : "To (Optional)";
                 document.getElementById("txNotes").value = tx.notes || "";
                 document.getElementById("txChecked").checked = !!tx.checked;
                 // Split Expenses is a new-entry-only affordance (see the comment on #txSplitWrap in
@@ -4770,8 +4776,6 @@
                 document.getElementById("txDate").value = todayLocalStr();
                 document.getElementById("txDesc").value = "";
                 document.getElementById("txAmount").value = "";
-                document.getElementById("txPayee").value = "";
-                document.getElementById("txPayeeLabel").textContent = type === "income" ? "From (Optional)" : "To (Optional)";
                 document.getElementById("txNotes").value = "";
                 document.getElementById("txChecked").checked = false;
                 // Split Expenses only makes sense for a brand-new Income/Expense entry.
@@ -5750,7 +5754,11 @@
                 image: currentTxImageData || null,
                 // v88: To/From (payee) and free-text Notes — optional on every type, blank stored as
                 // null (not "") so existing code that checks `t.notes` truthy keeps working unchanged.
-                payee: document.getElementById("txPayee").value.trim() || null,
+                // v96: the "To/From" field itself was removed from the entry form (Notes now covers
+                // that need — see the list-row rendering below), so this no longer reads from an
+                // input; it just carries forward whatever an existing record already had, rather than
+                // silently wiping historic payee data the moment an old entry is edited and re-saved.
+                payee: existingTxForEdit ? existingTxForEdit.payee : null,
                 notes: document.getElementById("txNotes").value.trim() || null,
                 checked: document.getElementById("txChecked").checked,
                 fdReferenceNo: null,
@@ -5935,7 +5943,6 @@
             if (tx.type === "transfer") {
                 destLine = `<div>To Account: ${tx.dest ? accountName(tx.dest) : "(unknown)"}</div>`;
             }
-            const payeeLabel = tx.type === "income" ? "From" : "To";
             const refundLine = tx.isRefund ? `<div style="color:var(--income-color); font-weight:700;">↩️ Refund entry</div>` : "";
 
             // v91: a Split Expense group's breakdown — one line per category+amount part,
@@ -5956,7 +5963,6 @@
                 <div>Account: ${accountName(tx.src)}</div>
                 ${destLine}
                 ${(!splitInfo && tx.cat) ? `<div>Category: ${escapeHtml(tx.cat)}</div>` : ""}
-                <div>${payeeLabel}: ${tx.payee ? escapeHtml(tx.payee) : "-"}</div>
                 <div>Notes: ${tx.notes ? escapeHtml(tx.notes) : "-"}</div>
                 ${refundLine}
             `;
@@ -6126,7 +6132,6 @@
                 } else {
                     document.getElementById("txCategory").value = tx.cat || "";
                 }
-                document.getElementById("txPayee").value = tx.payee || "";
                 document.getElementById("txNotes").value = tx.notes || "";
                 document.getElementById("txDate").value = tx.date;
                 document.getElementById("txChecked").checked = false;
@@ -6875,12 +6880,18 @@
                     }
                 }
 
+                // v96: Notes now doubles as the free-text "who/what" line the removed To/From field
+                // used to cover — see the txPayee removal comment on the record-save assignment
+                // above — so it's surfaced right on the row here too, not just inside Quick View.
+                const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">${escapeHtml(t.notes)}</span>` : '';
+
                 ledgerHTML += `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${checkedIconHTML} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]${referenceText}${maturityText}${receiptBadge}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight: bold;">
