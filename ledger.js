@@ -747,13 +747,11 @@
         // Which transaction id the Quick View modal is currently showing — set by openTxQuickView(),
         // read by the toggle-checked/options/duplicate/refund/delete actions reached from it.
         let activeQuickViewTxId = null;
-        // v91: set alongside activeQuickViewTxId whenever the tapped row is the representative of
-        // a Split Expense group (see getSplitGroupInfo()) — holds that group's member list, null
-        // otherwise. toggleTxCheckedFromQuickView() reads it to toggle Checked across every member
-        // at once (Quick View shows only one Checked button for the merged row); the Options menu
-        // reads it to show the "which part?" picker instead of jumping straight to Edit/Duplicate/
-        // Refund/Delete, since those still act on exactly one underlying record.
-        let activeQuickViewSplitGroup = null;
+        // v91: when Quick View is showing a combined split-transaction group (see
+        // openTxQuickView's splitGroupId branch), this holds every member record's id so the
+        // Checked toggle can apply to the whole group at once — null the rest of the time, in
+        // which case toggleTxCheckedFromQuickView() falls back to just activeQuickViewTxId.
+        let activeQuickViewGroupIds = null;
         // When set, the next handleTransactionSubmitMobile() save is tagged as a refund of this
         // transaction id (isRefund:true, refundOf:<id>) instead of an ordinary income entry — set by
         // openRefundFromOptions(), cleared on every openTransactionForm() call and after saving.
@@ -908,32 +906,6 @@
             const matched = dynamicCategories.find(c => c.name.toLowerCase() === clean);
             if (matched) return matched.icon;
             return fallbackIcons[clean] || (type === "income" ? "🟢" : "🔴");
-        }
-
-        // v91: Split Expenses groups (see collectTxSplitRows()/saveTransactionSubmit() around the
-        // splitGroupId comment) — each split part is saved as its own ordinary transaction record
-        // sharing a generated splitGroupId, purely for traceability. Every list view (dashboard
-        // Recent Transactions, an account's Currency/Ledger Activity) previously showed each part
-        // as its own separate row (e.g. one McD payment split Clothing/Dining Out appeared as two
-        // unrelated-looking rows) instead of one combined row like the reference app screenshots
-        // this was modeled on. This helper computes the DISPLAY-ONLY merge: given one member of a
-        // group, returns every member (sorted by id — the lowest id is the original "main" part,
-        // saved first, so it's the representative row the others collapse into), the summed
-        // amount, and a comma-joined category label. Returns null for an ordinary transaction, or
-        // for an orphaned split part whose siblings were since deleted individually (falls back to
-        // rendering as a normal single-category row rather than vanishing). Nothing about balance
-        // or report totals changes — those still iterate every individual record exactly as
-        // before this existed; only which HTML row(s) a given transaction produces is affected.
-        function getSplitGroupInfo(tx, allTxs) {
-            if (!tx.splitGroupId) return null;
-            const members = allTxs.filter(t => t.splitGroupId === tx.splitGroupId).sort((a, b) => a.id - b.id);
-            if (members.length < 2) return null;
-            return {
-                repId: members[0].id,
-                members,
-                totalAmount: members.reduce((sum, m) => sum + m.amount, 0),
-                catLabel: members.map(m => m.cat).join(", "),
-            };
         }
 
         // --- NATIVE ROUTING CORE (MOBILE BACK-BUTTON COUPLING) ---
@@ -1117,6 +1089,36 @@
 
         // Draws the compact "Recent Transactions" list on the dashboard — a small slice of
         // Income/Expense entries (never Transfers) filtered/limited per the settings panel above it.
+        // v91: groups consecutive elements of an already-sorted array that share the same
+        // non-empty key into sub-arrays — used everywhere a transaction list is rendered to
+        // collapse a "Split into another category" entry's parts (same splitGroupId, always
+        // written back-to-back — see handleTransactionSubmitMobile) into one combined display
+        // row. Elements with no key (the overwhelming majority of transactions) each get their
+        // own single-element group, so every caller can treat group[0] as "the record" for a
+        // plain, non-split row and group.length > 1 as the signal to render the combined form.
+        // Relies only on split members staying adjacent in the passed-in array, which they
+        // always do: Array.sort/filter/slice/map are all stable in every browser this app
+        // targets, and the parts are inserted (and therefore ordinarily read back) right next
+        // to each other, so an equal-date sort tie never separates them.
+        function groupConsecutiveByField(arr, keyFn) {
+            const out = [];
+            let i = 0;
+            while (i < arr.length) {
+                const key = keyFn(arr[i]);
+                if (key) {
+                    const grp = [arr[i]];
+                    let j = i + 1;
+                    while (j < arr.length && keyFn(arr[j]) === key) { grp.push(arr[j]); j++; }
+                    out.push(grp);
+                    i = j;
+                } else {
+                    out.push([arr[i]]);
+                    i++;
+                }
+            }
+            return out;
+        }
+
         function renderRecentTransactionsWidget(accounts, txs) {
             const list = document.getElementById("recentTxList");
             if (!list) return;
@@ -1132,15 +1134,6 @@
             if (recentTxTypeFilter !== "both") filtered = filtered.filter(t => t.type === recentTxTypeFilter);
             if (recentTxAccountFilter !== "all") filtered = filtered.filter(t => t.src === recentTxAccountFilter);
 
-            // v91: collapse each Split Expense group to its representative row BEFORE sorting/
-            // slicing to recentTxCount, so the count setting reflects visible rows (one per
-            // group), not raw per-category records — see getSplitGroupInfo().
-            filtered = filtered.filter(t => {
-                if (!t.splitGroupId) return true;
-                const info = getSplitGroupInfo(t, txs);
-                return !info || t.id === info.repId;
-            });
-
             filtered = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, recentTxCount);
 
             if (filtered.length === 0) {
@@ -1148,25 +1141,48 @@
                 return;
             }
 
-            list.innerHTML = filtered.map(t => {
+            // v91: group consecutive split-transaction parts into one combined row — see
+            // groupConsecutiveByField — so e.g. a Clothing+Dine Out split shows as a single
+            // "Clothing, Dine Out -RMxx.xx" row instead of two separate rows.
+            const groups = groupConsecutiveByField(filtered, t => t.splitGroupId);
+            list.innerHTML = groups.map(group => {
+                const t = group[0];
                 const col = t.type === "income" ? "income-color" : "expense-color";
                 const sgn = t.type === "income" ? "+" : "-";
-                const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
-                const displayCat = splitInfo ? splitInfo.catLabel : (t.cat || '');
-                const displayAmount = splitInfo ? splitInfo.totalAmount : t.amount;
-                const iconBadge = splitInfo
-                    ? splitInfo.members.map(m => getCategoryIcon(m.cat, t.type)).join("")
-                    : getCategoryIcon(t.cat, t.type);
                 const acc = accounts.find(a => a.id === t.src);
+                const accountLine = `🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}`;
+                const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">📝 ${escapeHtml(t.notes)}</span>` : '';
+
+                if (group.length > 1) {
+                    const total = group.reduce((s, g) => s + g.amount, 0);
+                    const icons = [...new Set(group.map(g => getCategoryIcon(g.cat, g.type)))].slice(0, 3).join("");
+                    const catLabel = group.map(g => g.cat || '').join(", ");
+                    return `
+                        <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                            <div class="item-left">
+                                <span class="item-name">${icons} ${escapeHtml(t.desc)}</span>
+                                <span class="item-meta">${t.date} [${escapeHtml(catLabel)}]</span>
+                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountLine}</span>
+                                ${notesLine}
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(total, t.currency)}</div>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                const iconBadge = getCategoryIcon(t.cat, t.type);
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(displayCat)}]</span>
-                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || '')}]</span>
+                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountLine}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(displayAmount, t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
                         </div>
                     </div>
                 `;
@@ -2839,42 +2855,52 @@
 
             const relevantTxs = txs
                 .filter(t => t.currency === currency && (t.src === accountId || t.dest === accountId))
-                // v91: collapse Split Expense group siblings to their representative row — see
-                // getSplitGroupInfo().
-                .filter(t => {
-                    if (!t.splitGroupId) return true;
-                    const info = getSplitGroupInfo(t, txs);
-                    return !info || t.id === info.repId;
-                })
                 .sort((a, b) => new Date(b.date) - new Date(a.date));
 
-            const html = relevantTxs.map(t => {
+            const groups = groupConsecutiveByField(relevantTxs, t => t.splitGroupId);
+            const html = groups.map(group => {
+                const t = group[0];
                 let col, sgn;
                 if (t.type === "income") { col = "income-color"; sgn = "+"; }
                 else if (t.type === "expense") { col = "expense-color"; sgn = "-"; }
                 else if (t.dest === accountId) { col = "income-color"; sgn = "+"; }
                 else { col = "expense-color"; sgn = "-"; }
 
-                const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
-                const displayCat = splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer');
-                const displayAmount = splitInfo ? splitInfo.totalAmount : t.amount;
-                const iconBadge = t.type === "transfer"
-                    ? "🔄"
-                    : (splitInfo ? splitInfo.members.map(m => getCategoryIcon(m.cat, t.type)).join("") : getCategoryIcon(t.cat, t.type));
                 const accountText = t.type === "transfer"
                     ? `🏦 ${accountName(t.src)} → ${t.dest ? accountName(t.dest) : "(unknown)"}`
                     : `🏦 ${accountName(t.src)}`;
-                const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
+                const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">📝 ${escapeHtml(t.notes)}</span>` : '';
 
+                if (group.length > 1) {
+                    const total = group.reduce((s, g) => s + g.amount, 0);
+                    const icons = [...new Set(group.map(g => getCategoryIcon(g.cat, g.type)))].slice(0, 3).join("");
+                    const catLabel = group.map(g => g.cat || '').join(", ");
+                    return `
+                        <div class="ledger-item" data-click="openTxQuickView" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
+                            <div class="item-left">
+                                <span class="item-name">${icons} ${escapeHtml(t.desc)}</span>
+                                <span class="item-meta">${escapeHtml(t.date)} [${escapeHtml(catLabel)}]</span>
+                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                                ${notesLine}
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(total, t.currency)}</div>
+                            </div>
+                        </div>`;
+                }
+
+                const iconBadge = t.type === "transfer" ? "🔄" : getCategoryIcon(t.cat, t.type);
+                const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
-                            <span class="item-meta">${escapeHtml(t.date)} [${escapeHtml(displayCat)}]${referenceText}</span>
+                            <span class="item-meta">${escapeHtml(t.date)} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(displayAmount, t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
                         </div>
                     </div>`;
             }).join("");
@@ -5893,57 +5919,65 @@
             // them (no Checked/Refund/Duplicate concept for a fund-linked row), so fall straight
             // through to the normal edit flow exactly as tapping used to do everywhere.
             if (tx.fundId) {
-                activeQuickViewSplitGroup = null;
                 await openTransactionForm(tx.type, id);
                 return;
             }
 
-            activeQuickViewTxId = id;
-            const splitInfo = tx.splitGroupId ? getSplitGroupInfo(tx, txs) : null;
-            if (splitInfo) { splitInfo.type = tx.type; splitInfo.currency = tx.currency; }
-            activeQuickViewSplitGroup = splitInfo;
             const accounts = await readAllDB(STORES.ACCOUNTS);
-            const accountName = accId => { if (!accId) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === accId); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
+            const optionsBtn = document.getElementById("txQuickViewOptionsBtn");
 
+            // v91: a split-transaction record (see collectTxSplitRows/handleTransactionSubmitMobile)
+            // shares its splitGroupId with every other part created alongside it — show all of
+            // them together as one combined breakdown (matching the combined list row above) instead
+            // of just the single tapped part. Every other transaction (the overwhelming majority)
+            // falls through to the plain single-record view exactly as before.
+            if (tx.splitGroupId) {
+                const groupTxs = txs.filter(t2 => t2.splitGroupId === tx.splitGroupId).sort((a, b) => a.id - b.id);
+                activeQuickViewTxId = groupTxs[0].id;
+                activeQuickViewGroupIds = groupTxs.map(t2 => t2.id);
+                openSplitGroupQuickView(groupTxs, accounts, optionsBtn);
+                return;
+            }
+            activeQuickViewTxId = id;
+            activeQuickViewGroupIds = null;
+            if (optionsBtn) optionsBtn.style.display = "flex";
+            renderSingleTxQuickView(tx, accounts);
+            openModal("txQuickViewModal");
+        }
+
+        function accountNameFor(accId, accounts) {
+            if (!accId) return "(Opening Balance)";
+            const a = accounts.find(acc => acc.id === accId);
+            return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)";
+        }
+
+        // Fills Quick View's header/details for one ordinary (non-split) record — split out of
+        // openTxQuickView so it can also be reused as the "drill into one part" view reached by
+        // tapping a breakdown row inside openSplitGroupQuickView() below.
+        function renderSingleTxQuickView(tx, accounts) {
             let headerColor, sgn;
             if (tx.type === "income") { headerColor = "var(--income-color)"; sgn = "+"; }
             else if (tx.type === "expense") { headerColor = "var(--expense-color)"; sgn = "-"; }
             else { headerColor = "var(--primary)"; sgn = "🔄"; }
 
             document.getElementById("txQuickViewHeader").style.background = headerColor;
-            document.getElementById("txQuickViewAmount").textContent = `${sgn}${formatCurrency(splitInfo ? splitInfo.totalAmount : tx.amount, tx.currency)}`;
+            document.getElementById("txQuickViewAmount").textContent = `${sgn}${formatCurrency(tx.amount, tx.currency)}`;
             document.getElementById("txQuickViewDate").textContent = tx.date;
 
-            const icon = tx.type === "transfer"
-                ? "🔄"
-                : (splitInfo ? splitInfo.members.map(m => getCategoryIcon(m.cat, tx.type)).join("") : getCategoryIcon(tx.cat, tx.type));
+            const icon = tx.type === "transfer" ? "🔄" : getCategoryIcon(tx.cat, tx.type);
             document.getElementById("txQuickViewDesc").textContent = `${icon} ${tx.desc}`;
 
             let destLine = "";
             if (tx.type === "transfer") {
-                destLine = `<div>To Account: ${tx.dest ? accountName(tx.dest) : "(unknown)"}</div>`;
+                destLine = `<div>To Account: ${tx.dest ? accountNameFor(tx.dest, accounts) : "(unknown)"}</div>`;
             }
             const payeeLabel = tx.type === "income" ? "From" : "To";
             const refundLine = tx.isRefund ? `<div style="color:var(--income-color); font-weight:700;">↩️ Refund entry</div>` : "";
 
-            // v91: a Split Expense group's breakdown — one line per category+amount part,
-            // matching the reference screenshots — shown above the Account/To/Notes fields
-            // (identical across every member; see saveTransactionSubmit()'s splitGroupId
-            // comment), in place of the single "Category: X" line an ordinary entry gets.
-            const splitBreakdownHTML = splitInfo
-                ? splitInfo.members.map(m => `
-                    <div style="display:flex; justify-content:space-between;">
-                        <span>${getCategoryIcon(m.cat, tx.type)} ${escapeHtml(m.cat)}</span>
-                        <span>${sgn}${formatCurrency(m.amount, tx.currency)}</span>
-                    </div>
-                `).join("")
-                : "";
-
             document.getElementById("txQuickViewDetails").innerHTML = `
-                ${splitBreakdownHTML}
-                <div>Account: ${accountName(tx.src)}</div>
+                <div>Account: ${accountNameFor(tx.src, accounts)}</div>
                 ${destLine}
-                ${(!splitInfo && tx.cat) ? `<div>Category: ${escapeHtml(tx.cat)}</div>` : ""}
+                ${tx.cat ? `<div>Category: ${escapeHtml(tx.cat)}</div>` : ""}
                 <div>${payeeLabel}: ${tx.payee ? escapeHtml(tx.payee) : "-"}</div>
                 <div>Notes: ${tx.notes ? escapeHtml(tx.notes) : "-"}</div>
                 ${refundLine}
@@ -5951,13 +5985,71 @@
 
             updateTxQuickViewCheckedBtn(!!tx.checked);
             // Refund only makes sense for an ordinary expense — not for a Transfer, not for
-            // another refund (no "refund of a refund"), and not for Income. Split Expenses are
-            // only ever created for a brand-new Income/Expense entry (never a refund entry, and
-            // refunds never offer the split UI — see openRefundFromOptions()), so every member of
-            // a group shares the same type/isRefund as the representative checked here.
+            // another refund (no "refund of a refund"), and not for Income.
             document.getElementById("txOptionsRefundBtn").style.display = (tx.type === "expense" && !tx.isRefund) ? "flex" : "none";
+        }
 
+        // Combined breakdown view for a whole split group (v91) — mirrors the reference app's
+        // "one row per category part" detail screen: total amount + date up top, then every
+        // part's own category+amount underneath, then the fields shared by every part (they're
+        // always identical at creation time — see handleTransactionSubmitMobile's splitRows
+        // loop — Account/Payee/Notes). The "⋮" Options button is hidden here since Edit/Duplicate/
+        // Delete/Refund all need one specific record, not a group — tapping any breakdown row
+        // below drills into that one part's own ordinary Quick View instead, where Options works
+        // normally.
+        function openSplitGroupQuickView(groupTxs, accounts, optionsBtn) {
+            const main = groupTxs[0];
+            const total = groupTxs.reduce((s, t) => s + t.amount, 0);
+            let headerColor, sgn;
+            if (main.type === "income") { headerColor = "var(--income-color)"; sgn = "+"; }
+            else { headerColor = "var(--expense-color)"; sgn = "-"; }
+
+            document.getElementById("txQuickViewHeader").style.background = headerColor;
+            document.getElementById("txQuickViewAmount").textContent = `${sgn}${formatCurrency(total, main.currency)}`;
+            document.getElementById("txQuickViewDate").textContent = main.date;
+            document.getElementById("txQuickViewDesc").textContent = `${main.desc} (${groupTxs.length} categories)`;
+            if (optionsBtn) optionsBtn.style.display = "none";
+
+            const breakdownRows = groupTxs.map(t => `
+                <div data-click="drillIntoSplitPart" data-id="${escapeHtml(t.id)}" style="display:flex; justify-content:space-between; align-items:center; cursor:pointer; padding:4px 0;">
+                    <span>${getCategoryIcon(t.cat, t.type)} ${escapeHtml(t.cat || '')}</span>
+                    <span style="font-weight:700;">${sgn}${formatCurrency(t.amount, t.currency)}</span>
+                </div>
+            `).join("");
+
+            const payeeLabel = main.type === "income" ? "From" : "To";
+            document.getElementById("txQuickViewDetails").innerHTML = `
+                ${breakdownRows}
+                <div style="border-top:1px solid #e2e8f0; margin:8px 0;"></div>
+                <div>Account: ${accountNameFor(main.src, accounts)}</div>
+                <div>${payeeLabel}: ${main.payee ? escapeHtml(main.payee) : "-"}</div>
+                <div>Notes: ${main.notes ? escapeHtml(main.notes) : "-"}</div>
+                <div style="font-size:0.75rem; color:var(--text-muted);">Tap a category above to view or edit just that part.</div>
+            `;
+
+            updateTxQuickViewCheckedBtn(groupTxs.every(t => t.checked));
+            document.getElementById("txOptionsRefundBtn").style.display = "none";
             openModal("txQuickViewModal");
+        }
+
+        // A breakdown row inside the combined split view was tapped — closes the group view and
+        // re-opens plain single-record Quick View for just that one part, where the normal
+        // Options menu (Edit/Duplicate/Delete/Refund) applies as usual.
+        function drillIntoSplitPart(el) {
+            const id = Number(el.dataset.id);
+            if (!id) return;
+            closeModalAndThen("txQuickViewModal", async () => {
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                const tx = txs.find(t => t.id === id);
+                if (!tx) return;
+                const accounts = await readAllDB(STORES.ACCOUNTS);
+                activeQuickViewTxId = id;
+                activeQuickViewGroupIds = null;
+                const optionsBtn = document.getElementById("txQuickViewOptionsBtn");
+                if (optionsBtn) optionsBtn.style.display = "flex";
+                renderSingleTxQuickView(tx, accounts);
+                openModal("txQuickViewModal");
+            });
         }
 
         function updateTxQuickViewCheckedBtn(isChecked) {
@@ -5977,23 +6069,22 @@
         async function toggleTxCheckedFromQuickView() {
             if (!activeQuickViewTxId) return;
             const txs = await readAllDB(STORES.TRANSACTIONS);
-            const tx = txs.find(t => t.id === activeQuickViewTxId);
-            if (!tx) return;
-            const newChecked = !tx.checked;
-            if (activeQuickViewSplitGroup) {
-                // v91: Quick View shows a single Checked button for the whole merged split-group
-                // row, so toggling it reconciles every category+amount part together — otherwise
-                // some parts could end up checked and others not, with no way to see that from
-                // the merged row alone.
-                for (const member of activeQuickViewSplitGroup.members) {
-                    const m = txs.find(t => t.id === member.id);
-                    if (m) {
-                        m.checked = newChecked;
-                        await writeDB(STORES.TRANSACTIONS, m);
-                    }
+            if (activeQuickViewGroupIds) {
+                // v91: the combined split-group view shows one Checked state for the whole row,
+                // so toggling it flips every member together rather than just the id Quick View
+                // happens to be keyed on.
+                const groupSet = new Set(activeQuickViewGroupIds);
+                const groupTxs = txs.filter(t => groupSet.has(t.id));
+                if (groupTxs.length === 0) return;
+                const newChecked = !groupTxs.every(t => t.checked);
+                for (const t of groupTxs) {
+                    t.checked = newChecked;
+                    await writeDB(STORES.TRANSACTIONS, t);
                 }
             } else {
-                tx.checked = newChecked;
+                const tx = txs.find(t => t.id === activeQuickViewTxId);
+                if (!tx) return;
+                tx.checked = !tx.checked;
                 await writeDB(STORES.TRANSACTIONS, tx);
             }
             closeModal("txQuickViewModal");
@@ -6008,45 +6099,7 @@
         // way. Pushing a second entry here would instead leave a "phantom" extra history step
         // behind every time this menu is used to jump into Edit/Duplicate/Refund below — see
         // closeModalAndThen() for why that matters.
-        // v91: on a Split Expense group's merged Quick View row, Duplicate/Edit/Refund/Delete
-        // each still need exactly one underlying transaction record to act on (there's no
-        // split-aware editor), so this routes through a "which part?" picker first instead of
-        // opening the Options menu directly — see openTxSplitPicker().
         function openTxOptionsMenu() {
-            if (activeQuickViewSplitGroup) {
-                openTxSplitPicker();
-                return;
-            }
-            document.getElementById("txOptionsModal").classList.add("active");
-        }
-
-        // Lists every category+amount part of the current Quick View's split group; tapping one
-        // repoints activeQuickViewTxId at that specific record's id, then opens the normal
-        // Options menu exactly as if a non-split row had been tapped directly.
-        function openTxSplitPicker() {
-            const info = activeQuickViewSplitGroup;
-            if (!info) return;
-            const sgn = info.type === "income" ? "+" : "-";
-            document.getElementById("txSplitPickerList").innerHTML = info.members.map(m => `
-                <button type="button" class="option-menu-btn" data-click="selectTxSplitPickerRow" data-id="${m.id}" style="display:flex; justify-content:space-between;">
-                    <span>${getCategoryIcon(m.cat, info.type)} ${escapeHtml(m.cat)}</span>
-                    <span>${sgn}${formatCurrency(m.amount, info.currency)}</span>
-                </button>
-            `).join("");
-            document.getElementById("txSplitPickerModal").classList.add("active");
-        }
-
-        // Dismisses just the split-part picker, back to Quick View underneath — same non-history-
-        // navigating pattern as closeTxOptionsMenu() below (see openTxOptionsMenu() above).
-        function closeTxSplitPicker() {
-            document.getElementById("txSplitPickerModal").classList.remove("active");
-        }
-
-        function selectTxSplitPickerRow(el) {
-            const id = Number(el.dataset.id);
-            if (!id) return;
-            activeQuickViewTxId = id;
-            closeTxSplitPicker();
             document.getElementById("txOptionsModal").classList.add("active");
         }
 
@@ -6667,6 +6720,12 @@
             }
 
             let matchedCount = 0;
+            // v91: every matched row's precomputed visual bits (col/sgn/badges/etc — see the tail
+            // of this forEach) land here instead of straight into ledgerHTML, so a second pass
+            // after the loop can collapse consecutive same-splitGroupId records into one combined
+            // row (see groupConsecutiveByField/renderApp's split-combining below) without touching
+            // any of the per-record category-summary/balance logic still running inside the loop.
+            let matchedRecords = [];
 
             // v74: the dashboard's own month/year filter is meant to scope PERIOD-based reporting
             // on THIS page (the Total Income/Expenses stat boxes above). It used to also gate
@@ -6737,14 +6796,6 @@
                     isBound = true;
                 }
 
-                // v91: skip non-representative Split Expense group siblings for display — the
-                // group collapses into one row keyed on its lowest-id member. Balance/report
-                // totals above are untouched since they already ran for every individual record.
-                if (isBound && t.splitGroupId) {
-                    const info = getSplitGroupInfo(t, txs);
-                    if (info && t.id !== info.repId) isBound = false;
-                }
-
                 if (!isBound) return;
 
                 matchedCount++;
@@ -6762,12 +6813,7 @@
                 else { col = "transfer-color"; sgn = "🔄"; }
 
                 const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(tBase, baseCurrency)}</span>` : '';
-                // v91: a representative Split Expense row shows the combined category icons and
-                // joined category label — see getSplitGroupInfo().
-                const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
-                const iconBadge = t.type === "transfer"
-                    ? "🔄"
-                    : (splitInfo ? splitInfo.members.map(m => getCategoryIcon(m.cat, t.type)).join("") : getCategoryIcon(t.cat, t.type));
+                const iconBadge = t.type === "transfer" ? "🔄" : getCategoryIcon(t.cat, t.type);
                 // v88: a small ✅ overlay on the category icon flags a transaction the user has
                 // already reconciled against a bank/card statement (see the Checked toggle in
                 // Quick View / the entry form) — purely a visual cue, no effect on any total.
@@ -6797,7 +6843,7 @@
                 // side figure instead: the locked destAmount when one was entered, or (matching
                 // what computeAccountBalances() actually applies) a live-converted estimate
                 // otherwise, clearly marked "≈" since it isn't fixed.
-                let displayAmountHTML = `${sgn}${formatCurrency(splitInfo ? splitInfo.totalAmount : t.amount, t.currency)}`;
+                let displayAmountHTML = `${sgn}${formatCurrency(t.amount, t.currency)}`;
                 if (t.type === "transfer" && activeLedgerAccountView === t.dest) {
                     const destAcc = accounts.find(a => a.id === t.dest);
                     const srcAcc = accounts.find(a => a.id === t.src);
@@ -6839,22 +6885,65 @@
                     }
                 }
 
-                ledgerHTML += `
-                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                matchedRecords.push({
+                    t, col, sgn, checkedIconHTML, fdStatusBadge, manualFxBadge, refundBadge,
+                    referenceText, maturityText, receiptBadge, accountText, displayAmountHTML, sub
+                });
+            });
+
+            // v91: collapse consecutive same-splitGroupId records (a "Split into another
+            // category" entry — see collectTxSplitRows/handleTransactionSubmitMobile) into one
+            // combined row instead of one row per category part, e.g. "Clothing, Dine Out
+            // -RM11.00" instead of two separate "Clothing -RM6.00" / "Dine Out -RM5.00" rows.
+            // Tapping the combined row still opens every part's individual breakdown — see
+            // openTxQuickView's splitGroupId branch. Non-split records (the overwhelming
+            // majority) each land in their own single-element group and render exactly as
+            // before, plus the new inline Notes line (t.notes was previously only shown inside
+            // Quick View's detail panel, never in the list itself).
+            const ledgerRowGroups = groupConsecutiveByField(matchedRecords, r => r.t.splitGroupId);
+            ledgerHTML += ledgerRowGroups.map(group => {
+                if (group.length === 1) {
+                    const r = group[0];
+                    const notesLine = r.t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">📝 ${escapeHtml(r.t.notes)}</span>` : '';
+                    return `
+                        <div class="ledger-item" data-click="openTxQuickView" data-type="${r.t.type}" data-id="${escapeHtml(r.t.id)}">
+                            <div class="item-left">
+                                <span class="item-name">${r.checkedIconHTML} ${escapeHtml(r.t.desc)}${r.fdStatusBadge}${r.manualFxBadge}${r.refundBadge}</span>
+                                <span class="item-meta">${r.t.date} [${escapeHtml(r.t.cat || 'Transfer')}]${r.referenceText}${r.maturityText}${r.receiptBadge}</span>
+                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${r.accountText}</span>
+                                ${notesLine}
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="color:var(--${r.col}); font-weight: bold;">
+                                    ${r.displayAmountHTML}
+                                    ${r.sub}
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                const r0 = group[0];
+                const total = group.reduce((s, g) => s + g.t.amount, 0);
+                const icons = [...new Set(group.map(g => getCategoryIcon(g.t.cat, g.t.type)))].slice(0, 3).join("");
+                const catLabel = group.map(g => g.t.cat || '').join(", ");
+                const notesLine = r0.t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">📝 ${escapeHtml(r0.t.notes)}</span>` : '';
+                return `
+                    <div class="ledger-item" data-click="openTxQuickView" data-type="${r0.t.type}" data-id="${escapeHtml(r0.t.id)}">
                         <div class="item-left">
-                            <span class="item-name">${checkedIconHTML} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]${referenceText}${maturityText}${receiptBadge}</span>
-                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                            <span class="item-name">${icons} ${escapeHtml(r0.t.desc)}${r0.refundBadge}</span>
+                            <span class="item-meta">${r0.t.date} [${escapeHtml(catLabel)}]</span>
+                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${r0.accountText}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight: bold;">
-                                ${displayAmountHTML}
-                                ${sub}
+                            <div class="item-value" style="color:var(--${r0.col}); font-weight: bold;">
+                                ${r0.sgn}${formatCurrency(total, r0.t.currency)}
+                                ${r0.sub}
                             </div>
                         </div>
                     </div>
                 `;
-            });
+            }).join("");
 
             if (matchedCount > ledgerRenderLimit) {
                 const remaining = matchedCount - ledgerRenderLimit;
@@ -7954,11 +8043,10 @@
             calcPadPress: (el) => calcPadPress(el),
             calcPadApply: () => calcPadApply(),
             openTxQuickView: (el) => openTxQuickView(el),
+            drillIntoSplitPart: (el) => drillIntoSplitPart(el),
             toggleTxCheckedFromQuickView: () => toggleTxCheckedFromQuickView(),
             openTxOptionsMenu: () => openTxOptionsMenu(),
             closeTxOptionsMenu: () => closeTxOptionsMenu(),
-            closeTxSplitPicker: () => closeTxSplitPicker(),
-            selectTxSplitPickerRow: (el) => selectTxSplitPickerRow(el),
             editTransactionFromOptions: () => editTransactionFromOptions(),
             duplicateTransactionFromOptions: () => duplicateTransactionFromOptions(),
             deleteTransactionFromOptions: () => deleteTransactionFromOptions(),
