@@ -1985,11 +1985,12 @@
     <div class="modal" id="categoriesModal">
         <div class="modal-sheet">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <h3 style="font-weight: 800;">Add Category</h3>
+                <h3 style="font-weight: 800;" id="categoriesModalTitle">Add Category</h3>
                 <button data-click="closeModal" data-modal="categoriesModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
             </div>
             <div>
                 <h4 style="font-size:0.8rem; text-transform:uppercase; color:var(--text-muted); margin-bottom:10px;">Design Custom Category</h4>
+                <input type="hidden" id="catEditId" value="">
                 <div class="form-row-inline" style="grid-template-columns: 2fr 1fr; margin-bottom: 8px;">
                     <div>
                         <label>Category Label Name</label>
@@ -1997,13 +1998,27 @@
                     </div>
                     <div>
                         <label>Fin. Type</label>
-                        <select id="catTypeSelect" class="form-input">
+                        <select id="catTypeSelect" class="form-input" data-change="onCategoryFormTypeChange">
                             <option value="expense">Expense</option>
                             <option value="income">Income</option>
                         </select>
                     </div>
                 </div>
-                
+
+                <div class="form-row" style="margin-bottom: 8px;" id="catParentRow">
+                    <label>Parent Category (optional)</label>
+                    <select id="catParentSelect" class="form-input">
+                        <option value="">— None (Main Category) —</option>
+                    </select>
+                    <p style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">
+                        Leave as "None" to create a top-level Main Category. Pick a Main Category here to
+                        make this a Subcategory nested under it.
+                    </p>
+                </div>
+                <p id="catParentLockedNote" style="font-size:0.7rem; color:var(--text-muted); margin-bottom:8px; display:none;">
+                    This category already has its own subcategories, so it must stay a Main Category.
+                </p>
+
                 <div class="form-row" style="margin-bottom: 8px;">
                     <label>Selected Badge Icon: <span id="currentSelectedEmojiBadge" style="font-size:1.1rem; font-weight:bold;">🍔</span></label>
                     <input type="hidden" id="catSelectedEmoji" value="🍔">
@@ -2025,7 +2040,7 @@
                 <div class="emoji-picker-container" id="emojiPickerPanel"></div>
 
                 <!-- Crucial Mobile Fix: Changed to direct touch target button executing native JS -->
-                <button type="button" data-click="handleCreateCategoryMobile" class="submit-btn">Register Category Badge</button>
+                <button type="button" data-click="handleCreateCategoryMobile" class="submit-btn" id="catSubmitBtn">Register Category Badge</button>
             </div>
         </div>
     </div>

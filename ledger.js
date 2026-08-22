@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v100";
+        const APP_VERSION = "v102";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -834,7 +834,11 @@
         let defaultPaymentAccount = "";
 
         // Built-in starter categories (auto-provisioned if missing; user can still
-        // rename/remove via the Categories manager same as any custom category)
+        // rename/remove via the Categories manager same as any custom category).
+        // v101: entries may carry an optional `parent: "Main Category Name"` field to seed
+        // them as a Subcategory nested under that Main Category — see ensureDefaultCategories()
+        // for how parentId gets resolved from this name at seed time. Entries with no `parent`
+        // are Main Categories (top-level, same as every pre-v101 entry).
         const DEFAULT_CATEGORIES = [
             { name: "Dividend ASNB", type: "income", icon: "📈" },
             { name: "Divident EPF", type: "income", icon: "🏦" },
@@ -846,6 +850,7 @@
             { name: "Rebate", type: "income", icon: "💸" },
             { name: "Grants", type: "income", icon: "🎓" },
             { name: "Dividend Unit Trust", type: "income", icon: "🧺" },
+            { name: "Rental Income", type: "income", icon: "🏠" },
             { name: "Bank Charges", type: "expense", icon: "💳" },
             { name: "Mortgage Interest", type: "expense", icon: "🏠" },
             { name: "Education", type: "expense", icon: "🎓" },
@@ -861,7 +866,23 @@
             { name: "Personal Care / Grooming", type: "expense", icon: "💇" },
             { name: "Insurance", type: "expense", icon: "🛡️" },
             { name: "Medical", type: "expense", icon: "🏥" },
-            { name: "Unknown", type: "expense", icon: "❓" }
+            { name: "Unknown", type: "expense", icon: "❓" },
+            { name: "Rental Expenses", type: "expense", icon: "🏠" },
+            // Vehicle Expenses (Main) + its Subcategories
+            { name: "Vehicle Expenses", type: "expense", icon: "🚗" },
+            { name: "Compound", type: "expense", icon: "🚨", parent: "Vehicle Expenses" },
+            { name: "Car Upkeep", type: "expense", icon: "🔧", parent: "Vehicle Expenses" },
+            { name: "Fuel", type: "expense", icon: "⛽", parent: "Vehicle Expenses" },
+            { name: "Ins & Road Tax", type: "expense", icon: "📄", parent: "Vehicle Expenses" },
+            { name: "Transportation", type: "expense", icon: "🚌", parent: "Vehicle Expenses" },
+            // Property Expenses (Main) + its Subcategories
+            { name: "Property Expenses", type: "expense", icon: "🏢" },
+            { name: "Property Insurance", type: "expense", icon: "🛡️", parent: "Property Expenses" },
+            { name: "Assmt & Quit Rent", type: "expense", icon: "🧾", parent: "Property Expenses" },
+            { name: "Management Fees", type: "expense", icon: "💼", parent: "Property Expenses" },
+            { name: "Property Upkeep", type: "expense", icon: "🛠️", parent: "Property Expenses" },
+            { name: "Electricity Bill", type: "expense", icon: "🔌", parent: "Property Expenses" },
+            { name: "Water Bill", type: "expense", icon: "💧", parent: "Property Expenses" }
         ];
 
         // Dynamic Rich Catalog of Preset Icons grouped logically
@@ -927,6 +948,52 @@
             const matched = dynamicCategories.find(c => c.name.toLowerCase() === clean);
             if (matched) return matched.icon;
             return fallbackIcons[clean] || (type === "income" ? "🟢" : "🔴");
+        }
+
+        // v101: shared builder for every <select> that lists categories for picking on a
+        // transaction (Add/Edit Transaction, each Split row, Default Category selects) — replaces
+        // 3-4 near-duplicate blocks that each built their own flat, alphabetically-sorted option
+        // list. Now groups Subcategories under their Main Category via <optgroup> (still choosing
+        // between the Main Category's own "(General)" option or one of its Subcategories), while a
+        // Main Category with no Subcategories, or a legacy/fallback name with no matching category
+        // record at all, still renders as a single flat top-level <option> exactly as before.
+        // `namesToInclude` is the caller's own must-include name list (e.g. names currently in use
+        // on existing transactions, so a renamed/deleted category doesn't vanish from its own
+        // transaction's dropdown) — merged with the full legacy + DEFAULT_CATEGORIES fallback set.
+        function buildCategoryOptionsHTML(type, namesToInclude) {
+            const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+            const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === type).map(c => c.name)];
+            const allNames = new Set([...(namesToInclude || []), ...fallbackGroup]);
+
+            const typeCats = dynamicCategories.filter(c => c.type === type);
+            const mains = typeCats.filter(c => !c.parentId).sort((a, b) => a.name.localeCompare(b.name));
+
+            let html = "";
+            const covered = new Set();
+
+            mains.forEach(main => {
+                if (!allNames.has(main.name)) return;
+                const subs = typeCats.filter(c => c.parentId === main.id && allNames.has(c.name)).sort((a, b) => a.name.localeCompare(b.name));
+                covered.add(main.name);
+                subs.forEach(s => covered.add(s.name));
+                if (subs.length) {
+                    html += `<optgroup label="${main.icon} ${escapeHtml(main.name)}">`;
+                    html += `<option value="${escapeHtml(main.name)}">${main.icon} ${escapeHtml(main.name)} (General)</option>`;
+                    subs.forEach(s => { html += `<option value="${escapeHtml(s.name)}">${s.icon} ${escapeHtml(s.name)}</option>`; });
+                    html += `</optgroup>`;
+                } else {
+                    html += `<option value="${escapeHtml(main.name)}">${main.icon} ${escapeHtml(main.name)}</option>`;
+                }
+            });
+
+            // Anything left over — legacy/fallback names with no matching category record, or a
+            // Subcategory whose parent record is missing from `allNames` for some reason — still
+            // gets shown, as a flat top-level option, rather than silently disappearing.
+            [...allNames].filter(n => !covered.has(n)).sort((a, b) => a.localeCompare(b)).forEach(n => {
+                html += `<option value="${escapeHtml(n)}">${getCategoryIcon(n, type)} ${escapeHtml(n)}</option>`;
+            });
+
+            return html;
         }
 
         // v91: Split Expenses groups (see collectTxSplitRows()/saveTransactionSubmit() around the
@@ -4363,12 +4430,64 @@
         // --- CATEGORIES SYSTEM WORKSPACE DESIGNER ---
         // Opens the Categories modal in "add" mode — used by the "+" FAB on the Categories page.
         function openCategoryFormModal() {
+            document.getElementById("categoriesModalTitle").textContent = "Add Category";
+            document.getElementById("catSubmitBtn").textContent = "Register Category Badge";
+            document.getElementById("catEditId").value = "";
             document.getElementById("catLabelName").value = "";
+            document.getElementById("catTypeSelect").value = "expense";
+            document.getElementById("catTypeSelect").disabled = false;
             document.getElementById("catSelectedEmoji").value = "🍔";
             document.getElementById("currentSelectedEmojiBadge").textContent = "🍔";
             document.getElementById("catExcludeFromSavings").checked = false;
             buildEmojiSelectionPanel();
+            populateCategoryParentSelect();
+            document.getElementById("catParentSelect").value = "";
             openModal("categoriesModal");
+        }
+
+        // v101: opens the same modal pre-filled to edit an existing category (rename, change
+        // icon/type, move it under a different Main Category, or promote/demote it). Previously
+        // the Categories page only offered exclude-toggle + delete — this is the first way to
+        // actually rename a category or change its parent after creation.
+        function editCategory(id) {
+            const cat = dynamicCategories.find(c => c.id === id);
+            if (!cat) return;
+
+            document.getElementById("categoriesModalTitle").textContent = "Edit Category";
+            document.getElementById("catSubmitBtn").textContent = "Save Changes";
+            document.getElementById("catEditId").value = cat.id;
+            document.getElementById("catLabelName").value = cat.name;
+            document.getElementById("catTypeSelect").value = cat.type;
+            document.getElementById("catExcludeFromSavings").checked = !!cat.excludeFromSavings;
+
+            buildEmojiSelectionPanel();
+            selectCategoryEmoji(cat.icon, [...document.querySelectorAll(".emoji-btn")].find(b => b.textContent === cat.icon) || document.querySelector(".emoji-btn"));
+
+            // A category that already has its own Subcategories must stay a Main Category —
+            // nesting it under another one would create a 3rd level, which this app doesn't
+            // support (every dropdown/report only understands Main → Subcategory, one level).
+            const hasChildren = dynamicCategories.some(c => c.parentId === cat.id);
+            document.getElementById("catTypeSelect").disabled = hasChildren;
+            document.getElementById("catParentRow").style.display = hasChildren ? "none" : "block";
+            document.getElementById("catParentLockedNote").style.display = hasChildren ? "block" : "none";
+            if (!hasChildren) {
+                populateCategoryParentSelect(cat.id);
+                document.getElementById("catParentSelect").value = cat.parentId || "";
+            }
+
+            openModal("categoriesModal");
+        }
+
+        // Fills the "Parent Category" select with every Main Category (parentId == null) of the
+        // currently-selected Fin. Type, excluding `excludeId` itself when editing. Called on open,
+        // and again whenever Fin. Type changes, since Income and Expense Main Categories don't mix.
+        function populateCategoryParentSelect(excludeId) {
+            const sel = document.getElementById("catParentSelect");
+            if (!sel) return;
+            const type = document.getElementById("catTypeSelect").value;
+            const mains = dynamicCategories.filter(c => !c.parentId && c.type === type && c.id !== excludeId);
+            sel.innerHTML = `<option value="">— None (Main Category) —</option>` +
+                mains.map(c => `<option value="${escapeHtml(c.id)}">${c.icon} ${escapeHtml(c.name)}</option>`).join("");
         }
 
         // Fills the Default Income/Expense Category dropdowns with the same merged
@@ -4378,14 +4497,14 @@
             const incomeFallback = ["Salary", "Investments", "Freelance", "Other Income"];
             const expenseFallback = ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
 
-            const incomeNames = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), ...incomeFallback])].sort((a, b) => a.localeCompare(b));
-            const expenseNames = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), ...expenseFallback])].sort((a, b) => a.localeCompare(b));
+            const incomeNames = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), ...incomeFallback])];
+            const expenseNames = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), ...expenseFallback])];
 
             const incSelect = document.getElementById("defaultIncomeCategorySelect");
             const expSelect = document.getElementById("defaultExpenseCategorySelect");
 
-            incSelect.innerHTML = `<option value="">(None)</option>` + incomeNames.map(c => `<option value="${escapeHtml(c)}">${getCategoryIcon(c, "income")} ${escapeHtml(c)}</option>`).join("");
-            expSelect.innerHTML = `<option value="">(None)</option>` + expenseNames.map(c => `<option value="${escapeHtml(c)}">${getCategoryIcon(c, "expense")} ${escapeHtml(c)}</option>`).join("");
+            incSelect.innerHTML = `<option value="">(None)</option>` + buildCategoryOptionsHTML("income", incomeNames);
+            expSelect.innerHTML = `<option value="">(None)</option>` + buildCategoryOptionsHTML("expense", expenseNames);
 
             incSelect.value = incomeNames.includes(defaultIncomeCategory) ? defaultIncomeCategory : "";
             expSelect.value = expenseNames.includes(defaultExpenseCategory) ? defaultExpenseCategory : "";
@@ -4435,7 +4554,9 @@
             document.getElementById("currentSelectedEmojiBadge").textContent = emoji;
         }
 
-        // Mobile Safe handler that overrides form submissions for zero keyboard delays
+        // Mobile Safe handler that overrides form submissions for zero keyboard delays.
+        // v101: now also handles Edit (catEditId set by editCategory()) and reads the optional
+        // Parent Category select to save/update parentId.
         async function handleCreateCategoryMobile() {
             const rawName = document.getElementById("catLabelName").value.trim();
             if(!rawName) {
@@ -4452,10 +4573,19 @@
                 return;
             }
 
-            const categoryId = "cat_" + Date.now();
+            const editId = document.getElementById("catEditId").value;
+            const hasChildren = editId ? dynamicCategories.some(c => c.parentId === editId) : false;
+            const parentId = hasChildren ? null : (document.getElementById("catParentSelect").value || null);
+
+            if (parentId === editId) {
+                alert("A category can't be its own parent.");
+                return;
+            }
+
+            const categoryId = editId || ("cat_" + Date.now());
             const excludeFromSavings = document.getElementById("catExcludeFromSavings").checked;
             try {
-                await writeDB(STORES.CATEGORIES, { id: categoryId, name, type, icon, excludeFromSavings });
+                await writeDB(STORES.CATEGORIES, { id: categoryId, name, type, icon, excludeFromSavings, parentId });
             } catch (err) {
                 alert("Could not save category: " + (err && err.message ? err.message : err));
                 return;
@@ -4463,9 +4593,11 @@
 
             document.getElementById("catLabelName").value = "";
             document.getElementById("catExcludeFromSavings").checked = false;
-            
+            document.getElementById("catEditId").value = "";
+
             await syncAndLoadCategories();
             await refreshAfterCategoryChange();
+            closeModal("categoriesModal");
         }
 
         // Refreshes the dashboard (renderApp, for category dropdowns elsewhere) and, if the full
@@ -4480,30 +4612,48 @@
         // Renders the full "Categories" page: Default Category selectors up top, then every
         // category split into Income / Spending sections (dynamicCategories already includes
         // both custom and starter categories — see ensureDefaultCategories).
+        // v101: categories now form a 2-level tree (Main Category → Subcategories, via parentId)
+        // — each type's list is rendered as Main Categories in order, with their Subcategories
+        // indented directly beneath, followed by any remaining Main Categories that have none.
         async function renderCategoriesPage() {
             populateDefaultCategorySelects();
 
-            // v72: the 📊 toggle flips excludeFromSavings in place (no separate edit modal needed
-            // for existing/default-provisioned categories like "Family") — solid + labeled when a
+            // v72: the 📊 toggle flips excludeFromSavings in place — solid + labeled when a
             // category is currently excluded, dim when it counts normally in the report.
-            const rowHtml = c => `
-                <div class="config-item">
+            // v101: added the ✏️ edit button (rename / re-icon / move under a different Main
+            // Category) and an `indent` flag for Subcategory rows.
+            const rowHtml = (c, indent) => `
+                <div class="config-item" style="${indent ? 'padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;' : ''}">
                     <span class="category-display-badge">
-                        <span>${c.icon}</span> <strong>${escapeHtml(c.name)}</strong>
+                        ${indent ? '<span style="color:var(--text-muted);">↳</span> ' : ''}<span>${c.icon}</span> <strong>${escapeHtml(c.name)}</strong>
                         ${c.excludeFromSavings ? '<span style="font-size:0.65rem; color:#92400e; font-weight:700; margin-left:6px;">🚫 Not in Report</span>' : ''}
                     </span>
                     <div style="display:flex; align-items:center;">
+                        <button class="trash-btn" data-click="editCategory" data-id="${escapeHtml(c.id)}" title="Edit category">✏️</button>
                         <button class="trash-btn" data-click="toggleCategoryExcludeFromSavings" data-id="${escapeHtml(c.id)}" title="${c.excludeFromSavings ? 'Included in Net Savings Report' : 'Excluded from Net Savings Report'}" style="opacity:${c.excludeFromSavings ? '1' : '0.3'};">📊</button>
                         <button class="trash-btn" data-click="removeCategory" data-id="${escapeHtml(c.id)}">🗑</button>
                     </div>
                 </div>`;
 
-            const incomeCats = dynamicCategories.filter(c => c.type === "income");
-            const expenseCats = dynamicCategories.filter(c => c.type === "expense");
+            const buildTreeHtml = type => {
+                const all = dynamicCategories.filter(c => c.type === type);
+                const mains = all.filter(c => !c.parentId);
+                let html = "";
+                mains.forEach(main => {
+                    html += rowHtml(main, false);
+                    all.filter(c => c.parentId === main.id).forEach(sub => { html += rowHtml(sub, true); });
+                });
+                // Safety net: a Subcategory whose parent record was since deleted/renamed away
+                // (see removeCategory's orphan handling — this shouldn't normally happen, but
+                // covers any stale parentId from older data) still gets shown, un-indented,
+                // rather than silently vanishing from the page.
+                all.filter(c => c.parentId && !mains.some(m => m.id === c.parentId)).forEach(orphan => { html += rowHtml(orphan, false); });
+                return html;
+            };
 
-            document.getElementById("categoriesPageIncomeList").innerHTML = incomeCats.map(rowHtml).join("")
+            document.getElementById("categoriesPageIncomeList").innerHTML = buildTreeHtml("income")
                 || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No income categories yet.</p>`;
-            document.getElementById("categoriesPageExpenseList").innerHTML = expenseCats.map(rowHtml).join("")
+            document.getElementById("categoriesPageExpenseList").innerHTML = buildTreeHtml("expense")
                 || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No expense categories yet.</p>`;
         }
 
@@ -4524,10 +4674,21 @@
         }
 
         async function removeCategory(id) {
-            const ok = await customConfirm("Remove this custom category? Your transactions assigned to it will fallback to standard default icons.");
+            const children = dynamicCategories.filter(c => c.parentId === id);
+            const msg = children.length
+                ? `Remove this Main Category? Its ${children.length} Subcategor${children.length === 1 ? "y" : "ies"} will become Main Categories on their own, not be deleted. Your transactions assigned to it will fallback to standard default icons.`
+                : "Remove this custom category? Your transactions assigned to it will fallback to standard default icons.";
+            const ok = await customConfirm(msg);
             if (!ok) return;
 
             try {
+                // v101: promote any Subcategories to Main Category (parentId: null) rather than
+                // deleting them too — losing a whole branch of subcategories (and every
+                // transaction's assignment to them) just because the parent was removed would be
+                // far more destructive than what deleting a single flat category used to do.
+                for (const child of children) {
+                    await writeDB(STORES.CATEGORIES, { ...child, parentId: null });
+                }
                 await deleteDB(STORES.CATEGORIES, id);
             } catch (err) {
                 alert("Could not remove category: " + (err && err.message ? err.message : err));
@@ -4563,12 +4724,42 @@
                 await writeDB(STORES.CATEGORIES, legacyBeting);
             }
 
+            // One-time migration: v101 briefly seeded a category named "Renting Expenses" —
+            // renamed to "Rental Expenses" per user request. Only touches the record if it still
+            // has the auto-seeded id, never a category the user has since renamed away from
+            // "Renting Expenses". Existing transactions filed under the old name are updated too
+            // (mirrors migrateOthersCategoryRename()'s approach below), so nothing shows up as an
+            // orphaned "Renting Expenses" string in reports.
+            const legacyRentingExpenses = existing.find(c => c.id === "cat_renting_expenses");
+            if (legacyRentingExpenses && legacyRentingExpenses.name.toLowerCase() === "renting expenses") {
+                legacyRentingExpenses.name = "Rental Expenses";
+                await writeDB(STORES.CATEGORIES, legacyRentingExpenses);
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                for (const t of txs) {
+                    if (t.cat === "Renting Expenses") {
+                        t.cat = "Rental Expenses";
+                        await writeDB(STORES.TRANSACTIONS, t);
+                    }
+                }
+            }
+
             const existingNames = new Set(existing.map(c => c.name.toLowerCase().trim()));
             const missing = DEFAULT_CATEGORIES.filter(c => !existingNames.has(c.name.toLowerCase()));
 
             const slugify = s => "cat_" + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
-            for (const c of missing) {
-                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon });
+
+            // v101: two passes so a Subcategory's `parent` name (see DEFAULT_CATEGORIES comment)
+            // can always be resolved to an id — Main Categories first (any entry with no `parent`,
+            // or whose parent is itself missing this run for some reason), then Subcategories,
+            // which look their parent up by name (case-insensitive) among everything that exists
+            // by that point — either already in the DB, or just inserted in the first pass.
+            for (const c of missing.filter(c => !c.parent)) {
+                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon, parentId: null });
+            }
+            const afterMains = await readAllDB(STORES.CATEGORIES);
+            for (const c of missing.filter(c => c.parent)) {
+                const parentRec = afterMains.find(p => p.name.toLowerCase() === c.parent.toLowerCase());
+                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon, parentId: parentRec ? parentRec.id : null });
             }
             await syncAndLoadCategories();
             await migrateOthersCategoryRename();
@@ -4741,30 +4932,19 @@
                 }
 
                 const currentCats = dynamicCategories.filter(c => c.type === tx.type).map(c => c.name);
-                // v82: previously a hand-picked 4/7-name list that only covered the very original
-                // starter set (Salary/Investments/Freelance/Other Income, etc.) — anything added to
-                // DEFAULT_CATEGORIES since (FD Interest Income, EPF Contrib.(ER)/(EE), Dividend
-                // ASNB, etc.) wasn't in it, so if that category's own record was ever missing,
-                // renamed, or deleted, it silently disappeared from this dropdown with no way to
-                // pick it back for re-categorising an entry. Now unioned with the full
-                // DEFAULT_CATEGORIES list (kept alongside the original legacy names rather than
-                // replacing them, in case an older install still relies on one of those) so every
-                // built-in category is always selectable here regardless of what's actually
-                // persisted in the Categories store.
-                const legacyFallback = tx.type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
-                const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === tx.type).map(c => c.name)];
-                
+                // v82: unioned with the full DEFAULT_CATEGORIES list (kept alongside the original
+                // legacy names) so every built-in category is always selectable here regardless of
+                // what's actually persisted in the Categories store. v101: now grouped into
+                // Main Category / Subcategory <optgroup>s via buildCategoryOptionsHTML() — see its
+                // own comment.
+                //
                 // Transfers have no category at all (the Category row is hidden for them below) —
                 // skip populating options entirely rather than leaving the <select> holding
                 // whatever the expense list's alphabetically-first option happens to be. See the
                 // matching comment on the "new entry" branch below for how that silently corrupted
                 // Transfer records before this fix.
                 if (tx.type !== "transfer") {
-                    const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
-                    uniqueMerged.forEach(c => {
-                        const icon = getCategoryIcon(c, tx.type);
-                        catSelect.innerHTML += `<option value="${escapeHtml(c)}">${icon} ${escapeHtml(c)}</option>`;
-                    });
+                    catSelect.innerHTML += buildCategoryOptionsHTML(tx.type, currentCats);
                 }
                 
                 document.getElementById("txCategory").value = tx.cat || "";
@@ -4827,10 +5007,8 @@
                 const currentCats = dynamicCategories.filter(c => c.type === type).map(c => c.name);
                 // v82: see matching comment on the "edit entry" branch above — unioned with
                 // DEFAULT_CATEGORIES (kept alongside the legacy names) so every built-in category
-                // is always offered here too.
-                const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
-                const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === type).map(c => c.name)];
-                
+                // is always offered here too. v101: grouped via buildCategoryOptionsHTML().
+                //
                 // Transfers have no category (the Category row is hidden for them just above) — skip
                 // populating the <select> entirely for them. Previously this always populated it
                 // with the expense list even for Transfers (the ternary above only special-cases
@@ -4839,16 +5017,12 @@
                 // saved with the alphabetically-first expense category ("Commute") as its hidden
                 // `cat` — invisible in the form, but shown on the ledger as "[Commute]".
                 if (type !== "transfer") {
-                    const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
-                    uniqueMerged.forEach(c => {
-                        const icon = getCategoryIcon(c, type);
-                        catSelect.innerHTML += `<option value="${escapeHtml(c)}">${icon} ${escapeHtml(c)}</option>`;
-                    });
+                    catSelect.innerHTML += buildCategoryOptionsHTML(type, currentCats);
 
                     // Pre-select the user's chosen default category for this type, if one is set
                     // and still exists among the current options — new entries only, never editing.
                     const defaultCat = type === "income" ? defaultIncomeCategory : defaultExpenseCategory;
-                    if (defaultCat && uniqueMerged.includes(defaultCat)) {
+                    if (defaultCat && [...catSelect.options].some(o => o.value === defaultCat)) {
                         catSelect.value = defaultCat;
                     }
                 }
@@ -4909,10 +5083,7 @@
 
         function buildSplitCategoryOptionsHTML(type) {
             const currentCats = dynamicCategories.filter(c => c.type === type).map(c => c.name);
-            const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
-            const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === type).map(c => c.name)];
-            const uniqueMerged = [...new Set([...currentCats, ...fallbackGroup])].sort((a, b) => a.localeCompare(b));
-            return uniqueMerged.map(c => `<option value="${escapeHtml(c)}">${getCategoryIcon(c, type)} ${escapeHtml(c)}</option>`).join("");
+            return buildCategoryOptionsHTML(type, currentCats);
         }
 
         function addTxSplitRow() {
@@ -8034,6 +8205,7 @@
             quickAddChooseType: (el) => quickAddChooseType(el),
             openAccountFormModal: () => openAccountFormModal(),
             openCategoryFormModal: () => openCategoryFormModal(),
+            editCategory: (el) => editCategory(el.dataset.id),
             deleteAccountFromForm: () => deleteAccountFromForm(),
             editAccountFromLedgerHeader: () => editAccountFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
@@ -8143,6 +8315,7 @@
             toggleRedrawFacilityFields: () => toggleRedrawFacilityFields(),
             handleFundTxTypeChange: () => handleFundTxTypeChange(),
             handleFundTxFundChange: () => handleFundTxFundChange(),
+            onCategoryFormTypeChange: () => populateCategoryParentSelect(),
         };
 
         const INPUT_ACTIONS = {
