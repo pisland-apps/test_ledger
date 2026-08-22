@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v97";
+        const APP_VERSION = "v98";
         const APP_VERSION_DATE = "2026-08-22";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -4897,11 +4897,24 @@
             const row = document.createElement("div");
             row.className = "split-row";
             row.id = rowId;
+            // v98: restyled to match the main Amount/Category block above it (full-width Category
+            // select, then a full-width Amount field with its own calculator button) instead of the
+            // old single cramped row — see the "SPLIT STYLE MAKE SAME AS ABOVE" request. The Remove
+            // control moves up next to the Category label since there's no longer a trailing slot
+            // for it alongside Amount.
             row.innerHTML = `
-                <select class="form-input tx-split-cat" style="flex:1.2;">${buildSplitCategoryOptionsHTML(type)}</select>
-                <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" placeholder="Amount" style="flex:1;" data-input="recalcTxSplitTotal">
-                <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">🧮</button>
-                <button type="button" class="calc-btn" data-click="removeTxSplitRow" data-row-id="${rowId}" title="Remove" style="color:var(--expense-color);">−</button>
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <label style="margin-bottom:4px;">Category</label>
+                    <button type="button" data-click="removeTxSplitRow" data-row-id="${rowId}" title="Remove this split" style="background:none; border:none; color:var(--expense-color); font-weight:700; font-size:0.78rem; padding:4px 2px; cursor:pointer;">− Remove</button>
+                </div>
+                <select class="form-input tx-split-cat">${buildSplitCategoryOptionsHTML(type)}</select>
+                <div style="margin-top:10px;">
+                    <label>Amount</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" placeholder="Amount" style="flex:1;" data-input="recalcTxSplitTotal">
+                        <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">🧮</button>
+                    </div>
+                </div>
             `;
             document.getElementById("txSplitRows").appendChild(row);
             row.querySelector(".tx-split-amt").id = `${rowId}_amt`;
