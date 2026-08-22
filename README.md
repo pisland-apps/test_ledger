@@ -1550,3 +1550,45 @@ any future calculator/expression feature here should extend
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v90.
+
+## v91: Split Expense entries now display as one merged row
+
+Reported via reference screenshots from another ledger app: a Split
+Expense (v88) — e.g. paying McD RM90 split Clothing RM30 / Dining Out
+RM60 — was saving correctly (each part is its own ordinary transaction
+record sharing a `splitGroupId`, by design, so every balance/report total
+was already right) but **displaying** as two separate, unrelated-looking
+rows everywhere a transaction list appears, instead of one combined row
+like the reference app.
+
+- **Display-only merge**: a new `getSplitGroupInfo()` helper collapses a
+  split group back into one row for every list view — dashboard **Recent
+  Transactions**, an account's **Currency Activity** page, and the main
+  **Ledger/Activity** list — keyed on the group's lowest id (the original
+  "main" part, saved first). Categories join with a comma
+  ("Clothing, Dining Out"), amounts sum (RM90.00), icons concatenate. The
+  other members are skipped when building each list's HTML so they don't
+  also show up as their own rows. Nothing about balance or report totals
+  changed — those still iterate every individual record exactly as
+  before v91.
+- **Quick View breakdown**: tapping the merged row shows each
+  category+amount part on its own line (matching the reference
+  screenshot), followed by the shared Account/To/Notes fields — all
+  identical across a group's members by construction.
+  - **Checked toggle**: Quick View shows one Checked button for the
+    merged row, so tapping it reconciles every part of the group
+    together (there's no way to see a "half-checked" split from the
+    merged row, so it doesn't leave one behind).
+  - **Options menu (Duplicate/Edit/Refund/Delete)**: these each still
+    act on exactly one underlying record — there's no split-aware
+    editor. On a merged row the ⋮ button now opens a "Which part?"
+    picker first (`openTxSplitPicker()`/`txSplitPickerModal`); picking a
+    category+amount part repoints Options at that one record, same as
+    tapping an ordinary (non-split) row directly.
+- **Orphan fallback**: if a group's sibling is ever deleted individually
+  (via the picker above) leaving just one part with a `splitGroupId`,
+  `getSplitGroupInfo()` returns `null` for it and it renders as a normal
+  single-category row rather than disappearing.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v91.
