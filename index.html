@@ -821,7 +821,7 @@
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: #f8fafc; height: 44px; }
         .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
-        .calc-btn { flex-shrink:0; width: 44px; height: 44px; border-radius: 8px; border: 1.5px solid var(--border-color); background: #f8fafc; font-size: 1.1rem; cursor: pointer; }
+        .calc-btn { flex-shrink:0; width: 44px; height: 44px; border-radius: 8px; border: 1.5px solid var(--border-color); background: #f8fafc; font-size: 1.1rem; cursor: pointer; display:flex; align-items:center; justify-content:center; }
         .calc-btn:active { background: #eef2ff; }
         .split-row { border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:12px; background:var(--card-bg); }
         .split-row select.form-input { margin: 0; }
@@ -2045,7 +2045,16 @@
                     <label>Amount</label>
                     <div style="display:flex; gap:6px;">
                         <input type="number" id="txAmount" step="0.01" inputmode="decimal" required data-input="recalcTxFdMaturity" style="flex:1;">
-                        <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad">🧮</button>
+                        <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad"><svg width="20" height="20" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;">
+                            <rect x="3" y="3" width="30" height="30" rx="8" fill="#475569"/>
+                            <rect x="7" y="7" width="11" height="8" rx="2.5" fill="#e2e8f0"/>
+                            <rect x="7" y="19.5" width="11" height="8.5" rx="2.5" fill="#64748b"/>
+                            <rect x="20" y="19.5" width="11" height="8.5" rx="2.5" fill="#64748b"/>
+                            <path d="M9.5 23.75h6" stroke="#f8fafc" stroke-width="1.6" stroke-linecap="round"/>
+                            <path d="M23 21.75l5 4M28 21.75l-5 4" stroke="#f8fafc" stroke-width="1.6" stroke-linecap="round"/>
+                            <circle cx="30.5" cy="30.5" r="8.5" fill="#6366f1" stroke="#f8fafc" stroke-width="1.5"/>
+                            <path d="M27 28.7h7M27 32.3h7" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round"/>
+                        </svg></button>
                     </div>
                 </div>
 

@@ -10,8 +10,23 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v99";
+        const APP_VERSION = "v100";
         const APP_VERSION_DATE = "2026-08-22";
+
+        // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
+        // inconsistently across platforms/fonts). Used by the static Amount field button
+        // in index.html and the per-split-row button built dynamically below. Keep both
+        // in sync if this ever changes — see calc-btn CSS comment in index.html.
+        const CALC_ICON_SVG = `<svg width="20" height="20" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;">
+            <rect x="3" y="3" width="30" height="30" rx="8" fill="#475569"/>
+            <rect x="7" y="7" width="11" height="8" rx="2.5" fill="#e2e8f0"/>
+            <rect x="7" y="19.5" width="11" height="8.5" rx="2.5" fill="#64748b"/>
+            <rect x="20" y="19.5" width="11" height="8.5" rx="2.5" fill="#64748b"/>
+            <path d="M9.5 23.75h6" stroke="#f8fafc" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M23 21.75l5 4M28 21.75l-5 4" stroke="#f8fafc" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="30.5" cy="30.5" r="8.5" fill="#6366f1" stroke="#f8fafc" stroke-width="1.5"/>
+            <path d="M27 28.7h7M27 32.3h7" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round"/>
+        </svg>`;
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -4923,7 +4938,7 @@
                     <label>Amount</label>
                     <div style="display:flex; gap:6px;">
                         <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" placeholder="Amount" style="flex:1;" data-input="recalcTxSplitTotal">
-                        <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">🧮</button>
+                        <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">${CALC_ICON_SVG}</button>
                     </div>
                 </div>
             `;
