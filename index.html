@@ -65,6 +65,7 @@
             --income-color: #10b981;
             --expense-color: #ef4444;
             --transfer-color: #3b82f6;
+            --salary-color: #d97706;
             --border-color: #e2e8f0;
         }
 
@@ -177,15 +178,15 @@
 
         .actions-bar {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 10px;
         }
 
         .action-btn {
             border: none;
             border-radius: 12px;
-            padding: 16px 6px; /* Touch friendly height */
-            font-size: 0.85rem;
+            padding: 16px 4px; /* Touch friendly height */
+            font-size: 0.78rem;
             font-weight: 700;
             color: white;
             cursor: pointer;
@@ -199,6 +200,7 @@
         .btn-income { background-color: var(--income-color); }
         .btn-expense { background-color: var(--expense-color); }
         .btn-transfer { background-color: var(--transfer-color); }
+        .btn-salary { background-color: var(--salary-color); }
 
         .report-card {
             background: var(--card-bg);
@@ -1136,6 +1138,9 @@
             </button>
             <button class="action-btn btn-transfer" data-click="openTransactionForm" data-type="transfer">
                 <span>🔄 Transfer</span>
+            </button>
+            <button class="action-btn btn-salary" data-click="openSalaryEntryForm">
+                <span>💰 Salary</span>
             </button>
         </div>
 
@@ -2503,6 +2508,96 @@
     </div>
 
     <!-- MODAL: Add Fund Transaction (Buy / Sell / Dividend / Contribution) -->
+    <!-- MODAL: Salary Entry — records Gross Salary as Net-to-Bank + EPF(Malaysia)/CPF(Singapore)
+         Employee/Employer legs, each an ordinary Income transaction sharing a salaryGroupId
+         purely for traceability (same pattern as Split Expenses' splitGroupId). -->
+    <div class="modal" id="salaryModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <div>
+                    <h3 style="font-weight:800;">💰 Salary Entry</h3>
+                    <p style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">Record Gross Salary → Net Bank + EPF/CPF Split</p>
+                </div>
+                <button data-click="closeModal" data-modal="salaryModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+            </div>
+
+            <div class="form-row">
+                <label>Member</label>
+                <select id="salaryMemberSelect" class="form-input" data-change="handleSalaryMemberChange">
+                    <option value="all">All Members (show every account)</option>
+                </select>
+            </div>
+
+            <div class="form-row-inline">
+                <div>
+                    <label>Date</label>
+                    <input type="date" id="salaryDate" required>
+                </div>
+                <div>
+                    <label>Scheme</label>
+                    <select id="salaryScheme" class="form-input" data-change="handleSalarySchemeChange">
+                        <option value="none">None (plain salary)</option>
+                        <option value="epf">EPF (Malaysia)</option>
+                        <option value="cpf">CPF (Singapore)</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="form-row">
+                <label>Description</label>
+                <input type="text" id="salaryDesc" placeholder="e.g. August 2026 Salary">
+            </div>
+
+            <div class="form-row">
+                <label>Bank Account</label>
+                <select id="salaryBankAccount" class="form-input" required></select>
+            </div>
+
+            <div class="form-row" id="salaryContribAccountRow" style="display:none;">
+                <label id="salaryContribAccountLabel">EPF / KWSP Account</label>
+                <select id="salaryContribAccount" class="form-input"></select>
+            </div>
+
+            <div class="form-row">
+                <label>Gross Salary</label>
+                <input type="number" id="salaryGross" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+            </div>
+
+            <div class="form-row-inline" id="salaryContribRow" style="display:none;">
+                <div>
+                    <label id="salaryEELabel">EPF Employee (EE)</label>
+                    <input type="number" id="salaryEEAmount" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                </div>
+                <div>
+                    <label id="salaryERLabel">EPF Employer (ER)</label>
+                    <input type="number" id="salaryERAmount" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                </div>
+            </div>
+
+            <div class="report-card" id="salaryPreviewBox" style="margin-top:4px; margin-bottom:14px;">
+                <div style="display:flex; justify-content:space-between; padding-bottom:8px; margin-bottom:8px; border-bottom:1px dashed var(--border-color);">
+                    <span style="color:var(--text-muted);">Gross Salary</span>
+                    <strong id="salaryPreviewGross">0.00</strong>
+                </div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <span style="font-size:0.85rem;"><span style="color:#3b82f6;">●</span> → Bank Account</span>
+                    <span id="salaryPreviewNet" style="color:#3b82f6; font-weight:700;">0.00</span>
+                </div>
+                <div id="salaryPreviewEERow" style="display:none; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                    <span style="font-size:0.85rem;"><span style="color:#d97706;">●</span> → <span id="salaryPreviewEELabel">EPF / KWSP (EE)</span></span>
+                    <span id="salaryPreviewEE" style="color:#d97706; font-weight:700;">0.00</span>
+                </div>
+                <div id="salaryPreviewERRow" style="display:none; justify-content:space-between; align-items:center;">
+                    <span style="font-size:0.85rem;"><span style="color:#d97706;">●</span> → <span id="salaryPreviewERLabel">EPF / KWSP (ER)</span></span>
+                    <span id="salaryPreviewER" style="color:#d97706; font-weight:700;">0.00</span>
+                </div>
+            </div>
+
+            <button type="button" data-click="handleSaveSalaryRecord" class="submit-btn">Save Record</button>
+            <button type="button" data-click="closeModal" data-modal="salaryModal" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:8px;">Cancel</button>
+        </div>
+    </div>
+
     <div class="modal" id="fundTxModal">
         <div class="modal-sheet">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">

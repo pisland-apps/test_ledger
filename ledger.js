@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v104";
+        const APP_VERSION = "v106";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -63,7 +63,7 @@
         // Deposit/Unit Trust), just where it's filed on the Accounts page.
         const ACCOUNT_SUBGROUPS = {
             "Bank/Cash": ["Current Account", "Savings Account", "Cash Account"],
-            "Investment": ["Fixed Deposit", "KWSP", "ASNB", "Unit Trust"],
+            "Investment": ["Fixed Deposit", "KWSP", "CPF", "ASNB", "Unit Trust"],
         };
         function subgroupsForGroup(group) {
             return ACCOUNT_SUBGROUPS[group] || [];
@@ -840,10 +840,15 @@
         // for how parentId gets resolved from this name at seed time. Entries with no `parent`
         // are Main Categories (top-level, same as every pre-v101 entry).
         const DEFAULT_CATEGORIES = [
+            { name: "Salary", type: "income", icon: "💼" },
+            { name: "Investments", type: "income", icon: "📈" },
+            { name: "Freelance", type: "income", icon: "💻" },
             { name: "Dividend ASNB", type: "income", icon: "📈" },
             { name: "Divident EPF", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(ER)", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(EE)", type: "income", icon: "🏦" },
+            { name: "CPF Contrib.(ER)", type: "income", icon: "🏦" },
+            { name: "CPF Contrib.(EE)", type: "income", icon: "🏦" },
             { name: "FD Interest Income", type: "income", icon: "🏦" },
             { name: "Bank Interest", type: "income", icon: "💰" },
             { name: "Gift Received", type: "income", icon: "🎁" },
@@ -919,6 +924,8 @@
             "divident epf": "🏦",
             "epf contrib.(er)": "🏦",
             "epf contrib.(ee)": "🏦",
+            "cpf contrib.(er)": "🏦",
+            "cpf contrib.(ee)": "🏦",
             "fd interest": "🏦",
             "fd interest income": "🏦",
             "bank interest": "💰",
@@ -6097,6 +6104,163 @@
             await refreshAfterTransactionChange();
         }
 
+        // --- SALARY ENTRY (Gross Salary → Net Bank + EPF(Malaysia)/CPF(Singapore) split) ---
+        // Opens with an empty form: today's date, an auto-filled "<Month> <Year> Salary"
+        // description (editable), scheme defaulted to "none", and both account dropdowns
+        // listing every account (sorted group-then-name, owner shown per accountOptionLabel) —
+        // same convention as the ordinary Income/Expense/Transfer form's own account pickers.
+        async function openSalaryEntryForm() {
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            if (accounts.length === 0) { alert("Add an account first!"); return; }
+
+            const now = new Date();
+            document.getElementById("salaryDate").value = now.toISOString().slice(0, 10);
+            const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            document.getElementById("salaryDesc").value = `${monthNames[now.getMonth()]} ${now.getFullYear()} Salary`;
+
+            const memberSelect = document.getElementById("salaryMemberSelect");
+            memberSelect.innerHTML = `<option value="all">All Members (show every account)</option>`;
+            membersCache.forEach(m => { memberSelect.innerHTML += `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`; });
+            memberSelect.value = "all";
+
+            document.getElementById("salaryScheme").value = "none";
+            document.getElementById("salaryGross").value = "";
+            document.getElementById("salaryEEAmount").value = "";
+            document.getElementById("salaryERAmount").value = "";
+
+            populateSalaryAccountSelects(accounts, "all");
+            handleSalarySchemeChange();
+            recalcSalaryPreview();
+            openModal("salaryModal");
+        }
+
+        // Rebuilds the two account <select>s (Bank Account, EPF/CPF Account) — filtered to
+        // solo-owned accounts of the chosen member when one is picked, or every account for
+        // "All Members". Mirrors filterAccountsByOwnership's "member" mode (joint accounts are
+        // intentionally left out of a single member's filtered view, same convention already
+        // used by the Spending/Income Breakdown member filter and the dashboard's per-member
+        // net worth rows).
+        function populateSalaryAccountSelects(accounts, memberFilterId) {
+            const subset = memberFilterId === "all"
+                ? accounts
+                : accounts.filter(a => Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberFilterId);
+            const sorted = sortAccountsByGroupThenName(subset);
+            const optionsHTML = sorted.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("")
+                || `<option value="">No accounts for this member</option>`;
+            document.getElementById("salaryBankAccount").innerHTML = optionsHTML;
+            document.getElementById("salaryContribAccount").innerHTML = optionsHTML;
+        }
+
+        async function handleSalaryMemberChange() {
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            populateSalaryAccountSelects(accounts, document.getElementById("salaryMemberSelect").value);
+        }
+
+        // Shows/hides the EE/ER fields and the EPF/CPF Account row, and relabels everything
+        // (EPF vs CPF wording) based on the chosen scheme. "None" collapses this to a plain
+        // single-leg salary entry — Gross goes straight to the Bank Account as one Income record.
+        function handleSalarySchemeChange() {
+            const scheme = document.getElementById("salaryScheme").value;
+            const isEpf = scheme === "epf";
+            const isCpf = scheme === "cpf";
+            const hasScheme = isEpf || isCpf;
+
+            document.getElementById("salaryContribAccountRow").style.display = hasScheme ? "block" : "none";
+            document.getElementById("salaryContribRow").style.display = hasScheme ? "grid" : "none";
+
+            const contribLabel = isEpf ? "EPF / KWSP Account" : isCpf ? "CPF Account" : "Contribution Account";
+            document.getElementById("salaryContribAccountLabel").textContent = contribLabel;
+            document.getElementById("salaryEELabel").textContent = isEpf ? "EPF Employee (EE)" : "CPF Employee (EE)";
+            document.getElementById("salaryERLabel").textContent = isEpf ? "EPF Employer (ER)" : "CPF Employer (ER)";
+            document.getElementById("salaryPreviewEELabel").textContent = isEpf ? "EPF (EE)" : "CPF (EE)";
+            document.getElementById("salaryPreviewERLabel").textContent = isEpf ? "EPF (ER)" : "CPF (ER)";
+
+            recalcSalaryPreview();
+        }
+
+        // Live preview box (mirrors the reference screenshot's "Gross → Bank + EPF" breakdown):
+        // Bank leg = Gross − EE (EE never appears twice — it's deducted from gross, not on top
+        // of it); the ER leg is purely additive, shown only when > 0, and never subtracted from
+        // the Bank leg since the employer's contribution never touches the employee's pay.
+        function recalcSalaryPreview() {
+            const scheme = document.getElementById("salaryScheme").value;
+            const hasScheme = scheme === "epf" || scheme === "cpf";
+            const gross = parseFloat(document.getElementById("salaryGross").value) || 0;
+            const ee = hasScheme ? (parseFloat(document.getElementById("salaryEEAmount").value) || 0) : 0;
+            const er = hasScheme ? (parseFloat(document.getElementById("salaryERAmount").value) || 0) : 0;
+            const net = gross - ee;
+
+            document.getElementById("salaryPreviewGross").textContent = gross.toFixed(2);
+            document.getElementById("salaryPreviewNet").textContent = net.toFixed(2);
+            document.getElementById("salaryPreviewEERow").style.display = (hasScheme && ee > 0) ? "flex" : "none";
+            document.getElementById("salaryPreviewERRow").style.display = (hasScheme && er > 0) ? "flex" : "none";
+            document.getElementById("salaryPreviewEE").textContent = ee.toFixed(2);
+            document.getElementById("salaryPreviewER").textContent = er.toFixed(2);
+        }
+
+        // Saves 1–3 ordinary Income transactions (Bank leg always; EE/ER legs only when a
+        // scheme is chosen and that amount is > 0) sharing a generated salaryGroupId — purely
+        // for traceability, same pattern as Split Expenses' splitGroupId. Every existing
+        // balance/report calculation already handles a plain Income record correctly, so
+        // nothing downstream needed to change to support this.
+        async function handleSaveSalaryRecord() {
+            const date = document.getElementById("salaryDate").value;
+            const desc = document.getElementById("salaryDesc").value.trim();
+            const bankAccountId = document.getElementById("salaryBankAccount").value;
+            const scheme = document.getElementById("salaryScheme").value;
+            const hasScheme = scheme === "epf" || scheme === "cpf";
+            const contribAccountId = document.getElementById("salaryContribAccount").value;
+            const gross = parseFloat(document.getElementById("salaryGross").value);
+            const ee = hasScheme ? (parseFloat(document.getElementById("salaryEEAmount").value) || 0) : 0;
+            const er = hasScheme ? (parseFloat(document.getElementById("salaryERAmount").value) || 0) : 0;
+
+            if (!date) { alert("Please select a date."); return; }
+            if (!desc) { alert("Please enter a description."); return; }
+            if (!bankAccountId) { alert("Please select a Bank Account."); return; }
+            if (isNaN(gross) || gross <= 0) { alert("Please enter a valid Gross Salary greater than zero."); return; }
+            if (hasScheme && !contribAccountId) { alert("Please select an EPF/CPF Account, or switch Scheme to \"None\"."); return; }
+            if (ee < 0 || er < 0) { alert("EE/ER amounts can't be negative."); return; }
+            if (ee > gross) { alert("EE contribution can't be greater than Gross Salary."); return; }
+
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const bankAcc = accounts.find(a => a.id === bankAccountId);
+            const contribAcc = accounts.find(a => a.id === contribAccountId);
+            const netAmount = gross - ee;
+            const salaryGroupId = "salary_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+
+            const baseRecord = {
+                type: "income", desc, date, notes: null, payee: null, checked: false, image: null,
+                fdReferenceNo: null, fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null,
+                manualFxRate: null, destAmount: null, dest: null, salaryGroupId
+            };
+
+            try {
+                if (netAmount > 0) {
+                    await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
+                        amount: netAmount, currency: bankAcc.currency, src: bankAccountId, cat: "Salary"
+                    }));
+                }
+                if (hasScheme && ee > 0) {
+                    await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
+                        amount: ee, currency: contribAcc.currency, src: contribAccountId,
+                        cat: scheme === "epf" ? "EPF Contrib.(EE)" : "CPF Contrib.(EE)"
+                    }));
+                }
+                if (hasScheme && er > 0) {
+                    await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
+                        amount: er, currency: contribAcc.currency, src: contribAccountId,
+                        cat: scheme === "epf" ? "EPF Contrib.(ER)" : "CPF Contrib.(ER)"
+                    }));
+                }
+            } catch (err) {
+                alert("Could not save salary record: " + (err && err.message ? err.message : err));
+                return;
+            }
+
+            closeModal("salaryModal");
+            await refreshAfterTransactionChange();
+        }
+
         // Delete button inside the "Edit Ledger Entry" modal itself — the ledger list no longer
         // has its own per-row delete affordance (tapping a row opens this modal instead; deleting
         // now happens from within it). Only shown when editing an existing entry (txDeleteBtn is
@@ -8472,6 +8636,8 @@
             openAccountPicker: (el) => openAccountPicker(el),
             closeAccountPicker: () => closeAccountPicker(),
             selectAccountPickerOption: (el) => selectAccountPickerOption(el),
+            openSalaryEntryForm: () => openSalaryEntryForm(),
+            handleSaveSalaryRecord: () => handleSaveSalaryRecord(),
         };
 
         const CHANGE_ACTIONS = {
@@ -8505,6 +8671,8 @@
             handleFundTxTypeChange: () => handleFundTxTypeChange(),
             handleFundTxFundChange: () => handleFundTxFundChange(),
             onCategoryFormTypeChange: () => populateCategoryParentSelect(),
+            handleSalaryMemberChange: () => handleSalaryMemberChange(),
+            handleSalarySchemeChange: () => handleSalarySchemeChange(),
         };
 
         const INPUT_ACTIONS = {
@@ -8518,6 +8686,7 @@
             recalcFundTxPriceFromTotal: () => recalcFundTxPriceFromTotal(),
             handleNavPriceInput: (el) => handleNavPriceInput(el),
             recalcTxSplitTotal: () => recalcTxSplitTotal(),
+            recalcSalaryPreview: () => recalcSalaryPreview(),
         };
 
         document.addEventListener("click", (e) => {

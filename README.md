@@ -1625,3 +1625,106 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v104.
+
+## v105: "Salary", "Investments", "Freelance" converted from legacy
+fallback names into real, editable category records
+
+Previously these three names only existed as a hardcoded legacy
+fallback list inside `buildCategoryOptionsHTML()` (and mirrored in a
+couple of report-page category lists) — they appeared in every income
+category dropdown so old transactions using them still displayed
+correctly, but had no actual record in the Categories store, so the
+Categories page had nothing to show, edit, or re-icon for them.
+
+- Added all three to `DEFAULT_CATEGORIES` (`Salary` 💼, `Investments`
+  📈, `Freelance` 💻 — same icons the fallback list was already
+  showing, so nothing visually changes for existing transactions).
+  `ensureDefaultCategories()` (idempotent, runs every launch) will
+  auto-create each one as soon as it doesn't find an existing category
+  of that name — same mechanism that seeds every other starter
+  category, so no manual per-device setup and no schema/version bump.
+- Once created, each becomes a normal, manageable entry on the
+  Categories page (rename, re-icon, delete) like any other category.
+  Old transactions tagged "Salary"/"Investments"/"Freelance" are
+  matched by name string, so they line up with the new records
+  automatically — no data migration needed.
+- The hardcoded legacy-fallback list itself (`legacyFallback` in
+  `buildCategoryOptionsHTML()`, and its duplicates in the two
+  breakdown-report functions) was deliberately left in place rather
+  than removed: it's still what keeps a *renamed-away-from* or
+  *deleted* legacy category name from vanishing out of old
+  transactions' dropdowns, and the option-builder already de-dupes
+  against real records (a name "covered" by a real category record is
+  skipped in the leftover-fallback pass), so there's no double entry
+  now that real records exist.
+- **"Other Income" was intentionally left as-is** — it's the app's
+  protected implicit income fallback (`handleCreateCategoryMobile()`
+  explicitly blocks creating a category literally named "Other
+  Income"/"Other Expenses"), not a legacy leftover like the other
+  three, so it stays a placeholder by design.
+- No IndexedDB schema/version changes, no export/import format
+  changes. Verified with `node --check` plus the data-click/data-change/
+  data-input ↔ handler and `getElementById` ↔ element-id
+  cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v105.
+
+## v106: Salary Entry — 4th quick-entry button, EPF (Malaysia) / CPF
+(Singapore) split
+
+- **New "💰 Salary" quick-entry button** on the dashboard, alongside
+  Income/Expense/Transfer (`.actions-bar` is now a 4-column grid;
+  `.btn-salary` uses a new `--salary-color` (#d97706) CSS variable).
+  Opens a dedicated `salaryModal`.
+- **Salary Entry modal**: Member (filters both account dropdowns to
+  that person's solo-owned accounts — `populateSalaryAccountSelects()`
+  mirrors `filterAccountsByOwnership`'s "member" mode, joint accounts
+  excluded from a single member's filtered view, same convention as
+  the Spending/Income Breakdown member filter), Date, Scheme
+  (None / EPF (Malaysia) / CPF (Singapore)), Description (auto-fills
+  "<Month> <Year> Salary", editable), Bank Account, an EPF/CPF Account
+  row (shown only when a scheme is picked — label switches between
+  "EPF / KWSP Account" and "CPF Account"), Gross Salary, and
+  Employee (EE) / Employer (ER) amount fields (shown only when a
+  scheme is picked). A live preview box mirrors the reference design
+  (Gross Salary → Bank Account, → EPF/CPF (EE), → EPF/CPF (ER)),
+  recalculating on every keystroke via `recalcSalaryPreview()`.
+- **On Save** (`handleSaveSalaryRecord()`), writes 1–3 ordinary Income
+  transactions — no new transaction "kind", same philosophy as Split
+  Expenses/Fund transactions:
+  - Bank leg (Gross − EE) → Bank Account, category "Salary"
+  - EE leg (if scheme picked and EE > 0) → EPF/CPF Account, category
+    "EPF Contrib.(EE)" / "CPF Contrib.(EE)"
+  - ER leg (if scheme picked and ER > 0) → EPF/CPF Account, category
+    "EPF Contrib.(ER)" / "CPF Contrib.(ER)" — purely additive, never
+    subtracted from the Bank leg, since an employer's contribution
+    never touches the employee's actual pay
+  All three share a generated `salaryGroupId`, purely for
+  traceability (same pattern as Split Expenses' `splitGroupId`) —
+  every existing balance/report calculation already handles a plain
+  Income record correctly, so nothing downstream needed to change.
+- **New categories**: `CPF Contrib.(EE)` / `CPF Contrib.(ER)` added to
+  `DEFAULT_CATEGORIES` (auto-provisioned via the existing idempotent
+  `ensureDefaultCategories()`) and `fallbackIcons`, alongside the
+  pre-existing `EPF Contrib.(EE)` / `EPF Contrib.(ER)`.
+- **New account sub-group**: `"CPF"` added to `ACCOUNT_SUBGROUPS`
+  under `"Investment"` (next to `"KWSP"`) — this is data-driven, so it
+  automatically picks up a matching sidebar shortcut
+  (`accountTypeShortcutList()`) and Add/Edit Account Sub-Group option
+  with no other code changes.
+- CPF is intentionally the "simple" model per user decision — one
+  combined CPF account/leg per EE and ER, not a further OA/SA/MA
+  split. Both schemes enter EE/ER as exact typed amounts (not
+  percentages), matching the reference screenshot.
+- No IndexedDB schema/version changes (`salaryGroupId` is just a new
+  optional field on transaction records, like `splitGroupId` before
+  it — `undefined`/`null` for all existing data). No export/import
+  format changes — the new transactions are ordinary rows already
+  covered by the existing backup bundle. Verified with `node --check`
+  plus the data-click/data-change/data-input ↔ handler and
+  `getElementById` ↔ element-id cross-reference scripts (0 missing,
+  0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v106.
