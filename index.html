@@ -830,6 +830,15 @@
         .calc-key-op { background: #e0e7ff; color: var(--primary); }
         .option-menu-btn { display:flex; align-items:center; padding: 14px; border-radius: 10px; border: none; background: #f1f5f9; color: var(--text-main); font-weight: 700; font-size: 0.88rem; cursor: pointer; text-align: left; width: 100%; }
         .option-menu-btn:active { opacity: 0.85; }
+        /* v99: custom Account picker — replaces the native <select> popup for srcAccount/
+           destAccount, whose expanded option-list font size Android Chrome renders using its own
+           system size regardless of page CSS (illegibly large on a phone, per the reference
+           screenshots) and can't be reduced from here. This button+modal combo fully controls
+           its own text size instead — see openAccountPicker()/selectAccountPickerOption() in
+           ledger.js. */
+        button.form-input.account-picker-btn { width:100%; padding:12px; border:1.5px solid var(--border-color); border-radius:8px; font-size:0.9rem; background:#f8fafc; height:44px; color:var(--text-main); display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; font-weight:700; cursor:pointer; }
+        .account-picker-chevron { opacity:0.55; flex:0 0 auto; }
+        .account-picker-btn span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
         .config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
         .config-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); }
         /* Fund holding listed under its Unit Trust account row on the Accounts page — indented,
@@ -2057,8 +2066,20 @@
                     <button type="button" class="submit-btn" style="background:#eef2ff; color:var(--primary); margin-top:0; margin-bottom:12px;" data-click="addTxSplitRow">➕ Split into another category</button>
                 </div>
 
-                <div class="form-row" id="srcAccRow"><label id="srcAccLabel">Account</label><select id="srcAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
-                <div class="form-row" id="destAccRow" style="display:none;"><label>To Account</label><select id="destAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
+                <div class="form-row" id="srcAccRow">
+                    <label id="srcAccLabel">Account</label>
+                    <button type="button" id="srcAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="srcAccount" data-title="Select Account">
+                        <span id="srcAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="srcAccount" style="display:none;" data-change="syncTransactionCurrency"></select>
+                </div>
+                <div class="form-row" id="destAccRow" style="display:none;">
+                    <label>To Account</label>
+                    <button type="button" id="destAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="destAccount" data-title="Select Destination Account">
+                        <span id="destAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="destAccount" style="display:none;" data-change="syncTransactionCurrency"></select>
+                </div>
 
                 <!-- Shown only for Transfers between two single-currency ("normal") accounts whose
                      currencies differ — e.g. transferring S$ out of a SGD account into a MYR
@@ -2281,6 +2302,18 @@
                 <button data-click="closeTxSplitPicker" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
             </div>
             <div id="txSplitPickerList" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+    </div>
+
+    <!-- MODAL: Account picker (v99) — see the account-picker-btn CSS comment above for why this
+         exists instead of the native <select> popup for srcAccount/destAccount. -->
+    <div class="modal" id="accountPickerModal" style="z-index:1450;">
+        <div class="modal-sheet" style="max-width:400px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                <h3 id="accountPickerTitle" style="font-weight:800;">Select Account</h3>
+                <button data-click="closeAccountPicker" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+            </div>
+            <div id="accountPickerList" style="display:flex; flex-direction:column; gap:8px;"></div>
         </div>
     </div>
 

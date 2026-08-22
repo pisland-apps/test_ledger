@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v98";
+        const APP_VERSION = "v99";
         const APP_VERSION_DATE = "2026-08-22";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -758,6 +758,10 @@
         // transaction id (isRefund:true, refundOf:<id>) instead of an ordinary income entry — set by
         // openRefundFromOptions(), cleared on every openTransactionForm() call and after saving.
         let pendingRefundOf = null;
+        // v99: which underlying <select> (srcAccount/destAccount) the Account picker modal is
+        // currently populated for — set by openAccountPicker(), read by selectAccountPickerOption()
+        // when the user taps a row.
+        let accountPickerTargetSelectId = null;
         // Calculator/numpad popup — which input field "Use This Value" writes back into.
         let calcPadTargetId = null;
         let calcPadExpr = "";
@@ -4863,6 +4867,13 @@
                 syncTransactionCurrency();
             }
 
+            // v99: the visible Account/To Account buttons show a snapshot of the <select>'s
+            // current option text (see openAccountPicker()) — refresh it here, once, after every
+            // branch above has finished touching srcAccount/destAccount's value, rather than
+            // duplicating this call at each individual assignment site.
+            syncAccountPickerButtonText("srcAccount");
+            syncAccountPickerButtonText("destAccount");
+
             openModal("txModal");
         }
 
@@ -6081,6 +6092,62 @@
             document.getElementById("txOptionsModal").classList.add("active");
         }
 
+        // --- ACCOUNT PICKER (v99) ---
+        // Stands in for the native <select> popup on the Account / To Account fields of the
+        // transaction form. Android Chrome renders an expanded <select>'s option list at a fixed
+        // system font size that page CSS can't shrink — illegibly large on a phone next to the
+        // select box's own (correctly small) closed-state text — so this reads the same <option>
+        // elements the existing account-population code already builds (openTransactionForm()) and
+        // shows them in an ordinary app modal instead, where font size is fully in our control.
+        // The underlying <select> stays in the DOM (just hidden) and remains the single source of
+        // truth every other part of the app already reads via .value — this only changes how a
+        // human picks a value for it, not how the rest of the codebase stores or reads one.
+        function openAccountPicker(el) {
+            const selectId = el.dataset.select;
+            const select = document.getElementById(selectId);
+            if (!select) return;
+            accountPickerTargetSelectId = selectId;
+            document.getElementById("accountPickerTitle").textContent = el.dataset.title || "Select Account";
+            const currentVal = select.value;
+            document.getElementById("accountPickerList").innerHTML = Array.from(select.options).map(opt => `
+                <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:#e0e7ff;" : ""}">
+                    <span>${opt.textContent}</span>
+                    ${opt.value === currentVal ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
+                </button>
+            `).join("");
+            document.getElementById("accountPickerModal").classList.add("active");
+        }
+
+        function closeAccountPicker() {
+            document.getElementById("accountPickerModal").classList.remove("active");
+        }
+
+        function selectAccountPickerOption(el) {
+            const select = document.getElementById(accountPickerTargetSelectId);
+            if (select) {
+                select.value = el.dataset.value;
+                // Fires syncTransactionCurrency() etc. exactly as a native <select> change would —
+                // see the data-change="syncTransactionCurrency" still wired on the (now hidden)
+                // <select> itself in index.html.
+                select.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+            syncAccountPickerButtonText(accountPickerTargetSelectId);
+            closeAccountPicker();
+        }
+
+        // Refreshes a picker button's visible label from its paired <select>'s currently selected
+        // option — called after every place in the codebase that sets srcAccount/destAccount's
+        // .value directly (bypassing the picker modal), so the button never goes stale. See the
+        // call sites in openTransactionForm()/duplicateTransactionFromOptions()/
+        // openRefundFromOptions().
+        function syncAccountPickerButtonText(selectId) {
+            const select = document.getElementById(selectId);
+            const btnText = document.getElementById(selectId === "srcAccount" ? "srcAccountBtnText" : "destAccountBtnText");
+            if (!select || !btnText) return;
+            const opt = select.options[select.selectedIndex];
+            btnText.textContent = opt ? opt.textContent : "Select account";
+        }
+
         // Dismisses just the Options submenu, back to Quick View underneath — not a history
         // navigation (see the comment on openTxOptionsMenu() above for why Options doesn't have
         // its own history entry), so this only ever removes its own "active" class.
@@ -6149,6 +6216,8 @@
                 document.getElementById("txDate").value = tx.date;
                 document.getElementById("txChecked").checked = false;
                 syncTransactionCurrency();
+                syncAccountPickerButtonText("srcAccount"); // v99 — see comment in openTransactionForm().
+                syncAccountPickerButtonText("destAccount");
                 document.getElementById("txModalTitle").textContent = "Duplicate Entry";
             });
         }
@@ -6183,6 +6252,7 @@
                 document.getElementById("txAmount").value = tx.amount;
                 document.getElementById("txCurrency").value = tx.currency;
                 document.getElementById("srcAccount").value = tx.src || "";
+                syncAccountPickerButtonText("srcAccount"); // v99 — see comment in openTransactionForm().
 
                 const catSelect = document.getElementById("txCategory");
                 const catName = tx.cat || "Other Expenses";
@@ -8023,6 +8093,9 @@
             duplicateTransactionFromOptions: () => duplicateTransactionFromOptions(),
             deleteTransactionFromOptions: () => deleteTransactionFromOptions(),
             openRefundFromOptions: () => openRefundFromOptions(),
+            openAccountPicker: (el) => openAccountPicker(el),
+            closeAccountPicker: () => closeAccountPicker(),
+            selectAccountPickerOption: (el) => selectAccountPickerOption(el),
         };
 
         const CHANGE_ACTIONS = {
