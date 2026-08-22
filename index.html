@@ -2024,22 +2024,20 @@
     <!-- MODAL: Transaction Creator / Editor (Hybrid) -->
     <div class="modal" id="txModal">
         <div class="modal-sheet">
-            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <h3 id="txModalTitle" style="font-weight: 800;">Log Ledger Item</h3>
-                <button data-click="closeModal" data-modal="txModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:12px;">
+                <h3 id="txModalTitle" style="font-weight: 800; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Log Ledger Item</h3>
+                <select id="txCurrency" class="form-input" data-change="recalcTxFdMaturity" style="flex:0 0 auto; width:auto; min-width:80px; height:34px; padding:4px 8px; font-size:0.8rem;"></select>
+                <button data-click="closeModal" data-modal="txModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px; flex:0 0 auto;">&times;</button>
             </div>
             <div>
                 <input type="hidden" id="txId">
                 <input type="hidden" id="txType">
-                <div class="form-row-inline">
-                    <div>
-                        <label>Amount</label>
-                        <div style="display:flex; gap:6px;">
-                            <input type="number" id="txAmount" step="0.01" inputmode="decimal" required data-input="recalcTxFdMaturity" style="flex:1;">
-                            <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad">🧮</button>
-                        </div>
+                <div class="form-row">
+                    <label>Amount</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="number" id="txAmount" step="0.01" inputmode="decimal" required data-input="recalcTxFdMaturity" style="flex:1;">
+                        <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad">🧮</button>
                     </div>
-                    <div><label>Currency</label><select id="txCurrency" class="form-input" data-change="recalcTxFdMaturity"></select></div>
                 </div>
 
                 <div class="form-row" id="categoryRow"><label>Category</label><select id="txCategory" class="form-input"></select></div>
