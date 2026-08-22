@@ -2272,6 +2272,21 @@
         </div>
     </div>
 
+    <!-- MODAL: Split-part picker (v91) — shown instead of jumping straight into the Options menu
+         above when the Quick View's ⋮ button is tapped on a Split Expense group's merged row.
+         Duplicate/Edit/Refund/Delete each still act on exactly one underlying transaction record
+         (there's no split-aware editor), so this asks which category+amount part first; picking
+         one repoints the Options menu at that specific record, same as tapping a non-split row. -->
+    <div class="modal" id="txSplitPickerModal" style="z-index:1400;">
+        <div class="modal-sheet" style="max-width:320px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                <h3 style="font-weight:800;">Which part?</h3>
+                <button data-click="closeTxSplitPicker" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+            </div>
+            <div id="txSplitPickerList" style="display:flex; flex-direction:column; gap:8px;"></div>
+        </div>
+    </div>
+
     <!-- MODAL: Resolve Fixed Deposit Maturity (renew or withdraw) -->
     <div class="modal" id="resolveFdModal">
         <div class="modal-sheet">
