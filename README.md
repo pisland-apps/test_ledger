@@ -1803,3 +1803,50 @@ SGD for CPF)
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v108.
+
+## v109: Salary Entry — Bank/EPF/CPF Account fields now use the same
+custom Account Picker as the Income/Expense/Transfer form
+
+Previously the Salary Entry modal used plain native `<select>` dropdowns
+for Bank Account and EPF/CPF Account — inconsistent with the rest of
+the app, which replaced native account `<select>`s back in v99
+specifically because Android Chrome renders a native `<select>`'s
+expanded option list at its own oversized system font size,
+illegible on a phone and not controllable from CSS.
+
+- **Both fields are now button + hidden-`<select>` pairs**
+  (`account-picker-btn` style, tapping opens `accountPickerModal`),
+  exactly like `srcAccount`/`destAccount` on the main transaction
+  form — same modal, same `openAccountPicker()`/
+  `selectAccountPickerOption()` machinery, just pointed at the
+  Salary form's own selects via `data-select="salaryBankAccount"` /
+  `"salaryContribAccount"`.
+- **Option text now matches the Income/Expense form's own account
+  list exactly**: `populateSalaryAccountSelects()` was rewritten to
+  build the same "🏦/💱/📊 prefix + name + (currency) + — Owner"
+  format `openTransactionForm()` uses, instead of the previous
+  `accountOptionLabel()` "Name (Owner)" shorthand.
+- **`syncAccountPickerButtonText()` generalized**: previously
+  hardcoded to only recognize `srcAccount`/`destAccount` (a ternary),
+  it now derives the paired button-text element id as
+  `<selectId>BtnText` for any select — a plain string-concat
+  generalization that requires no behavior change for the existing
+  two ids (`srcAccountBtnText`/`destAccountBtnText` already followed
+  that pattern) while making the new `salaryBankAccountBtnText`/
+  `salaryContribAccountBtnText` work automatically. Called after
+  every place that sets `salaryBankAccount`/`salaryContribAccount`'s
+  `.value` directly (`populateSalaryAccountSelects()`,
+  `handleSalaryMemberChange()`'s smart-default nudges), so the
+  button label never goes stale — same convention already used by
+  `openTransactionForm()`.
+- The EPF/CPF Account button's title also now updates with the
+  Scheme (`handleSalarySchemeChange()` sets its `data-title` to
+  "Select EPF / KWSP Account" or "Select CPF Account"), matching the
+  row's own label.
+- No IndexedDB schema/version changes, no export/import changes —
+  UI-only. Verified with `node --check` plus the data-click/data-
+  change/data-input ↔ handler and `getElementById` ↔ element-id
+  cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v109.

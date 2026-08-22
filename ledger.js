@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v108";
+        const APP_VERSION = "v109";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -6139,16 +6139,27 @@
         }
 
         // Builds the two account <select>s (Bank Account, EPF/CPF Account) — always with EVERY
-        // account (sorted group-then-name, owner shown via accountOptionLabel), regardless of
-        // which Member is picked above. A member may legitimately bank their salary into a
-        // joint account (or one nominally owned by their spouse) rather than only an account
-        // solely in their own name, so the Member picker must never remove options from either
-        // dropdown — it only nudges the default selection (see handleSalaryMemberChange()).
+        // account (sorted group-then-name), regardless of which Member is picked above. A member
+        // may legitimately bank their salary into a joint account (or one nominally owned by
+        // their spouse) rather than only an account solely in their own name, so the Member
+        // picker must never remove options from either dropdown — it only nudges the default
+        // selection (see handleSalaryMemberChange()). Option text/format matches the
+        // Income/Expense/Transfer form's own Account picker exactly (same type-prefix emoji,
+        // currency suffix, and " — Owner" suffix) — see openTransactionForm()'s srcSelect/
+        // destSelect population, which this mirrors — since both pickers share the same
+        // account-picker-btn + accountPickerModal UI (see openAccountPicker()).
         function populateSalaryAccountSelects(accounts) {
             const sorted = sortAccountsByGroupThenName(accounts);
-            const optionsHTML = sorted.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
+            const optionsHTML = sorted.map(a => {
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
+                const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
+                const ownerLabel = ` — ${escapeHtml(accountOwnerNamesText(a) + accountRelatedSuffix(a, accounts))}`;
+                return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}${ownerLabel}</option>`;
+            }).join("");
             document.getElementById("salaryBankAccount").innerHTML = optionsHTML;
             document.getElementById("salaryContribAccount").innerHTML = optionsHTML;
+            syncAccountPickerButtonText("salaryBankAccount");
+            syncAccountPickerButtonText("salaryContribAccount");
         }
 
         // Re-picking a Member never narrows either dropdown (see populateSalaryAccountSelects) —
@@ -6168,13 +6179,19 @@
                 Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberId &&
                 (a.group || DEFAULT_ACCOUNT_GROUP) === "Bank/Cash"
             );
-            if (soloBank) document.getElementById("salaryBankAccount").value = soloBank.id;
+            if (soloBank) {
+                document.getElementById("salaryBankAccount").value = soloBank.id;
+                syncAccountPickerButtonText("salaryBankAccount");
+            }
 
             const contribAcc = accounts.find(a =>
                 Array.isArray(a.memberIds) && a.memberIds.includes(memberId) &&
                 (a.group || DEFAULT_ACCOUNT_GROUP) === "Investment" && (a.subgroup === "KWSP" || a.subgroup === "CPF")
             );
-            if (contribAcc) document.getElementById("salaryContribAccount").value = contribAcc.id;
+            if (contribAcc) {
+                document.getElementById("salaryContribAccount").value = contribAcc.id;
+                syncAccountPickerButtonText("salaryContribAccount");
+            }
         }
 
         // Shows/hides the EE/ER fields and the EPF/CPF Account row, and relabels everything
@@ -6194,6 +6211,7 @@
 
             const contribLabel = isEpf ? "EPF / KWSP Account" : isCpf ? "CPF Account" : "Contribution Account";
             document.getElementById("salaryContribAccountLabel").textContent = contribLabel;
+            document.getElementById("salaryContribAccountBtn").dataset.title = `Select ${contribLabel}`;
             document.getElementById("salaryEELabel").textContent = isEpf ? "EPF Employee (EE)" : "CPF Employee (EE)";
             document.getElementById("salaryERLabel").textContent = isEpf ? "EPF Employer (ER)" : "CPF Employer (ER)";
             document.getElementById("salaryPreviewEELabel").textContent = isEpf ? "EPF (EE)" : "CPF (EE)";
@@ -6547,13 +6565,15 @@
         }
 
         // Refreshes a picker button's visible label from its paired <select>'s currently selected
-        // option — called after every place in the codebase that sets srcAccount/destAccount's
-        // .value directly (bypassing the picker modal), so the button never goes stale. See the
+        // option — called after every place in the codebase that sets an account-picker <select>'s
+        // .value directly (bypassing the picker modal), so the button never goes stale. Follows
+        // the `<selectId>BtnText` naming convention every account-picker button pair uses (e.g.
+        // srcAccount → srcAccountBtnText, salaryBankAccount → salaryBankAccountBtnText) — see the
         // call sites in openTransactionForm()/duplicateTransactionFromOptions()/
-        // openRefundFromOptions().
+        // openRefundFromOptions()/openSalaryEntryForm()/handleSalaryMemberChange().
         function syncAccountPickerButtonText(selectId) {
             const select = document.getElementById(selectId);
-            const btnText = document.getElementById(selectId === "srcAccount" ? "srcAccountBtnText" : "destAccountBtnText");
+            const btnText = document.getElementById(selectId + "BtnText");
             if (!select || !btnText) return;
             const opt = select.options[select.selectedIndex];
             btnText.textContent = opt ? opt.textContent : "Select account";

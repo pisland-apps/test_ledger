@@ -2551,12 +2551,18 @@
 
             <div class="form-row">
                 <label>Bank Account</label>
-                <select id="salaryBankAccount" class="form-input" required></select>
+                <button type="button" id="salaryBankAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryBankAccount" data-title="Select Bank Account">
+                    <span id="salaryBankAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="salaryBankAccount" style="display:none;"></select>
             </div>
 
             <div class="form-row" id="salaryContribAccountRow" style="display:none;">
                 <label id="salaryContribAccountLabel">EPF / KWSP Account</label>
-                <select id="salaryContribAccount" class="form-input"></select>
+                <button type="button" id="salaryContribAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryContribAccount" data-title="Select EPF/CPF Account">
+                    <span id="salaryContribAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="salaryContribAccount" style="display:none;"></select>
             </div>
 
             <div class="form-row">
