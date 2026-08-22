@@ -1524,3 +1524,90 @@ implemented.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v88.
+
+## v89: Calculator crash fix, sticky Cancel/Save footer, redesigned Split
+Expenses UI, Currency moved to header, To-field removed, Notes shown
+on the ledger, and split entries collapse into one row
+
+All from a second round of feedback (screenshots of a reference app
+plus real screenshots of v88 in use) after the v88 release above.
+
+- **Fixed a real bug**: pressing "Use This Value" (or the × button) in
+  the Calculator/Numpad popup was closing the *entire* transaction
+  form, discarding whatever had been entered. Cause: calcPadModal
+  opens on top of an already-open txModal, but its Apply/Close were
+  still routed through `closeModal()`, which drives the browser's
+  back-button history — and the popstate handler closes *every*
+  currently-active modal in one shot (by design, so Options-over-
+  Quick-View collapses together). That's correct for a cascade but
+  wrong for a modal genuinely stacked on top of another that should
+  stay open. Fixed by making the calculator a plain classList toggle
+  (`closeCalcPad()`), exactly like the Options-over-Quick-View pattern
+  already used elsewhere, never touching history at all.
+- **Sticky Cancel/Save footer**: the transaction form is now three
+  fixed regions — header, a scrollable field area, and a footer
+  (CANCEL / SAVE) that stays on screen no matter how far the fields
+  above are scrolled, replacing the old single "Commit Entry" button
+  that could scroll out of view. Only `#txModal`'s `.modal-sheet` opts
+  into this (`.has-sticky-footer`); every other modal is unchanged.
+- **Currency moved** out of the Amount row into the top-right of the
+  modal's header, next to the × close button, freeing up room in the
+  Amount row for the calculator icon and (once splitting) the Residual
+  amount preview.
+- **Calculator icon restyled** to a small 2×2 grid (−, ×, +, =) instead
+  of a 🧮 emoji, and the "add a split row" control is now a small
+  circular + button instead of a text button — matching the reference
+  app's icon language.
+- **Split Expenses redesigned**: each split is now two stacked rows —
+  [Value + Residual amount preview + Calculator] then [Category +
+  a circular − remove button] — instead of one combined row. Residual
+  amount is a snapshot of the selected account's own balance (taken
+  when the form opens or the Account field changes, not re-queried on
+  every keystroke) shown as balance ∓ the running split total; it's
+  only shown once at least one split row exists, and isn't shown at
+  all for Multi-Currency/FD/Unit Trust accounts (they keep a per-
+  currency basket, not one balance to preview against).
+- **"To (Optional)" field removed** — Description already served the
+  same role (a merchant/contact name), so the two were redundant.
+  `record.payee` is gone from saved transactions; existing data from
+  v88 testing that has it is simply ignored, nothing reads it anymore.
+- **Notes now shown directly on ledger rows** (dashboard's Transactions
+  widget and the Account Activity/breakdown ledger), as its own
+  "📝 note text" line — previously Notes only showed inside Quick View.
+- **Split entries collapse into one ledger row**: paying one bill
+  split across categories (e.g. RM90 at "Mcd" split into Clothing +
+  Dining Out) now shows as a single row with a combined category label
+  ("Clothing, Dining Out") and the total amount, instead of two
+  separate-looking transactions. Tapping it opens a breakdown Quick
+  View listing each category's own amount, then the shared Account/
+  Notes/Checked toggle/Options underneath. This is a display-only
+  grouping (`buildSplitGroupInfo()`) — every category/income/expense
+  total elsewhere still sums each part under its own category exactly
+  as before; only the rendered ledger row and Quick View change.
+  - Checked toggles every part of the group together (it's one shared
+    property, not per-part).
+  - **Edit** reconstructs every part as its own split row in the form
+    (`editSplitGroupFromOptions()`) and, on save, deletes the old parts
+    first before saving the (possibly changed) rows as fresh records —
+    there's no in-place "edit just this one part" path, since a
+    split's parts aren't individually addressable from the ledger's
+    combined row in the first place.
+  - **Duplicate** reconstructs the same way but doesn't delete
+    anything first — it always saves as brand-new records.
+  - **Delete** removes every part sharing the group after one
+    confirmation.
+  - **Refund is not offered** for a split group (hidden in Quick View)
+    — a split's total doesn't map to one category to refund against.
+- Verified with `node --check` plus the same data-click/data-change/
+  data-input/getElementById cross-reference script as v88 — all clean,
+  including after this round's changes.
+
+**Known scope limits carried over / added this round**: the on-screen
+calculator is still a plain arithmetic popup, not a literal replica of
+the reference app's icon (restyled to look closer, not pixel-identical).
+Residual amount preview only covers single-currency ("normal")
+accounts, not Multi-Currency/FD/Unit Trust. Editing a split group
+always replaces all of its parts rather than patching one in place.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v89.

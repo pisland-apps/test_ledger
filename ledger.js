@@ -11,7 +11,7 @@
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
         const APP_VERSION = "v89";
-        const APP_VERSION_DATE = "2026-08-21";
+        const APP_VERSION_DATE = "2026-08-22";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
         // DOM — including #versionBadge and the lock overlay — already exists by this point).
@@ -747,6 +747,17 @@
         // Which transaction id the Quick View modal is currently showing — set by openTxQuickView(),
         // read by the toggle-checked/options/duplicate/refund/delete actions reached from it.
         let activeQuickViewTxId = null;
+        // v89: set alongside activeQuickViewTxId when the tapped ledger row was a grouped split
+        // entry (see groupSplitTransactions()/openTxQuickViewSplitGroup()) — null for a plain
+        // single transaction. The Options handlers below check this to act on every part sharing
+        // the group instead of just the one representative id.
+        let activeQuickViewSplitGroupId = null;
+        // v89: set by editSplitGroupFromOptions() right before reopening the form to edit an
+        // existing split entry's parts — handleTransactionSubmitMobile() deletes every part
+        // sharing this id first, then saves the (possibly changed) rows as fresh records. null
+        // means "not editing a split group" (a brand-new entry, or editSplitGroupFromOptions
+        // wasn't the path that opened this form).
+        let editingSplitGroupId = null;
         // When set, the next handleTransactionSubmitMobile() save is tagged as a refund of this
         // transaction id (isRefund:true, refundOf:<id>) instead of an ordinary income entry — set by
         // openRefundFromOptions(), cleared on every openTransactionForm() call and after saving.
@@ -754,13 +765,15 @@
         // Calculator/numpad popup — which input field "Use This Value" writes back into.
         let calcPadTargetId = null;
         let calcPadExpr = "";
-        // v88 fix: LIFO stack of currently-open modal ids, in the order openModal() was called.
-        // Needed once a modal can be opened ON TOP of another already-open modal (calcPadModal
-        // over txModal) — see the popstate handler below for why a flat "which of these ids has
-        // .active" scan broke as soon as two modals could be active at the same time.
-        let modalStack = [];
         // Split Expenses — incrementing counter for unique split-row DOM ids within one form session.
         let txSplitRowCounter = 0;
+        // v89: a snapshot of the currently-selected account's own native balance, taken when the
+        // form opens or the Account field changes (see refreshTxResidualBalance()) — the "Residual
+        // amount" preview shown next to each Split Expenses row is derived from this snapshot
+        // rather than re-querying the database on every keystroke. null when residual isn't
+        // showable for the selected account (Multi-Currency/FD/Unit Trust, or none selected yet).
+        let txResidualBaseBalance = null;
+        let txResidualAccountCurrency = null;
 
         // Default currency set (v39) — the 10 currencies the user actually holds. Rates are
         // approximate starting points only (per 1 MYR) — the user edits real values via
@@ -914,23 +927,15 @@
                 return;
             }
 
-            // v88 fix: previously this scanned every known modal id and removed "active" from
-            // ALL of them that happened to be open. That's correct when at most one modal is ever
-            // open at a time, but v88 introduced calcPadModal, which opens ON TOP of an
-            // already-open txModal (tap 🧮 in Add/Edit Transaction) — so both had the "active"
-            // class simultaneously. Tapping the calculator's × or "Use This Value" called
-            // closeModal("calcPadModal") → history.back() → this handler → the old loop closed
-            // BOTH modals in one shot, since it didn't distinguish "the modal that should close
-            // now" from "any modal that's currently open" — so the whole Add/Edit Transaction
-            // form was discarded along with the calculator. Now only the most-recently-opened
-            // modal (top of modalStack) is closed per back-navigation, matching how it was opened.
+            const activeModals = ["txModal", "accountsModal", "currencyModal", "categoriesModal", "imageViewerModal", "resolveFdModal", "memberModal", "fundModal", "fundTxModal", "txQuickViewModal", "txOptionsModal", "calcPadModal"];
             let modalClosed = false;
-            if (modalStack.length > 0) {
-                const topId = modalStack.pop();
-                const modal = document.getElementById(topId);
-                if (modal) modal.classList.remove("active");
-                modalClosed = true;
-            }
+            activeModals.forEach(id => {
+                const modal = document.getElementById(id);
+                if (modal && modal.classList.contains("active")) {
+                    modal.classList.remove("active");
+                    modalClosed = true;
+                }
+            });
             if (modalClosed) return;
 
             const ledgerPage = document.getElementById("page-ledger");
@@ -1099,7 +1104,14 @@
             if (recentTxTypeFilter !== "both") filtered = filtered.filter(t => t.type === recentTxTypeFilter);
             if (recentTxAccountFilter !== "all") filtered = filtered.filter(t => t.src === recentTxAccountFilter);
 
-            filtered = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, recentTxCount);
+            filtered = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date));
+
+            // v89: collapse split-expense parts (see addTxSplitRow()/buildSplitGroupInfo()) into
+            // one combined row before applying the recentTxCount limit, so a 2-category split
+            // counts as one entry here rather than two — matching the Account Activity ledger.
+            const splitInfo = buildSplitGroupInfo(filtered);
+            filtered = filtered.filter(t => !t.splitGroupId || t.id === splitInfo[t.splitGroupId].firstId);
+            filtered = filtered.slice(0, recentTxCount);
 
             if (filtered.length === 0) {
                 list.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No matching transactions yet.</p>`;
@@ -1107,19 +1119,25 @@
             }
 
             list.innerHTML = filtered.map(t => {
+                const group = t.splitGroupId ? splitInfo[t.splitGroupId] : null;
+                const rowAmount = group ? group.total : t.amount;
+                const rowCatLabel = group ? group.cats.join(", ") : (t.cat || "");
                 const col = t.type === "income" ? "income-color" : "expense-color";
                 const sgn = t.type === "income" ? "+" : "-";
-                const iconBadge = getCategoryIcon(t.cat, t.type);
+                const iconBadge = t.type === "transfer" ? "🔄" : getCategoryIcon(t.cat, t.type);
                 const acc = accounts.find(a => a.id === t.src);
+                const splitGroupAttr = group ? ` data-split-group="${escapeHtml(t.splitGroupId)}"` : "";
+                const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📝 ${escapeHtml(t.notes)}</span>` : "";
                 return `
-                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}"${splitGroupAttr} data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || '')}]</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(rowCatLabel)}]</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(rowAmount, t.currency)}</div>
                         </div>
                     </div>
                 `;
@@ -1281,29 +1299,20 @@
 
         function openModal(id) { 
             document.getElementById(id).classList.add("active"); 
-            modalStack.push(id);
             pushVirtualState(id);
         }
         
         // Closing a modal is just "go back" — the popstate listener above is the single place
-        // that actually removes the "active" class (see its modalStack.pop() above). Previously this
+        // that actually removes the "active" class (see its activeModals loop). Previously this
         // function removed "active" itself before calling history.back(), which meant by the time
         // popstate fired, every modal already looked inactive — so the listener's own "was a modal
         // open?" check always came back false and fell through to page-level back navigation
         // instead (e.g. leaving an account's ledger view for the workspace right after Save/Cancel
         // on the transaction editor, rather than just closing that editor). Letting popstate do the
         // actual closing keeps the visible UI and the history stack in lockstep.
-        //
-        // v88 fix: if id isn't on top of modalStack (e.g. a modal was dismissed some other way —
-        // shouldn't normally happen, but don't let the stack get out of sync with reality), drop
-        // any stale entries above it first so history.back() pops the right number of states.
         function closeModal(id) { 
             const el = document.getElementById(id);
             if (el && el.classList.contains("active")) {
-                const idx = modalStack.lastIndexOf(id);
-                if (idx !== -1 && idx !== modalStack.length - 1) {
-                    modalStack.splice(idx + 1);
-                }
                 window.history.back();
             }
         }
@@ -4567,10 +4576,14 @@
             const accounts = await readAllDB(STORES.ACCOUNTS);
             if(accounts.length === 0) { alert("Add an account first!"); return; }
 
-            // v88: every open of this form starts from a clean slate for the Refund/Split/Category-
-            // lock state a prior Quick View action (Refund, Duplicate) may have left behind — a form
-            // opened normally (the "+" buttons, editing a row) must never silently inherit those.
+            // v88/89: every open of this form starts from a clean slate for the Refund/Split/
+            // Category-lock/Split-group-edit state a prior Quick View action may have left behind
+            // — a form opened normally (the "+" buttons, editing a row) must never silently
+            // inherit those. editSplitGroupFromOptions()/openRefundFromOptions() set their own
+            // flag right after this function returns, which is why those two specifically have to
+            // run after, not before, calling openTransactionForm().
             pendingRefundOf = null;
+            editingSplitGroupId = null;
             document.getElementById("txCategory").disabled = false;
             resetTxSplitRows();
 
@@ -4627,13 +4640,12 @@
                 document.getElementById("srcAccount").value = tx.src;
                 document.getElementById("destAccount").value = tx.dest || "";
                 document.getElementById("txDate").value = tx.date;
-                document.getElementById("txPayee").value = tx.payee || "";
-                document.getElementById("txPayeeLabel").textContent = tx.type === "income" ? "From (Optional)" : "To (Optional)";
                 document.getElementById("txNotes").value = tx.notes || "";
                 document.getElementById("txChecked").checked = !!tx.checked;
-                // Split Expenses is a new-entry-only affordance (see the comment on #txSplitWrap in
-                // index.html) — an existing record, split or not, is always edited as the single row
-                // it already is.
+                // Split Expenses is a new-entry-only affordance by default (see the comment on
+                // #txSplitWrap in index.html) — a plain single-record edit is always edited as the
+                // single row it already is. editSplitGroupFromOptions() re-opens this same "new
+                // entry" form with editingSplitGroupId set instead of going through this branch.
                 document.getElementById("txSplitWrap").style.display = "none";
 
                 document.getElementById("txManualFxToggle").checked = !!tx.manualFxRate;
@@ -4711,8 +4723,6 @@
                 document.getElementById("txDate").value = todayLocalStr();
                 document.getElementById("txDesc").value = "";
                 document.getElementById("txAmount").value = "";
-                document.getElementById("txPayee").value = "";
-                document.getElementById("txPayeeLabel").textContent = type === "income" ? "From (Optional)" : "To (Optional)";
                 document.getElementById("txNotes").value = "";
                 document.getElementById("txChecked").checked = false;
                 // Split Expenses only makes sense for a brand-new Income/Expense entry.
@@ -4800,17 +4810,23 @@
                 syncTransactionCurrency();
             }
 
+            // v89: snapshot the (now-selected) Account's balance for the Residual amount preview
+            // — see refreshTxResidualBalance()/recalcTxSplitTotal(). Runs for both branches above
+            // since srcAccount has a value either way by this point.
+            refreshTxResidualBalance();
+
             openModal("txModal");
         }
 
-        // --- SPLIT EXPENSES (v88) ---
-        // A split row is its own Category + Amount pair, added via the "➕ Split into another
-        // category" button and removable via its own [-]. On save, if any split rows exist,
+        // --- SPLIT EXPENSES (v88, restyled v89) ---
+        // Each added split is a pair of rows — [Value + Residual-amount preview + Calculator]
+        // then [Category picker + a circular remove button] — matching the reference app's own
+        // layout rather than one combined row. On save, if any split rows exist,
         // handleTransactionSubmitMobile() writes the main row PLUS every split row as separate,
-        // ordinary transaction records (same account/date/desc/notes/payee/checked state) sharing
-        // a generated splitGroupId — so nothing about how the rest of the app aggregates a normal
+        // ordinary transaction records (same account/date/desc/notes/checked state) sharing a
+        // generated splitGroupId — so nothing about how the rest of the app aggregates a normal
         // transaction (account balances, category totals, reports) needs to know split rows exist
-        // at all. Only offered for a brand-new Income/Expense entry — see openTransactionForm().
+        // at all. groupSplitTransactions() (in renderApp()) is what re-combines them for display.
 
         function resetTxSplitRows() {
             document.getElementById("txSplitRows").innerHTML = "";
@@ -4826,22 +4842,39 @@
             return uniqueMerged.map(c => `<option value="${escapeHtml(c)}">${getCategoryIcon(c, type)} ${escapeHtml(c)}</option>`).join("");
         }
 
-        function addTxSplitRow() {
+        // presetCat/presetAmount let editSplitGroupFromOptions()/duplicateTransactionFromOptions()
+        // reconstruct an existing split's rows exactly, rather than always starting each new row
+        // blank.
+        function addTxSplitRow(presetCat, presetAmount) {
             const type = document.getElementById("txType").value;
             if (type === "transfer") return;
             txSplitRowCounter++;
             const rowId = `txSplitRow_${txSplitRowCounter}`;
-            const row = document.createElement("div");
-            row.className = "split-row";
-            row.id = rowId;
-            row.innerHTML = `
-                <select class="form-input tx-split-cat" style="flex:1.2;">${buildSplitCategoryOptionsHTML(type)}</select>
-                <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" placeholder="Amount" style="flex:1;" data-input="recalcTxSplitTotal">
-                <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">🧮</button>
-                <button type="button" class="calc-btn" data-click="removeTxSplitRow" data-row-id="${rowId}" title="Remove" style="color:var(--expense-color);">−</button>
+            const wrap = document.createElement("div");
+            wrap.className = "split-row";
+            wrap.id = rowId;
+            wrap.style.cssText = "flex-direction:column; align-items:stretch;";
+            wrap.innerHTML = `
+                <div style="display:flex; gap:6px; align-items:flex-end; margin-bottom:6px;">
+                    <div style="flex:1;">
+                        <label>Value</label>
+                        <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" data-input="recalcTxSplitTotal">
+                    </div>
+                    <div class="split-residual-text tx-split-residual" style="display:none; padding-bottom:12px;">Residual amount<b>—</b></div>
+                    <button type="button" class="calc-icon-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">
+                        <span class="calc-icon-grid"><span>−</span><span>×</span><span>+</span><span class="calc-icon-eq">=</span></span>
+                    </button>
+                </div>
+                <div style="display:flex; gap:6px; align-items:center;">
+                    <select class="form-input tx-split-cat" style="flex:1; margin:0;">${buildSplitCategoryOptionsHTML(type)}</select>
+                    <button type="button" class="split-remove-btn" data-click="removeTxSplitRow" data-row-id="${rowId}" title="Remove">−</button>
+                </div>
             `;
-            document.getElementById("txSplitRows").appendChild(row);
-            row.querySelector(".tx-split-amt").id = `${rowId}_amt`;
+            document.getElementById("txSplitRows").appendChild(wrap);
+            const amtInput = wrap.querySelector(".tx-split-amt");
+            amtInput.id = `${rowId}_amt`;
+            if (presetAmount != null) amtInput.value = presetAmount;
+            if (presetCat) wrap.querySelector(".tx-split-cat").value = presetCat;
             recalcTxSplitTotal();
         }
 
@@ -4854,13 +4887,37 @@
 
         function recalcTxSplitTotal() {
             const mainAmt = parseFloat(document.getElementById("txAmount").value) || 0;
+            const splitRowEls = document.querySelectorAll("#txSplitRows .split-row");
             let splitTotal = mainAmt;
-            document.querySelectorAll("#txSplitRows .tx-split-amt").forEach(inp => {
-                splitTotal += parseFloat(inp.value) || 0;
+            splitRowEls.forEach(rowEl => {
+                splitTotal += parseFloat(rowEl.querySelector(".tx-split-amt").value) || 0;
             });
             const currency = document.getElementById("txCurrency").value || baseCurrency;
             const display = document.getElementById("txSplitTotalDisplay");
             if (display) display.textContent = formatCurrency(splitTotal, currency);
+
+            // Residual amount preview — only shown once at least one split row exists (matching
+            // the reference screenshots: a plain unsplit entry doesn't show it at all), computed
+            // from the balance snapshot taken when the form opened / the Account field changed
+            // (see refreshTxResidualBalance()) rather than re-querying the database on every
+            // keystroke. Left showing "—" if the selected account has no single native balance to
+            // preview against (Multi-Currency/FD/Unit Trust — see refreshTxResidualBalance()).
+            const hasSplits = splitRowEls.length > 0;
+            const mainResidualEl = document.getElementById("txResidualDisplayMain");
+            if (mainResidualEl) mainResidualEl.style.display = hasSplits ? "block" : "none";
+            if (hasSplits) {
+                const txType = document.getElementById("txType").value;
+                let residualHTML = "Residual amount<b>—</b>";
+                if (txResidualBaseBalance !== null) {
+                    const residual = txType === "income" ? (txResidualBaseBalance + splitTotal) : (txResidualBaseBalance - splitTotal);
+                    residualHTML = `Residual amount<b>${formatCurrency(residual, txResidualAccountCurrency || currency)}</b>`;
+                }
+                if (mainResidualEl) mainResidualEl.innerHTML = residualHTML;
+                document.querySelectorAll(".tx-split-residual").forEach(el => {
+                    el.style.display = "block";
+                    el.innerHTML = residualHTML;
+                });
+            }
         }
 
         // Collects every split row into [{cat, amount}] — rows with no category or a non-positive
@@ -4876,14 +4933,51 @@
             return rows;
         }
 
-        // --- CALCULATOR / NUMPAD (v88) ---
+        // Snapshots the selected Account's own native balance for the Residual amount preview
+        // above — called when the form opens and whenever the Account field changes (not on every
+        // keystroke, since computeAccountBalances() re-reads the whole transaction table).
+        async function refreshTxResidualBalance() {
+            const accId = document.getElementById("srcAccount").value;
+            if (!accId) { txResidualBaseBalance = null; txResidualAccountCurrency = null; recalcTxSplitTotal(); return; }
+            const { accounts, nativeBalances } = await computeAccountBalances();
+            const acc = accounts.find(a => a.id === accId);
+            // Multi-Currency/FD/Unit Trust accounts keep a basket per currency rather than one
+            // native balance, so there's no single "residual" number to preview for them.
+            if (!acc || acc.type === "multi" || acc.type === "fd" || acc.type === "unittrust") {
+                txResidualBaseBalance = null;
+                txResidualAccountCurrency = null;
+            } else {
+                txResidualBaseBalance = nativeBalances[accId] || 0;
+                txResidualAccountCurrency = acc.currency;
+            }
+            recalcTxSplitTotal();
+        }
+
+        function onTxSrcAccountChanged() {
+            syncTransactionCurrency();
+            refreshTxResidualBalance();
+        }
+
+        // --- CALCULATOR / NUMPAD (v88, fixed v89) ---
+        // calcPadModal opens ON TOP of an already-open txModal — it must never touch browser
+        // history (unlike a normal top-level modal). openModal()/closeModal() drive
+        // history.back(), and the popstate handler's activeModals loop closes EVERY currently-
+        // active modal it finds in one shot (by design, for cascades like Options-over-Quick View)
+        // — so routing this through history would close the underlying txModal too the moment the
+        // calculator closes, silently discarding the whole entry. That was exactly the "Use This
+        // Value / the × button quits the whole form" bug reported after v88 — this is a plain
+        // classList toggle instead, exactly like openTxOptionsMenu()/closeTxOptionsMenu() above.
         function openCalcPad(el) {
             calcPadTargetId = el.dataset.target;
             const targetInput = document.getElementById(calcPadTargetId);
             const existing = targetInput ? targetInput.value : "";
             calcPadExpr = (existing && !isNaN(parseFloat(existing))) ? String(existing) : "";
             updateCalcPadDisplay();
-            openModal("calcPadModal");
+            document.getElementById("calcPadModal").classList.add("active");
+        }
+
+        function closeCalcPad() {
+            document.getElementById("calcPadModal").classList.remove("active");
         }
 
         function updateCalcPadDisplay() {
@@ -4924,7 +5018,7 @@
                     input.dispatchEvent(new Event("change", { bubbles: true }));
                 }
             }
-            closeModal("calcPadModal");
+            closeCalcPad();
         }
 
         // --- RECEIPT / PHOTO ATTACHMENT ---
@@ -5613,9 +5707,11 @@
                 cat: document.getElementById("txType").value === "transfer" ? preservedTransferCat : document.getElementById("txCategory").value,
                 date: dateVal,
                 image: currentTxImageData || null,
-                // v88: To/From (payee) and free-text Notes — optional on every type, blank stored as
-                // null (not "") so existing code that checks `t.notes` truthy keeps working unchanged.
-                payee: document.getElementById("txPayee").value.trim() || null,
+                // v89: free-text Notes — optional on every type, blank stored as null (not "") so
+                // existing code that checks `t.notes` truthy keeps working unchanged. The separate
+                // "To (Optional)" payee field from v88 was removed (Description already covers
+                // that role — see the comment on #txDescRow in index.html), so there's no
+                // `record.payee` here anymore.
                 notes: document.getElementById("txNotes").value.trim() || null,
                 checked: document.getElementById("txChecked").checked,
                 fdReferenceNo: null,
@@ -5674,18 +5770,31 @@
             }
 
             // v88: Split Expenses — only reachable for a brand-new Income/Expense entry (the
-            // #txSplitWrap UI is hidden for Transfers and for any edit — see openTransactionForm()
-            // and index.html's comment on #txSplitWrap), so this never fires for an edit or a
-            // Transfer even if stale rows were somehow left in the DOM. Each split row becomes its
-            // own ordinary transaction record — same account/date/desc/payee/notes/checked as the
-            // main row above, just its own category+amount — sharing a generated splitGroupId
-            // purely for traceability. Because every row is a completely normal record, every
-            // existing balance/report calculation already handles it correctly with no changes.
+            // #txSplitWrap UI is hidden for Transfers and for any plain edit — see
+            // openTransactionForm() and index.html's comment on #txSplitWrap), so this never fires
+            // for a Transfer even if stale rows were somehow left in the DOM. Each split row
+            // becomes its own ordinary transaction record — same account/date/desc/notes/checked
+            // as the main row above, just its own category+amount — sharing a generated
+            // splitGroupId. Because every row is a completely normal record, every existing
+            // balance/report calculation already handles it correctly with no changes;
+            // groupSplitTransactions() (in renderApp()) is what re-combines them for display.
             const isNewEntry = txIdInput === "";
             const splitEligible = isNewEntry && (record.type === "income" || record.type === "expense");
             const splitRows = splitEligible ? collectTxSplitRows() : [];
 
             try {
+                // v89: editSplitGroupFromOptions() reopens this form (as a "new entry", so
+                // isNewEntry above is true) to let every part of an existing split be edited
+                // together, and sets editingSplitGroupId so the old parts get replaced rather than
+                // duplicated — deleting them here first, then falling straight into the normal
+                // "new entry" save path below with whatever rows are now in the form (added,
+                // removed, or edited).
+                if (editingSplitGroupId) {
+                    const existingParts = await readAllDB(STORES.TRANSACTIONS);
+                    for (const p of existingParts) {
+                        if (p.splitGroupId === editingSplitGroupId) await deleteDB(STORES.TRANSACTIONS, p.id);
+                    }
+                }
                 if (splitRows.length > 0) {
                     const splitGroupId = "split_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
                     record.splitGroupId = splitGroupId;
@@ -5709,6 +5818,7 @@
                 return;
             }
             pendingRefundOf = null;
+            editingSplitGroupId = null;
             closeModal("txModal");
             await refreshAfterTransactionChange();
         }
@@ -5746,13 +5856,20 @@
             return true;
         }
 
-        // --- TRANSACTION QUICK VIEW / OPTIONS (v88) ---
+        // --- TRANSACTION QUICK VIEW / OPTIONS (v88, split-group support added v89) ---
         // Tapping a ledger row opens this Quick View instead of jumping straight into the full
-        // Edit form — a glance at the amount/account/payee/notes, a one-tap Checked toggle
-        // (matching a credit-card-style "tally against statement" workflow), and a ⋮ menu for
-        // Duplicate / Edit / Refund / Delete. "Edit transaction" from that menu still opens the
-        // exact same txModal as before; nothing about editing itself changed.
+        // Edit form — a glance at the amount/account/notes, a one-tap Checked toggle (matching a
+        // credit-card-style "tally against statement" workflow), and a ⋮ menu for Duplicate /
+        // Edit / Refund / Delete. "Edit transaction" from that menu still opens the exact same
+        // txModal as before; nothing about editing a plain single transaction changed.
         async function openTxQuickView(el) {
+            // A row rendered from groupSplitTransactions() below carries data-split-group instead
+            // of a single meaningful data-id — see openTxQuickViewSplitGroup() for the breakdown
+            // view this needs instead of the single-record view below.
+            if (el.dataset.splitGroup) {
+                await openTxQuickViewSplitGroup(el.dataset.splitGroup);
+                return;
+            }
             const id = Number(el.dataset.id);
             if (!id) return;
             const txs = await readAllDB(STORES.TRANSACTIONS);
@@ -5768,6 +5885,7 @@
             }
 
             activeQuickViewTxId = id;
+            activeQuickViewSplitGroupId = null;
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const accountName = accId => { if (!accId) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === accId); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
 
@@ -5787,14 +5905,12 @@
             if (tx.type === "transfer") {
                 destLine = `<div>To Account: ${tx.dest ? accountName(tx.dest) : "(unknown)"}</div>`;
             }
-            const payeeLabel = tx.type === "income" ? "From" : "To";
             const refundLine = tx.isRefund ? `<div style="color:var(--income-color); font-weight:700;">↩️ Refund entry</div>` : "";
 
             document.getElementById("txQuickViewDetails").innerHTML = `
                 <div>Account: ${accountName(tx.src)}</div>
                 ${destLine}
                 ${tx.cat ? `<div>Category: ${escapeHtml(tx.cat)}</div>` : ""}
-                <div>${payeeLabel}: ${tx.payee ? escapeHtml(tx.payee) : "-"}</div>
                 <div>Notes: ${tx.notes ? escapeHtml(tx.notes) : "-"}</div>
                 ${refundLine}
             `;
@@ -5803,6 +5919,53 @@
             // Refund only makes sense for an ordinary expense — not for a Transfer, not for
             // another refund (no "refund of a refund"), and not for Income.
             document.getElementById("txOptionsRefundBtn").style.display = (tx.type === "expense" && !tx.isRefund) ? "flex" : "none";
+
+            openModal("txQuickViewModal");
+        }
+
+        // Split-group Quick View (v89): the ledger shows one combined row per split entry (see
+        // groupSplitTransactions()), so tapping it needs to show the per-category breakdown that
+        // row is standing in for — each part's own category+amount, then the shared Account/
+        // Notes/Checked/Options underneath, matching a normal Quick View otherwise. Refund isn't
+        // offered here (a split's total doesn't map to one category to refund against); Edit
+        // reopens the form with every part reconstructed as its own split row (see
+        // editSplitGroupFromOptions()) rather than trying to edit one part in isolation.
+        async function openTxQuickViewSplitGroup(splitGroupId) {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const parts = txs.filter(t => t.splitGroupId === splitGroupId);
+            if (parts.length === 0) return;
+            const first = parts[0];
+
+            activeQuickViewSplitGroupId = splitGroupId;
+            activeQuickViewTxId = first.id;
+
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const accountName = accId => { if (!accId) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === accId); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
+
+            const total = parts.reduce((sum, p) => sum + p.amount, 0);
+            const headerColor = first.type === "income" ? "var(--income-color)" : "var(--expense-color)";
+            const sgn = first.type === "income" ? "+" : "-";
+
+            document.getElementById("txQuickViewHeader").style.background = headerColor;
+            document.getElementById("txQuickViewAmount").textContent = `${sgn}${formatCurrency(total, first.currency)}`;
+            document.getElementById("txQuickViewDate").textContent = first.date;
+            document.getElementById("txQuickViewDesc").textContent = first.desc;
+
+            const breakdownRows = parts.map(p => `
+                <div style="display:flex; justify-content:space-between; padding:4px 0;">
+                    <span>${getCategoryIcon(p.cat, p.type)} ${escapeHtml(p.cat || "")}</span>
+                    <span style="font-weight:700;">${sgn}${formatCurrency(p.amount, p.currency)}</span>
+                </div>
+            `).join("");
+
+            document.getElementById("txQuickViewDetails").innerHTML = `
+                ${breakdownRows}
+                <div style="margin-top:10px;">Account: ${accountName(first.src)}</div>
+                <div>Notes: ${first.notes ? escapeHtml(first.notes) : "-"}</div>
+            `;
+
+            updateTxQuickViewCheckedBtn(!!first.checked);
+            document.getElementById("txOptionsRefundBtn").style.display = "none";
 
             openModal("txQuickViewModal");
         }
@@ -5822,12 +5985,21 @@
         }
 
         async function toggleTxCheckedFromQuickView() {
-            if (!activeQuickViewTxId) return;
             const txs = await readAllDB(STORES.TRANSACTIONS);
-            const tx = txs.find(t => t.id === activeQuickViewTxId);
-            if (!tx) return;
-            tx.checked = !tx.checked;
-            await writeDB(STORES.TRANSACTIONS, tx);
+            if (activeQuickViewSplitGroupId) {
+                // Checked is shared across every part of a split entry — toggled together so the
+                // group can't end up half-checked/half-not from this control.
+                const parts = txs.filter(t => t.splitGroupId === activeQuickViewSplitGroupId);
+                if (parts.length === 0) return;
+                const newVal = !parts[0].checked;
+                for (const p of parts) { p.checked = newVal; await writeDB(STORES.TRANSACTIONS, p); }
+            } else {
+                if (!activeQuickViewTxId) return;
+                const tx = txs.find(t => t.id === activeQuickViewTxId);
+                if (!tx) return;
+                tx.checked = !tx.checked;
+                await writeDB(STORES.TRANSACTIONS, tx);
+            }
             closeModal("txQuickViewModal");
             await refreshAfterTransactionChange();
         }
@@ -5867,8 +6039,11 @@
             closeModal(id);
         }
 
-
         function editTransactionFromOptions() {
+            if (activeQuickViewSplitGroupId) {
+                editSplitGroupFromOptions();
+                return;
+            }
             const id = activeQuickViewTxId;
             closeModalAndThen("txQuickViewModal", async () => {
                 if (!id) return;
@@ -5879,10 +6054,50 @@
             });
         }
 
+        // Reopens the form with every part of an existing split reconstructed as its own split
+        // row (main row = first part, one addTxSplitRow() per remaining part) and
+        // editingSplitGroupId set — handleTransactionSubmitMobile() deletes the old parts first,
+        // then saves whatever's in the form (edited amounts/categories, rows added or removed) as
+        // fresh records. There's no in-place "update this one part" path, since a split's parts
+        // aren't individually addressable from the ledger's combined row in the first place.
+        function editSplitGroupFromOptions() {
+            const splitGroupId = activeQuickViewSplitGroupId;
+            closeModalAndThen("txQuickViewModal", async () => {
+                if (!splitGroupId) return;
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                const parts = txs.filter(t => t.splitGroupId === splitGroupId);
+                if (parts.length === 0) return;
+                const first = parts[0];
+
+                await openTransactionForm(first.type, null);
+                document.getElementById("txDesc").value = first.desc;
+                document.getElementById("txAmount").value = first.amount;
+                document.getElementById("txCurrency").value = first.currency;
+                document.getElementById("srcAccount").value = first.src || "";
+                document.getElementById("txCategory").value = first.cat || "";
+                document.getElementById("txNotes").value = first.notes || "";
+                document.getElementById("txDate").value = first.date;
+                document.getElementById("txChecked").checked = !!first.checked;
+                for (let i = 1; i < parts.length; i++) {
+                    addTxSplitRow(parts[i].cat, parts[i].amount);
+                }
+                onTxSrcAccountChanged();
+                document.getElementById("txModalTitle").textContent = "Edit Split Entry";
+                editingSplitGroupId = splitGroupId;
+            });
+        }
+
         // Opens a brand-new entry of the same type, pre-filled from the tapped transaction —
         // everything except the id (so it saves as a new record) and the Checked state (a
-        // duplicate is, by definition, not yet reconciled against a statement).
+        // duplicate is, by definition, not yet reconciled against a statement). A split group
+        // duplicates as a fresh split entry (every part reconstructed as its own split row, same
+        // as editSplitGroupFromOptions() above, just without editingSplitGroupId — so it saves as
+        // brand-new records rather than replacing the original).
         function duplicateTransactionFromOptions() {
+            if (activeQuickViewSplitGroupId) {
+                duplicateSplitGroupFromOptions();
+                return;
+            }
             const id = activeQuickViewTxId;
             closeModalAndThen("txQuickViewModal", async () => {
                 if (!id) return;
@@ -5900,16 +6115,53 @@
                 } else {
                     document.getElementById("txCategory").value = tx.cat || "";
                 }
-                document.getElementById("txPayee").value = tx.payee || "";
                 document.getElementById("txNotes").value = tx.notes || "";
                 document.getElementById("txDate").value = tx.date;
                 document.getElementById("txChecked").checked = false;
-                syncTransactionCurrency();
+                onTxSrcAccountChanged();
                 document.getElementById("txModalTitle").textContent = "Duplicate Entry";
             });
         }
 
+        function duplicateSplitGroupFromOptions() {
+            const splitGroupId = activeQuickViewSplitGroupId;
+            closeModalAndThen("txQuickViewModal", async () => {
+                if (!splitGroupId) return;
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                const parts = txs.filter(t => t.splitGroupId === splitGroupId);
+                if (parts.length === 0) return;
+                const first = parts[0];
+
+                await openTransactionForm(first.type, null);
+                document.getElementById("txDesc").value = first.desc;
+                document.getElementById("txAmount").value = first.amount;
+                document.getElementById("txCurrency").value = first.currency;
+                document.getElementById("srcAccount").value = first.src || "";
+                document.getElementById("txCategory").value = first.cat || "";
+                document.getElementById("txNotes").value = first.notes || "";
+                document.getElementById("txDate").value = todayLocalStr();
+                document.getElementById("txChecked").checked = false;
+                for (let i = 1; i < parts.length; i++) {
+                    addTxSplitRow(parts[i].cat, parts[i].amount);
+                }
+                onTxSrcAccountChanged();
+                document.getElementById("txModalTitle").textContent = "Duplicate Split Entry";
+            });
+        }
+
         async function deleteTransactionFromOptions() {
+            if (activeQuickViewSplitGroupId) {
+                const splitGroupId = activeQuickViewSplitGroupId;
+                closeModal("txQuickViewModal");
+                const ok = await customConfirm("Delete this whole split transaction (all its category parts)?");
+                if (!ok) return;
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                for (const t of txs) {
+                    if (t.splitGroupId === splitGroupId) await deleteDB(STORES.TRANSACTIONS, t.id);
+                }
+                await refreshAfterTransactionChange();
+                return;
+            }
             const id = activeQuickViewTxId;
             closeModal("txQuickViewModal");
             if (!id) return;
@@ -5924,6 +6176,9 @@
         // renderApp()/renderSavingsStatement()/renderSpendingBreakdownPage()/
         // renderIncomeBreakdownPage()). pendingRefundOf (read by handleTransactionSubmitMobile) is
         // the actual flag that makes this save as a refund rather than an ordinary Income entry.
+        // Not offered for a split group at all (see the txOptionsRefundBtn visibility toggle in
+        // openTxQuickViewSplitGroup()) — a split's total doesn't map to one category to refund
+        // against, so this never actually runs for one.
         function openRefundFromOptions() {
             const id = activeQuickViewTxId;
             closeModalAndThen("txQuickViewModal", async () => {
@@ -5947,10 +6202,10 @@
 
                 document.getElementById("txDate").value = todayLocalStr();
                 document.getElementById("txSplitWrap").style.display = "none";
-                syncTransactionCurrency();
+                onTxSrcAccountChanged();
 
                 document.getElementById("txModalTitle").textContent = `Refund: ${tx.desc}`;
-                document.getElementById("txSubmitBtn").textContent = "Save Refund";
+                document.getElementById("txSubmitBtn").textContent = "SAVE REFUND";
 
                 // Set last — openTransactionForm() itself resets pendingRefundOf to null on
                 // every call, so this has to happen after it returns, not before.
@@ -6097,6 +6352,25 @@
         }
 
         // --- CONSOLIDATED RENDER ENGINE ---
+        // v89: groups split-expense parts (sharing splitGroupId — see addTxSplitRow()/
+        // handleTransactionSubmitMobile()) for DISPLAY purposes only — total amount, every part's
+        // category (joined for a combined label), and which part id is the "representative" (the
+        // lowest id) that a ledger row should actually render as, absorbing its siblings. Every
+        // category/income/expense total elsewhere still sums each part under its own category —
+        // this is never used for that, only for collapsing a split into one row on-screen.
+        function buildSplitGroupInfo(txs) {
+            const info = {};
+            txs.forEach(t => {
+                if (!t.splitGroupId) return;
+                if (!info[t.splitGroupId]) info[t.splitGroupId] = { total: 0, cats: [], firstId: t.id };
+                const g = info[t.splitGroupId];
+                g.total += t.amount;
+                g.cats.push(t.cat || "");
+                if (t.id < g.firstId) g.firstId = t.id;
+            });
+            return info;
+        }
+
         async function renderApp() {
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
             populateYearFilterOptions(txs);
@@ -6476,6 +6750,12 @@
             // views now always show full history too, exactly like the account view already does.
             const showFullHistoryForThisView = showFullAccountHistory || activeCategoryView !== "all" || directTypeView !== "all";
 
+            // v89: built once from the full txs list — see buildSplitGroupInfo() — so every split
+            // part below can be collapsed into its representative's row without affecting the
+            // category/income/expense totals computed just above (those still process every part
+            // individually, under its own category).
+            const splitGroupInfo = buildSplitGroupInfo(txs);
+
             txs.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(t => {
                 const d = new Date(t.date);
                 const withinPeriodFilter = (filterM === "all" || d.getMonth().toString() === filterM) && (filterY === "all" || d.getFullYear().toString() === filterY);
@@ -6533,6 +6813,12 @@
 
                 if (!isBound) return;
 
+                // v89: a split's non-representative parts are absorbed into the representative
+                // row below (see buildSplitGroupInfo()) rather than rendered as their own row —
+                // this is purely a display collapse; the category totals above already counted
+                // this part under its own category regardless of whether it renders here.
+                if (t.splitGroupId && t.id !== splitGroupInfo[t.splitGroupId].firstId) return;
+
                 matchedCount++;
                 // Only build DOM markup for the first `ledgerRenderLimit` matches — keeps large ledgers fast on mobile.
                 if (matchedCount > ledgerRenderLimit) return;
@@ -6547,8 +6833,15 @@
                 else if (activeLedgerAccountView !== "all" && t.src === activeLedgerAccountView) { col = "expense-color"; sgn = "-"; }
                 else { col = "transfer-color"; sgn = "🔄"; }
 
-                const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(tBase, baseCurrency)}</span>` : '';
+                // v89: a split's representative row shows the combined category label and the
+                // group's total amount instead of just this one part's own — see
+                // buildSplitGroupInfo(); groupInfo is null for a plain, non-split transaction.
+                const groupInfo = t.splitGroupId ? splitGroupInfo[t.splitGroupId] : null;
+                const rowTBase = groupInfo ? convertCurrency(groupInfo.total, t.currency, baseCurrency) : tBase;
+                const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(rowTBase, baseCurrency)}</span>` : '';
                 const iconBadge = t.type === "transfer" ? "🔄" : getCategoryIcon(t.cat, t.type);
+                const rowCatLabel = groupInfo ? groupInfo.cats.join(", ") : (t.cat || 'Transfer');
+                const splitGroupAttr = groupInfo ? ` data-split-group="${escapeHtml(t.splitGroupId)}"` : "";
                 // v88: a small ✅ overlay on the category icon flags a transaction the user has
                 // already reconciled against a bank/card statement (see the Checked toggle in
                 // Quick View / the entry form) — purely a visual cue, no effect on any total.
@@ -6558,6 +6851,7 @@
                 const refundBadge = t.isRefund
                     ? `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">↩️ Refund</span>`
                     : '';
+                const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📝 ${escapeHtml(t.notes)}</span>` : '';
                 const receiptBadge = t.image
                     ? `<span data-click="openImageViewer" data-image="${escapeHtml(t.image)}" style="cursor:pointer; margin-left:4px;" title="View attached photo">📎</span>`
                     : '';
@@ -6578,7 +6872,7 @@
                 // side figure instead: the locked destAmount when one was entered, or (matching
                 // what computeAccountBalances() actually applies) a live-converted estimate
                 // otherwise, clearly marked "≈" since it isn't fixed.
-                let displayAmountHTML = `${sgn}${formatCurrency(t.amount, t.currency)}`;
+                let displayAmountHTML = `${sgn}${formatCurrency(groupInfo ? groupInfo.total : t.amount, t.currency)}`;
                 if (t.type === "transfer" && activeLedgerAccountView === t.dest) {
                     const destAcc = accounts.find(a => a.id === t.dest);
                     const srcAcc = accounts.find(a => a.id === t.src);
@@ -6621,11 +6915,12 @@
                 }
 
                 ledgerHTML += `
-                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}"${splitGroupAttr} data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
                             <span class="item-name">${checkedIconHTML} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]${referenceText}${maturityText}${receiptBadge}</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(rowCatLabel)}]${referenceText}${maturityText}${receiptBadge}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                            ${notesLine}
                         </div>
                         <div class="item-right">
                             <div class="item-value" style="color:var(--${col}); font-weight: bold;">
@@ -7732,6 +8027,7 @@
             addTxSplitRow: () => addTxSplitRow(),
             removeTxSplitRow: (el) => removeTxSplitRow(el),
             openCalcPadFor: (el) => openCalcPad(el),
+            closeCalcPad: () => closeCalcPad(),
             calcPadPress: (el) => calcPadPress(el),
             calcPadApply: () => calcPadApply(),
             openTxQuickView: (el) => openTxQuickView(el),
@@ -7752,6 +8048,7 @@
             handleBaseCurrencyChange: () => handleBaseCurrencyChange(),
             recalcTxFdMaturity: () => { recalcTxFdMaturity(); recalcTxSplitTotal(); },
             syncTransactionCurrency: () => syncTransactionCurrency(),
+            onTxSrcAccountChanged: () => onTxSrcAccountChanged(),
             handleTxImageSelected: (el, e) => handleTxImageSelected(e),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),

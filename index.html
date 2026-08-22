@@ -830,6 +830,39 @@
         .calc-key-op { background: #e0e7ff; color: var(--primary); }
         .option-menu-btn { display:flex; align-items:center; padding: 14px; border-radius: 10px; border: none; background: #f1f5f9; color: var(--text-main); font-weight: 700; font-size: 0.88rem; cursor: pointer; text-align: left; width: 100%; }
         .option-menu-btn:active { opacity: 0.85; }
+
+        /* v89: sticky Cancel/Save footer for the transaction form — see the comment on
+           #txModal .modal-sheet in index.html. Applied only via the has-sticky-footer modifier so
+           every other .modal-sheet (Accounts, Categories, etc.) keeps its original single-scroll
+           layout untouched. */
+        .modal-sheet.has-sticky-footer { padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+        .modal-sheet.has-sticky-footer > .modal-header-fixed { padding: 20px 20px 12px; flex-shrink: 0; }
+        .modal-sheet.has-sticky-footer > .modal-scroll-body { padding: 0 20px 4px; overflow-y: auto; -webkit-overflow-scrolling: touch; flex: 1 1 auto; min-height: 0; }
+        .modal-sheet.has-sticky-footer > .modal-footer-fixed { padding: 12px 20px 20px; flex-shrink: 0; border-top: 1px solid var(--border-color); background: var(--card-bg); }
+        .footer-btn-row { display: flex; gap: 10px; }
+        .btn-cancel { flex: 1; background: none; border: 1.5px solid var(--border-color); color: var(--text-main); padding: 14px; border-radius: 24px; font-weight: 700; cursor: pointer; font-size: 0.9rem; }
+        .btn-save { flex: 1; background: var(--primary); color: white; border: none; padding: 14px; border-radius: 24px; font-weight: 700; cursor: pointer; font-size: 0.9rem; }
+        .btn-save:active, .btn-cancel:active { opacity: 0.85; }
+
+        /* Calculator icon button — small 2×2 grid (−, ×, +, =) echoing the reference app's own
+           icon rather than a generic emoji. Purely visual; opens the same calcPadModal either way. */
+        .calc-icon-btn { flex-shrink: 0; width: 44px; height: 44px; border-radius: 8px; border: none; background: #64748b; padding: 4px; cursor: pointer; }
+        .calc-icon-btn:active { opacity: 0.85; }
+        .calc-icon-grid { display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 2px; width: 100%; height: 100%; }
+        .calc-icon-grid span { display: flex; align-items: center; justify-content: center; background: #94a3b8; color: white; font-size: 0.62rem; font-weight: 800; border-radius: 2px; }
+        .calc-icon-grid span.calc-icon-eq { background: var(--expense-color); border-radius: 50%; }
+
+        /* Split Expenses row buttons — small circular icon buttons instead of text buttons. */
+        .split-remove-btn { flex-shrink: 0; width: 40px; height: 40px; border-radius: 50%; border: none; background: #cbd5e1; color: white; font-size: 1.3rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; }
+        .split-remove-btn:active { opacity: 0.85; }
+        .split-add-btn { width: 44px; height: 44px; border-radius: 50%; border: none; background: var(--primary); color: white; font-size: 1.5rem; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; line-height: 1; flex-shrink: 0; }
+        .split-add-btn:active { opacity: 0.85; }
+        .split-residual-text { font-size: 0.72rem; color: var(--text-muted); text-align: right; line-height: 1.3; }
+        .split-residual-text b { display: block; color: var(--text-main); font-size: 0.85rem; }
+
+        /* Compact Currency select in the transaction form's header (v89) — moved out of the
+           Amount row per feedback; see the comment on #txModal's header markup. */
+        select.header-currency-select { width: auto; height: 34px; padding: 4px 8px; font-size: 0.8rem; font-weight: 700; margin: 0; }
         .config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
         .config-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); }
         /* Fund holding listed under its Unit Trust account row on the Accounts page — indented,
@@ -2023,43 +2056,54 @@
 
     <!-- MODAL: Transaction Creator / Editor (Hybrid) -->
     <div class="modal" id="txModal">
-        <div class="modal-sheet">
-            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
-                <h3 id="txModalTitle" style="font-weight: 800;">Log Ledger Item</h3>
-                <button data-click="closeModal" data-modal="txModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+        <!-- v89: has-sticky-footer splits this modal into 3 fixed regions instead of one
+             scrolling block — header, a scrollable field area, and a footer (Cancel/Save) that
+             stays visible no matter how far the fields are scrolled. Only txModal opts into this;
+             every other modal keeps the plain single-scroll .modal-sheet behavior. -->
+        <div class="modal-sheet has-sticky-footer">
+            <div class="modal-header-fixed">
+                <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center;">
+                    <h3 id="txModalTitle" style="font-weight: 800;">Log Ledger Item</h3>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <select id="txCurrency" class="form-input header-currency-select" data-change="recalcTxFdMaturity"></select>
+                        <button data-click="closeModal" data-modal="txModal" style="background:none; border:none; font-size: 1.5rem; padding: 4px;">&times;</button>
+                    </div>
+                </div>
             </div>
-            <div>
+            <div class="modal-scroll-body">
                 <input type="hidden" id="txId">
                 <input type="hidden" id="txType">
-                <div class="form-row-inline">
-                    <div>
+                <div class="form-row" style="display:flex; gap:6px; align-items:flex-end;">
+                    <div style="flex:1;">
                         <label>Amount</label>
-                        <div style="display:flex; gap:6px;">
-                            <input type="number" id="txAmount" step="0.01" inputmode="decimal" required data-input="recalcTxFdMaturity" style="flex:1;">
-                            <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad">🧮</button>
-                        </div>
+                        <input type="number" id="txAmount" step="0.01" inputmode="decimal" required data-input="recalcTxFdMaturity">
                     </div>
-                    <div><label>Currency</label><select id="txCurrency" class="form-input" data-change="recalcTxFdMaturity"></select></div>
+                    <div class="split-residual-text" id="txResidualDisplayMain" style="display:none; padding-bottom:12px;">
+                        Residual amount<b>—</b>
+                    </div>
+                    <button type="button" class="calc-icon-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad">
+                        <span class="calc-icon-grid"><span>−</span><span>×</span><span>+</span><span class="calc-icon-eq">=</span></span>
+                    </button>
                 </div>
 
                 <div class="form-row" id="categoryRow"><label>Category</label><select id="txCategory" class="form-input"></select></div>
 
-                <!-- Split Expenses (v88) — only offered for a brand-new Income/Expense entry (not
-                     Transfer, not while editing an existing record — see openTxSplitAddRow() /
-                     handleTransactionSubmitMobile() for why editing is out of scope). Each added
-                     row is its own Category + Amount pair; on save every row becomes its own
-                     transaction record sharing a splitGroupId, so nothing about how existing
-                     reports/balances aggregate a normal transaction needs to change. -->
+                <!-- Split Expenses (v88, restyled v89) — only offered for a brand-new Income/
+                     Expense entry, or while editing/duplicating one via editSplitGroupFromOptions()/
+                     duplicateTransactionFromOptions() (see handleTransactionSubmitMobile() for why a
+                     plain single-record edit stays out of scope). Each added row is its own
+                     Category + Amount pair; on save every row becomes its own transaction record
+                     sharing a splitGroupId, so nothing about how existing reports/balances
+                     aggregate a normal transaction needs to change. -->
                 <div id="txSplitWrap" style="display:none;">
                     <div id="txSplitRows"></div>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 12px; font-size:0.82rem; font-weight:700; color:var(--text-main);">
-                        <span>Split Total</span>
-                        <span id="txSplitTotalDisplay">—</span>
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 14px; font-size:0.82rem; font-weight:700; color:var(--text-main);">
+                        <span>Split Total<br><span id="txSplitTotalDisplay" style="font-size:1rem;">—</span></span>
+                        <button type="button" class="split-add-btn" data-click="addTxSplitRow" title="Split into another category">+</button>
                     </div>
-                    <button type="button" class="submit-btn" style="background:#eef2ff; color:var(--primary); margin-top:0; margin-bottom:12px;" data-click="addTxSplitRow">➕ Split into another category</button>
                 </div>
 
-                <div class="form-row" id="srcAccRow"><label id="srcAccLabel">Account</label><select id="srcAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
+                <div class="form-row" id="srcAccRow"><label id="srcAccLabel">Account</label><select id="srcAccount" class="form-input" data-change="onTxSrcAccountChanged"></select></div>
                 <div class="form-row" id="destAccRow" style="display:none;"><label>To Account</label><select id="destAccount" class="form-input" data-change="syncTransactionCurrency"></select></div>
 
                 <!-- Shown only for Transfers between two single-currency ("normal") accounts whose
@@ -2157,8 +2201,9 @@
                     <p id="txFdMaturityPreview" style="font-size:0.72rem; color:#6d28d9; margin-top:2px;"></p>
                 </div>
 
+                <!-- v89: the separate "To (Optional)" payee field was removed — Description already
+                     serves that purpose (e.g. a merchant/contact name), so the two were redundant. -->
                 <div class="form-row" id="txDescRow"><label>Description</label><input type="text" id="txDesc" required></div>
-                <div class="form-row"><label id="txPayeeLabel">To (Optional)</label><input type="text" id="txPayee" placeholder="e.g. merchant or contact name"></div>
                 <div class="form-row"><label>Notes (Optional)</label><input type="text" id="txNotes"></div>
                 <div class="form-row">
                     <div class="toggle-switch-row">
@@ -2185,22 +2230,26 @@
                     </div>
                     <p id="txImageStatus" style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;"></p>
                 </div>
-
-                <button type="button" data-click="handleTransactionSubmitMobile" id="txSubmitBtn" class="submit-btn">Commit Entry</button>
+            </div>
+            <div class="modal-footer-fixed">
+                <div class="footer-btn-row">
+                    <button type="button" class="btn-cancel" data-click="closeModal" data-modal="txModal">CANCEL</button>
+                    <button type="button" class="btn-save" id="txSubmitBtn" data-click="handleTransactionSubmitMobile">SAVE</button>
+                </div>
                 <button type="button" data-click="deleteTxFromEditModal" id="txDeleteBtn" class="submit-btn" style="display:none; margin-top:10px; background:#fee2e2; color:var(--expense-color);">🗑 Delete Entry</button>
             </div>
         </div>
     </div>
 
-    <!-- MODAL: Calculator / Numpad — opened from the 🧮 button beside any Amount field in the
-         transaction form (main amount or a split row). Basic arithmetic entry doubles as an
-         on-screen numpad; typing directly into the field still opens the OS's own numeric
+    <!-- MODAL: Calculator / Numpad — opened from the calculator-icon button beside any Amount
+         field in the transaction form (main amount or a split row). Basic arithmetic entry doubles
+         as an on-screen numpad; typing directly into the field still opens the OS's own numeric
          keyboard via inputmode="decimal" on that field. -->
     <div class="modal" id="calcPadModal" style="z-index:1500;">
         <div class="modal-sheet" style="max-width:320px; padding:16px;">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:10px;">
                 <h3 style="font-weight:800;">Calculator</h3>
-                <button data-click="closeModal" data-modal="calcPadModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+                <button data-click="closeCalcPad" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
             </div>
             <div id="calcPadDisplay" style="background:#f8fafc; border:1.5px solid var(--border-color); border-radius:8px; padding:14px; text-align:right; font-size:1.4rem; font-weight:700; margin-bottom:10px; min-height:28px; word-break:break-all;">0</div>
             <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px;">
