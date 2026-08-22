@@ -1062,6 +1062,7 @@
             const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
             const portfolioReportPage = document.getElementById("page-portfolio-report");
+            const ownerNetWorthReportPage = document.getElementById("page-owner-networth-report");
             const navUpdatePage = document.getElementById("page-navupdate");
             const dataSecurityPage = document.getElementById("page-datasecurity");
             const membersPage = document.getElementById("page-members");
@@ -1089,6 +1090,7 @@
                 !spendingBreakdownPage.classList.contains("hidden") ||
                 !incomeBreakdownPage.classList.contains("hidden") ||
                 !portfolioReportPage.classList.contains("hidden") ||
+                !ownerNetWorthReportPage.classList.contains("hidden") ||
                 !navUpdatePage.classList.contains("hidden") ||
                 !dataSecurityPage.classList.contains("hidden")
             ) {
@@ -1471,7 +1473,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -1731,6 +1733,7 @@
             const spendingHidden = document.getElementById("page-spending-breakdown").classList.contains("hidden");
             const incomeHidden = document.getElementById("page-income-breakdown").classList.contains("hidden");
             const portfolioReportHidden = document.getElementById("page-portfolio-report").classList.contains("hidden");
+            const ownerNetWorthReportHidden = document.getElementById("page-owner-networth-report").classList.contains("hidden");
             const navUpdateHidden = document.getElementById("page-navupdate").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
@@ -1742,6 +1745,7 @@
             else if (!spendingHidden) target = "spending-breakdown";
             else if (!incomeHidden) target = "income-breakdown";
             else if (!portfolioReportHidden) target = "portfolio-report";
+            else if (!ownerNetWorthReportHidden) target = "owner-networth-report";
             else if (!navUpdateHidden) target = "navupdate";
             else if (!ledgerHidden) {
                 const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
@@ -1771,6 +1775,7 @@
             else if (target === "spending-breakdown") navigateToSpendingBreakdownPage();
             else if (target === "income-breakdown") navigateToIncomeBreakdownPage();
             else if (target === "portfolio-report") navigateToPortfolioReportPage();
+            else if (target === "owner-networth-report") navigateToOwnerNetWorthReportPage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -4212,6 +4217,25 @@
             });
         }
 
+        // Splits a subset of accounts into { financial, realEstate, total } (all in baseCurrency)
+        // for the "Financial Assets vs Real Estate" owner report — Real Estate is whatever's
+        // grouped under the "Real Estate" account group, Financial Assets is everything else
+        // (Bank/Cash, Credit Card, Investment, Bank Loan, Account Payable/Receivable, etc.), so
+        // the two always add up to exactly the same Total Net Worth this app shows everywhere
+        // else. Same includeInNetWorth opt-out as summarizeAccountsNetWorth, so a property
+        // excluded from Net Worth is excluded here too (from both the Real Estate and Total
+        // figures — it simply doesn't contribute to either side of the split).
+        function summarizeOwnerAssetSplit(accountsSubset, nativeBalances) {
+            let realEstate = 0, total = 0;
+            accountsSubset.forEach(a => {
+                if (a.includeInNetWorth === false) return;
+                const val = accountBaseValue(a, nativeBalances);
+                total += val;
+                if ((a.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate") realEstate += val;
+            });
+            return { financial: total - realEstate, realEstate, total };
+        }
+
         // Sums a subset of accounts into { total (in baseCurrency), currencyTotals { CODE: nativeAmt } }
         function summarizeAccountsNetWorth(accountsSubset, nativeBalances) {
             let total = 0;
@@ -4630,9 +4654,7 @@
                     </span>
                     <div style="display:flex; align-items:center;">
                         <button class="trash-btn" data-click="editCategory" data-id="${escapeHtml(c.id)}" title="Edit category">✏️</button>
-                        <button class="trash-btn" data-click="toggleCategoryExcludeFromSavings" data-id="${escapeHtml(c.id)}" title="${c.excludeFromSavings ? 'Included in Net Savings Report' : 'Excluded from Net Savings Report'}" style="padding:6px;">
-                            <span class="mini-switch ${c.excludeFromSavings ? 'on' : ''}"><span class="mini-switch-knob"></span></span>
-                        </button>
+                        <button class="trash-btn" data-click="toggleCategoryExcludeFromSavings" data-id="${escapeHtml(c.id)}" title="${c.excludeFromSavings ? 'Included in Net Savings Report' : 'Excluded from Net Savings Report'}" style="opacity:${c.excludeFromSavings ? '1' : '0.3'};">📊</button>
                         <button class="trash-btn" data-click="removeCategory" data-id="${escapeHtml(c.id)}">🗑</button>
                     </div>
                 </div>`;
@@ -7902,6 +7924,99 @@
             renderPortfolioReportPage();
         }
 
+        // --- OWNER NET WORTH SPLIT REPORT (Financial Assets vs Real Estate, v104) ---
+        // One row per owner — solo member, joint-owned group, and (if any) "Unassigned" — same
+        // ownership breakdown as the dashboard's "Net Worth by Member" section, but each row here
+        // is split Financial Assets + Real Estate = Total Net Worth, plus that owner's % share of
+        // the grand total, so the two figures are always visible side by side instead of only the
+        // single blended total the dashboard section shows.
+        async function renderOwnerNetWorthReportPage() {
+            const { accounts, nativeBalances } = await computeAccountBalances();
+            const grandTotal = summarizeOwnerAssetSplit(accounts, nativeBalances).total;
+            document.getElementById("ownerNetWorthBaseCurrLabel").textContent = baseCurrency;
+
+            const pctOf = (total) => grandTotal !== 0 ? ((total / grandTotal) * 100).toFixed(1) + "%" : "—";
+
+            const rowHTML = (label, colorDotsHTML, subset) => {
+                const { financial, realEstate, total } = summarizeOwnerAssetSplit(subset, nativeBalances);
+                return `
+                    <tr>
+                        <td style="padding:8px 10px;">
+                            <div style="display:flex; align-items:center; gap:6px;">${colorDotsHTML}<strong>${escapeHtml(label)}</strong></div>
+                            <span style="font-size:0.68rem; color:var(--text-muted);">${subset.length} account${subset.length === 1 ? '' : 's'}</span>
+                        </td>
+                        <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(financial, baseCurrency)}</td>
+                        <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(realEstate, baseCurrency)}</td>
+                        <td style="padding:8px 10px; text-align:right;"><strong>${formatBalanceHTML(total, baseCurrency)}</strong></td>
+                        <td style="padding:8px 10px; text-align:right;">${pctOf(total)}</td>
+                    </tr>`;
+            };
+
+            let rows = "";
+            membersCache.forEach(m => {
+                const subset = filterAccountsByOwnership(accounts, "member", [m.id]);
+                const dot = `<span class="member-color-dot" style="background:${m.color};"></span>`;
+                rows += rowHTML(m.name, dot, subset);
+            });
+
+            const jointGroups = {};
+            accounts.forEach(a => {
+                if (Array.isArray(a.memberIds) && a.memberIds.length > 1) {
+                    jointGroups[[...a.memberIds].sort().join(",")] = true;
+                }
+            });
+            Object.keys(jointGroups).forEach(key => {
+                const ids = key.split(",");
+                const subset = filterAccountsByOwnership(accounts, "joint", ids);
+                const dots = ids.map(id => `<span class="member-color-dot" style="background:${getMemberById(id)?.color || '#94a3b8'}; margin-left:-4px;"></span>`).join("");
+                rows += rowHTML(`${memberNamesForIds(ids)} (Joint)`, dots, subset);
+            });
+
+            const unassigned = accounts.filter(a => !Array.isArray(a.memberIds) || a.memberIds.length === 0);
+            if (unassigned.length > 0) {
+                const dot = `<span class="member-color-dot" style="background:#cbd5e1;"></span>`;
+                rows += rowHTML("Unassigned", dot, unassigned);
+            }
+
+            const wrap = document.getElementById("ownerNetWorthTableWrap");
+            if (membersCache.length === 0 && unassigned.length === accounts.length) {
+                wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem; text-align:center; padding:24px 0;">No members yet — add one via Sidebar ▸ Setting ▸ Manage Members to break this report down by owner.</p>`;
+                return;
+            }
+
+            const { financial: gFinancial, realEstate: gRealEstate } = summarizeOwnerAssetSplit(accounts, nativeBalances);
+            wrap.innerHTML = `
+                <table style="width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
+                    <thead>
+                        <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase;">
+                            <th style="padding:6px 10px;">Owner(s)</th>
+                            <th style="padding:6px 10px; text-align:right;">Financial Assets</th>
+                            <th style="padding:6px 10px; text-align:right;">Real Estate</th>
+                            <th style="padding:6px 10px; text-align:right;">Total Net Worth</th>
+                            <th style="padding:6px 10px; text-align:right;">% of Net Worth</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                    <tfoot>
+                        <tr style="border-top:2px solid var(--border-color); font-weight:800;">
+                            <td style="padding:8px 10px;">Grand Total</td>
+                            <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(gFinancial, baseCurrency)}</td>
+                            <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(gRealEstate, baseCurrency)}</td>
+                            <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(grandTotal, baseCurrency)}</td>
+                            <td style="padding:8px 10px; text-align:right;">100.0%</td>
+                        </tr>
+                    </tfoot>
+                </table>`;
+        }
+
+        function navigateToOwnerNetWorthReportPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-owner-networth-report");
+            window.scrollTo(0, 0);
+            pushVirtualState("owner-networth-report");
+            renderOwnerNetWorthReportPage();
+        }
+
         function navigateToAutoLockPage() {
             workspaceScrollY = window.scrollY;
             showPage("page-autolock");
@@ -8323,6 +8438,7 @@
             editFund: (el) => editFund(el.dataset.id),
             navigateToFundActivityPage: (el) => navigateToFundActivityPage(el),
             navigateToPortfolioReportPage: () => navigateToPortfolioReportPage(),
+            navigateToOwnerNetWorthReportPage: () => navigateToOwnerNetWorthReportPage(),
             togglePortfolioDetail: () => togglePortfolioDetail(),
             handleFundActivityBackClick: () => handleFundActivityBackClick(),
             editFundFromActivityHeader: () => editFundFromActivityHeader(),

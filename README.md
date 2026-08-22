@@ -1592,3 +1592,36 @@ like the reference app.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v91.
+
+## v104: new sidebar report — Financial Assets vs Real Estate, by owner
+
+- **New Reports page** (Sidebar ▸ Reports ▸ 🏛️ Financial Assets vs Real
+  Estate): a table with one row per owner — solo member, joint-owned
+  group, and (if any) "Unassigned" — same ownership breakdown as the
+  dashboard's existing "Net Worth by Member" section. Each row shows
+  **Financial Assets + Real Estate = Total Net Worth, % of Net Worth**
+  (that owner's share of everyone's combined total), plus a Grand
+  Total footer row.
+- **Financial Assets** is every account except those grouped under
+  "Real Estate" (Bank/Cash, Credit Card, Investment, Bank Loan,
+  Account Payable/Receivable, etc.) — so it's always exactly
+  `Total − Real Estate`, guaranteeing the two columns sum to the same
+  Total Net Worth this app shows everywhere else. New helper
+  `summarizeOwnerAssetSplit()` computes this per subset of accounts,
+  reusing the existing `accountBaseValue()` conversion so
+  Multi-Currency/FD/Unit Trust basket accounts are handled the same
+  way as the rest of the app. Same `includeInNetWorth === false`
+  opt-out as the dashboard's Net Worth by Member section — an excluded
+  property contributes to neither column.
+- Wired into the app's page-navigation pipeline exactly like the
+  neighbouring Unit Trust Portfolio report — `showPage()`,
+  back-button/`popstate` handling, `updateSidebarActiveState()`, and
+  `sidebarGo()` all cover the new `owner-networth-report` target.
+- No IndexedDB schema/version changes — read-only report over existing
+  account/member/transaction data. No export/import format changes.
+  Verified with `node --check` on both JS files plus the
+  data-click/data-change/data-input ↔ handler and `getElementById` ↔
+  element-id cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v104.

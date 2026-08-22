@@ -773,33 +773,6 @@
         .trash-btn { background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 8px; font-size: 1.1rem; }
         .trash-btn:active { color: var(--expense-color); }
 
-        /* v104: real iOS-style toggle switch for "Exclude from Net Savings Report" on the
-           Categories page — replaces the old dimmed/bright 📊 emoji button. Orange = excluded
-           (matches the reference switch look), grey/off = included as normal spending/income. */
-        .mini-switch {
-            display: inline-block;
-            width: 38px;
-            height: 22px;
-            border-radius: 11px;
-            background: #e2e8f0;
-            position: relative;
-            transition: background 0.2s ease;
-            vertical-align: middle;
-        }
-        .mini-switch.on { background: #f97316; }
-        .mini-switch-knob {
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            background: #fff;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.35);
-            transition: left 0.2s ease;
-        }
-        .mini-switch.on .mini-switch-knob { left: 18px; }
-
         /* Statement sheets */
         .statement-card {
             background: var(--card-bg);
@@ -1063,6 +1036,9 @@
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="portfolio-report">
                 <span class="sidebar-item-icon">🧺</span> Unit Trust Portfolio
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="owner-networth-report">
+                <span class="sidebar-item-icon">🏛️</span> Financial Assets vs Real Estate
             </button>
 
             <div class="sidebar-divider"></div>
@@ -1697,6 +1673,26 @@
             <button type="button" class="subrow-toggle-btn" id="portfolioDetailToggle" data-click="togglePortfolioDetail" aria-label="Expand fund detail" title="Expand fund detail">▸</button>
         </div>
         <div class="report-card" id="portfolioDetailWrap" style="display:none; overflow-x:auto;"></div>
+    </div>
+
+    <!-- ================= PAGE: OWNER NET WORTH SPLIT REPORT (Financial Assets vs Real Estate) ================= -->
+    <div id="page-owner-networth-report" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Financial Assets vs Real Estate</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Net worth split by owner, converted to <span id="ownerNetWorthBaseCurrLabel">base currency</span></p>
+            </div>
+        </div>
+
+        <div class="report-card" id="ownerNetWorthTableWrap" style="overflow-x:auto;"></div>
+
+        <p style="font-size:0.68rem; color:var(--text-muted); margin-top:10px;">
+            Financial Assets = every account except those grouped under Real Estate (Bank/Cash,
+            Credit Card, Investment, Bank Loan, Account Payable/Receivable, etc.). A property
+            marked "Excluded from Net Worth" is left out of both columns, same as everywhere
+            else in the app.
+        </p>
     </div>
 
     <!-- ================= PAGE: DATA SECURITY HUB (replaces sidebar "Data & Security" section) ================= -->
