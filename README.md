@@ -1728,3 +1728,40 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v106.
+
+## v107: Salary Entry — fixed account dropdowns being wrongly narrowed
+by the Member picker
+
+Reported via screenshots: picking a specific Member (e.g. "LIM VF")
+narrowed both the Bank Account and EPF/CPF Account dropdowns down to
+only that member's solely-owned accounts — hiding joint accounts they
+might legitimately bank their salary into, and in practice sometimes
+leaving only one eligible account, so it ended up selected for BOTH
+Bank Account and EPF/CPF Account. That meant the EE/ER contribution
+legs landed in an ordinary bank account instead of a real KWSP/CPF
+investment account — still counted as ordinary Income, but not
+reflected as growing the actual EPF/CPF asset the user meant to track.
+
+- **Both dropdowns now always list every account**, regardless of
+  which Member is selected — `populateSalaryAccountSelects()` no
+  longer takes a member filter at all. A member may legitimately bank
+  their salary into a joint account (or one nominally in their
+  spouse's name), so the Member picker must never remove options from
+  either list.
+- **The Member picker is now a smart-default nudge, not a filter.**
+  `handleSalaryMemberChange()` no longer rebuilds either dropdown's
+  option list; it only pre-selects a sensible default when a specific
+  member is picked: the Bank Account defaults to their own
+  solely-owned Bank/Cash-group account if one exists, and the EPF/CPF
+  Account defaults to any account under the Investment group's KWSP
+  or CPF sub-group they're an owner of (solo OR joint — a household's
+  EPF/CPF pot is sometimes filed jointly). If no match is found for
+  either, the user's own manual pick (or "All Members" state) is left
+  untouched rather than being overwritten with something wrong.
+- No IndexedDB schema/version changes — display/selection logic only.
+  Verified with `node --check` plus the data-click/data-change/
+  data-input ↔ handler and `getElementById` ↔ element-id
+  cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v107.

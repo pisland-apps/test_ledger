@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v106";
+        const APP_VERSION = "v107";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -6128,32 +6128,49 @@
             document.getElementById("salaryEEAmount").value = "";
             document.getElementById("salaryERAmount").value = "";
 
-            populateSalaryAccountSelects(accounts, "all");
+            populateSalaryAccountSelects(accounts);
             handleSalarySchemeChange();
             recalcSalaryPreview();
             openModal("salaryModal");
         }
 
-        // Rebuilds the two account <select>s (Bank Account, EPF/CPF Account) — filtered to
-        // solo-owned accounts of the chosen member when one is picked, or every account for
-        // "All Members". Mirrors filterAccountsByOwnership's "member" mode (joint accounts are
-        // intentionally left out of a single member's filtered view, same convention already
-        // used by the Spending/Income Breakdown member filter and the dashboard's per-member
-        // net worth rows).
-        function populateSalaryAccountSelects(accounts, memberFilterId) {
-            const subset = memberFilterId === "all"
-                ? accounts
-                : accounts.filter(a => Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberFilterId);
-            const sorted = sortAccountsByGroupThenName(subset);
-            const optionsHTML = sorted.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("")
-                || `<option value="">No accounts for this member</option>`;
+        // Builds the two account <select>s (Bank Account, EPF/CPF Account) — always with EVERY
+        // account (sorted group-then-name, owner shown via accountOptionLabel), regardless of
+        // which Member is picked above. A member may legitimately bank their salary into a
+        // joint account (or one nominally owned by their spouse) rather than only an account
+        // solely in their own name, so the Member picker must never remove options from either
+        // dropdown — it only nudges the default selection (see handleSalaryMemberChange()).
+        function populateSalaryAccountSelects(accounts) {
+            const sorted = sortAccountsByGroupThenName(accounts);
+            const optionsHTML = sorted.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
             document.getElementById("salaryBankAccount").innerHTML = optionsHTML;
             document.getElementById("salaryContribAccount").innerHTML = optionsHTML;
         }
 
+        // Re-picking a Member never narrows either dropdown (see populateSalaryAccountSelects) —
+        // it only nudges the two selects toward a sensible default for that person, so the full
+        // account list (including joint accounts) stays reachable either way: Bank Account
+        // defaults to their own solely-owned Bank/Cash account if one exists; EPF/CPF Account
+        // defaults to any account under the Investment group's KWSP or CPF sub-group they're an
+        // owner of (solo OR joint, since a household's EPF/CPF pot is sometimes filed jointly).
+        // Left alone (no default change) when no match is found — "All Members" or a member with
+        // no matching account never overwrites whatever the user already picked by hand.
         async function handleSalaryMemberChange() {
+            const memberId = document.getElementById("salaryMemberSelect").value;
+            if (memberId === "all") return;
             const accounts = await readAllDB(STORES.ACCOUNTS);
-            populateSalaryAccountSelects(accounts, document.getElementById("salaryMemberSelect").value);
+
+            const soloBank = accounts.find(a =>
+                Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberId &&
+                (a.group || DEFAULT_ACCOUNT_GROUP) === "Bank/Cash"
+            );
+            if (soloBank) document.getElementById("salaryBankAccount").value = soloBank.id;
+
+            const contribAcc = accounts.find(a =>
+                Array.isArray(a.memberIds) && a.memberIds.includes(memberId) &&
+                (a.group || DEFAULT_ACCOUNT_GROUP) === "Investment" && (a.subgroup === "KWSP" || a.subgroup === "CPF")
+            );
+            if (contribAcc) document.getElementById("salaryContribAccount").value = contribAcc.id;
         }
 
         // Shows/hides the EE/ER fields and the EPF/CPF Account row, and relabels everything
