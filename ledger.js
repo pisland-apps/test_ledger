@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v103";
+        const APP_VERSION = "v104";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -4630,7 +4630,9 @@
                     </span>
                     <div style="display:flex; align-items:center;">
                         <button class="trash-btn" data-click="editCategory" data-id="${escapeHtml(c.id)}" title="Edit category">✏️</button>
-                        <button class="trash-btn" data-click="toggleCategoryExcludeFromSavings" data-id="${escapeHtml(c.id)}" title="${c.excludeFromSavings ? 'Included in Net Savings Report' : 'Excluded from Net Savings Report'}" style="opacity:${c.excludeFromSavings ? '1' : '0.3'};">📊</button>
+                        <button class="trash-btn" data-click="toggleCategoryExcludeFromSavings" data-id="${escapeHtml(c.id)}" title="${c.excludeFromSavings ? 'Included in Net Savings Report' : 'Excluded from Net Savings Report'}" style="padding:6px;">
+                            <span class="mini-switch ${c.excludeFromSavings ? 'on' : ''}"><span class="mini-switch-knob"></span></span>
+                        </button>
                         <button class="trash-btn" data-click="removeCategory" data-id="${escapeHtml(c.id)}">🗑</button>
                     </div>
                 </div>`;
