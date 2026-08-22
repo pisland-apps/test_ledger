@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v107";
+        const APP_VERSION = "v108";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -6128,6 +6128,10 @@
             document.getElementById("salaryEEAmount").value = "";
             document.getElementById("salaryERAmount").value = "";
 
+            const currSelect = document.getElementById("salaryCurrency");
+            currSelect.innerHTML = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+            currSelect.value = baseCurrency;
+
             populateSalaryAccountSelects(accounts);
             handleSalarySchemeChange();
             recalcSalaryPreview();
@@ -6176,6 +6180,9 @@
         // Shows/hides the EE/ER fields and the EPF/CPF Account row, and relabels everything
         // (EPF vs CPF wording) based on the chosen scheme. "None" collapses this to a plain
         // single-leg salary entry — Gross goes straight to the Bank Account as one Income record.
+        // Also auto-sets the Currency selector to each scheme's natural currency (MYR for EPF,
+        // SGD for CPF) — a plain "Salary" (no scheme) leaves whatever currency was already
+        // chosen alone, since there's no single natural currency to default it to.
         function handleSalarySchemeChange() {
             const scheme = document.getElementById("salaryScheme").value;
             const isEpf = scheme === "epf";
@@ -6192,34 +6199,49 @@
             document.getElementById("salaryPreviewEELabel").textContent = isEpf ? "EPF (EE)" : "CPF (EE)";
             document.getElementById("salaryPreviewERLabel").textContent = isEpf ? "EPF (ER)" : "CPF (ER)";
 
+            const currSelect = document.getElementById("salaryCurrency");
+            const schemeCurrency = isEpf ? "MYR" : isCpf ? "SGD" : null;
+            if (schemeCurrency && fxRates[schemeCurrency] !== undefined) currSelect.value = schemeCurrency;
+
+            recalcSalaryPreview();
+        }
+
+        function handleSalaryCurrencyChange() {
             recalcSalaryPreview();
         }
 
         // Live preview box (mirrors the reference screenshot's "Gross → Bank + EPF" breakdown):
         // Bank leg = Gross − EE (EE never appears twice — it's deducted from gross, not on top
         // of it); the ER leg is purely additive, shown only when > 0, and never subtracted from
-        // the Bank leg since the employer's contribution never touches the employee's pay.
+        // the Bank leg since the employer's contribution never touches the employee's pay. Every
+        // figure is formatted in the currently selected Currency (RM for MYR, S$ for SGD, etc.)
+        // so the preview reads the same as whatever currency the saved legs will actually use.
         function recalcSalaryPreview() {
             const scheme = document.getElementById("salaryScheme").value;
             const hasScheme = scheme === "epf" || scheme === "cpf";
+            const currency = document.getElementById("salaryCurrency").value;
             const gross = parseFloat(document.getElementById("salaryGross").value) || 0;
             const ee = hasScheme ? (parseFloat(document.getElementById("salaryEEAmount").value) || 0) : 0;
             const er = hasScheme ? (parseFloat(document.getElementById("salaryERAmount").value) || 0) : 0;
             const net = gross - ee;
 
-            document.getElementById("salaryPreviewGross").textContent = gross.toFixed(2);
-            document.getElementById("salaryPreviewNet").textContent = net.toFixed(2);
+            document.getElementById("salaryPreviewGross").textContent = formatCurrency(gross, currency);
+            document.getElementById("salaryPreviewNet").textContent = formatCurrency(net, currency);
             document.getElementById("salaryPreviewEERow").style.display = (hasScheme && ee > 0) ? "flex" : "none";
             document.getElementById("salaryPreviewERRow").style.display = (hasScheme && er > 0) ? "flex" : "none";
-            document.getElementById("salaryPreviewEE").textContent = ee.toFixed(2);
-            document.getElementById("salaryPreviewER").textContent = er.toFixed(2);
+            document.getElementById("salaryPreviewEE").textContent = formatCurrency(ee, currency);
+            document.getElementById("salaryPreviewER").textContent = formatCurrency(er, currency);
         }
 
         // Saves 1–3 ordinary Income transactions (Bank leg always; EE/ER legs only when a
         // scheme is chosen and that amount is > 0) sharing a generated salaryGroupId — purely
         // for traceability, same pattern as Split Expenses' splitGroupId. Every existing
         // balance/report calculation already handles a plain Income record correctly, so
-        // nothing downstream needed to change to support this.
+        // nothing downstream needed to change to support this. All three legs are recorded in
+        // the form's own selected Currency (not necessarily each account's native currency) —
+        // computeAccountBalances() already converts a transaction's currency into its account's
+        // own currency at the live FX rate when they differ, same as every other Income/Expense
+        // entry in the app, so a currency mismatch here is handled exactly like anywhere else.
         async function handleSaveSalaryRecord() {
             const date = document.getElementById("salaryDate").value;
             const desc = document.getElementById("salaryDesc").value.trim();
@@ -6227,6 +6249,7 @@
             const scheme = document.getElementById("salaryScheme").value;
             const hasScheme = scheme === "epf" || scheme === "cpf";
             const contribAccountId = document.getElementById("salaryContribAccount").value;
+            const currency = document.getElementById("salaryCurrency").value;
             const gross = parseFloat(document.getElementById("salaryGross").value);
             const ee = hasScheme ? (parseFloat(document.getElementById("salaryEEAmount").value) || 0) : 0;
             const er = hasScheme ? (parseFloat(document.getElementById("salaryERAmount").value) || 0) : 0;
@@ -6239,14 +6262,11 @@
             if (ee < 0 || er < 0) { alert("EE/ER amounts can't be negative."); return; }
             if (ee > gross) { alert("EE contribution can't be greater than Gross Salary."); return; }
 
-            const accounts = await readAllDB(STORES.ACCOUNTS);
-            const bankAcc = accounts.find(a => a.id === bankAccountId);
-            const contribAcc = accounts.find(a => a.id === contribAccountId);
             const netAmount = gross - ee;
             const salaryGroupId = "salary_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
 
             const baseRecord = {
-                type: "income", desc, date, notes: null, payee: null, checked: false, image: null,
+                type: "income", desc, date, currency, notes: null, payee: null, checked: false, image: null,
                 fdReferenceNo: null, fdStartDate: null, fdTenureMonths: null, fdInterestRate: null, fdMaturityDate: null,
                 manualFxRate: null, destAmount: null, dest: null, salaryGroupId
             };
@@ -6254,18 +6274,18 @@
             try {
                 if (netAmount > 0) {
                     await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
-                        amount: netAmount, currency: bankAcc.currency, src: bankAccountId, cat: "Salary"
+                        amount: netAmount, src: bankAccountId, cat: "Salary"
                     }));
                 }
                 if (hasScheme && ee > 0) {
                     await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
-                        amount: ee, currency: contribAcc.currency, src: contribAccountId,
+                        amount: ee, src: contribAccountId,
                         cat: scheme === "epf" ? "EPF Contrib.(EE)" : "CPF Contrib.(EE)"
                     }));
                 }
                 if (hasScheme && er > 0) {
                     await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
-                        amount: er, currency: contribAcc.currency, src: contribAccountId,
+                        amount: er, src: contribAccountId,
                         cat: scheme === "epf" ? "EPF Contrib.(ER)" : "CPF Contrib.(ER)"
                     }));
                 }
@@ -8690,6 +8710,7 @@
             onCategoryFormTypeChange: () => populateCategoryParentSelect(),
             handleSalaryMemberChange: () => handleSalaryMemberChange(),
             handleSalarySchemeChange: () => handleSalarySchemeChange(),
+            handleSalaryCurrencyChange: () => handleSalaryCurrencyChange(),
         };
 
         const INPUT_ACTIONS = {

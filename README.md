@@ -1765,3 +1765,41 @@ reflected as growing the actual EPF/CPF asset the user meant to track.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v107.
+
+## v108: Salary Entry — Currency auto-set by Scheme (MYR for EPF,
+SGD for CPF)
+
+- **New Currency selector** in the Salary Entry modal header (same
+  compact style/position as the main transaction form's own
+  `txCurrency` selector) — populated from every currency in
+  `fxRates`, defaulting to the app's base currency when the modal
+  opens.
+- **Auto-set by Scheme**: picking "EPF (Malaysia)" sets Currency to
+  MYR; picking "CPF (Singapore)" sets Currency to SGD (only if that
+  currency exists in Currency Settings — silently left alone
+  otherwise, rather than erroring). Switching to "None" doesn't force
+  a currency change, since a plain salary entry has no single natural
+  currency to default to. The user can still override the auto-set
+  value by hand afterward — it's a default, not a lock.
+- **All three legs (Bank / EE / ER) now save using this one selected
+  Currency**, not each account's own native currency as before —
+  matches how a real payslip is issued in one currency regardless of
+  which account it's routed into. No new conversion logic needed:
+  `computeAccountBalances()` already converts a transaction's
+  currency into its account's own currency at the live FX rate
+  whenever they differ (the same mechanism every ordinary Income/
+  Expense entry already relies on), so a Salary entry landing in an
+  account of a different currency just works, exactly like the main
+  transaction form's own currency-vs-account-currency handling.
+- **Preview box now shows proper currency symbols** (`RM` for MYR,
+  `S$` for SGD, etc. via the existing `formatCurrency()`/
+  `currencySymbols` map) instead of bare numbers, and re-renders
+  whenever Currency, Scheme, or any amount field changes.
+- No IndexedDB schema/version changes — `currency` was already a
+  field on every transaction record; this only changes what value the
+  Salary Entry form puts there. Verified with `node --check` plus the
+  data-click/data-change/data-input ↔ handler and `getElementById` ↔
+  element-id cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v108.
