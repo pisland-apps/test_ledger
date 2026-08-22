@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v92";
+        const APP_VERSION = "v93";
         const APP_VERSION_DATE = "2026-08-22";
 
         // Runs immediately as this script executes (it's the last element in <body>, so the
@@ -6752,7 +6752,15 @@
                 // v91: skip non-representative Split Expense group siblings for display — the
                 // group collapses into one row keyed on its lowest-id member. Balance/report
                 // totals above are untouched since they already ran for every individual record.
-                if (isBound && t.splitGroupId) {
+                // v93 fix: this must NOT apply when viewing one specific category
+                // (activeCategoryView !== "all") — isBound there already means "this exact record
+                // is the split part belonging to the category being viewed", so hiding it again
+                // because some OTHER part of the group (a different category) happens to be the
+                // group's rep made every non-rep category's own drill-down page show empty/"No
+                // matches found" even though the transaction was correctly counted in every total.
+                // Collapsing to one row only makes sense for views spanning multiple categories at
+                // once (All / account / type), where a combined row is a helpful summary.
+                if (isBound && t.splitGroupId && activeCategoryView === "all") {
                     const info = getSplitGroupInfo(t, txs);
                     if (info && t.id !== info.repId) isBound = false;
                 }
