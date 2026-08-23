@@ -789,6 +789,12 @@
                 box-shadow: none;
                 border-right: 1.5px solid var(--border-color);
             }
+            /* On this wider layout the sidebar above is permanently docked (not a drawer that
+               opens/closes) and sits at z-index 901 — far above the print FAB's z-index 48 — so
+               its left:20px position from the base .print-fab-btn rule would render it directly
+               underneath the sidebar, completely covered and unclickable. Shift it past the
+               sidebar's own width (336px, matching body's margin-left right above) instead. */
+            .print-fab-btn { left: 356px; }
         }
 
         .ledger-container {
