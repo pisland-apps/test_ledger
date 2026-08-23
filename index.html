@@ -603,17 +603,21 @@
 
         /* Global "print this page" FAB — present on every page (workspace, ledger, all reports,
            settings, etc.) so printing/saving-to-PDF is always one tap away, rather than being a
-           feature bolted onto just one or two report pages. Sits low-right, below the
-           back-to-top button so the two never overlap even when both happen to be visible.
-           Hidden automatically while the lock screen is up or a modal sheet is open (see the
-           sibling-combinator rules right below) — both handled in pure CSS, no extra JS needed
-           since #lockOverlay/.modal and this button are all direct children of <body> in that
-           order. It's also just a <button>, so the blanket `button { display: none }` print rule
-           further down hides it from the printed output itself automatically. */
+           feature bolted onto just one or two report pages. Placed bottom-LEFT (mirroring the
+           "+" add FAB's vertical position on the right) rather than stacked on the right side —
+           several pages (Accounts, Ledger, Fund Activity, Members) have their own bottom-right
+           "+" FAB at z-index 50, and a back-to-top button and quick-add sheet also live on that
+           same right edge, so the right side is already crowded; the left edge is completely
+           free of fixed-position UI in every page. Hidden automatically while the lock screen is
+           up or a modal sheet is open (see the sibling-combinator rules right below) — both
+           handled in pure CSS, no extra JS needed since #lockOverlay/.modal and this button are
+           all direct children of <body> in that order. It's also just a <button>, so the blanket
+           `button { display: none }` print rule further down hides it from the printed output
+           itself automatically. */
         .print-fab-btn {
             position: fixed;
-            right: 20px;
-            bottom: 38px;
+            left: 20px;
+            bottom: 24px;
             width: 44px;
             height: 44px;
             border-radius: 50%;
