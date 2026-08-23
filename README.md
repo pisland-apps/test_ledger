@@ -1850,3 +1850,197 @@ illegible on a phone and not controllable from CSS.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v109.
+
+## v110: Salary Entry — new Category field (pick a Salary Subcategory
+directly, e.g. "Salary -VF")
+
+Reported via screenshots: the Bank leg was always hardcoded to save
+under the plain "Salary" category, with no way to pick one of the
+user's own Subcategories (e.g. "Salary -VF" / "Salary -RS", created to
+track each spouse's salary separately) at entry time — forcing a
+manual re-categorize of every saved entry afterward (Ledger →
+tap the transaction → Edit → change Category by hand).
+
+- **New "Category" field** in the Salary Entry modal, right after
+  Bank Account. Uses the exact same `buildCategoryOptionsHTML()`
+  builder the main Income/Expense/Transfer form's own Category select
+  uses — so it lists every income category exactly like that form
+  does (Main Categories with Subcategories grouped under an
+  `<optgroup>`, "Salary (General)" as the parent's own option, plus
+  every Subcategory like "Salary -VF"/"Salary -RS" alongside it).
+  Defaults to "Salary" when the modal opens, but any income category
+  can be picked directly, not just something under Salary.
+- **The Bank leg is now saved with whatever Category is selected**,
+  instead of the hardcoded literal `"Salary"` string. The EE/ER legs
+  are unaffected — those still follow the Scheme selector
+  ("EPF Contrib.(EE)"/"(ER)" or "CPF Contrib.(EE)"/"(ER)"), since
+  there's no per-member EPF/CPF Subcategory need reported yet.
+- Left deliberately manual rather than auto-matched to the selected
+  Member — Subcategory naming conventions vary too much (initials vs.
+  full name vs. nicknames) for a safe automatic guess, so this
+  mirrors how the ordinary Income form's own Category field already
+  behaves: always a plain, explicit pick.
+- No IndexedDB schema/version changes — `cat` was already a plain
+  string field on every transaction record; this only changes what
+  value the Salary Entry form puts there, and only for the Bank leg.
+  Verified with `node --check` plus the data-click/data-change/
+  data-input ↔ handler and `getElementById` ↔ element-id
+  cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v110.
+
+## v111: fixed — Salary Entry's Category field wasn't showing "Salary"'s
+Subcategories (e.g. "Salary -VF"/"Salary -RS")
+
+Root cause, confirmed against `buildCategoryOptionsHTML()`: it only
+groups a Subcategory under its Main Category when the Subcategory's
+own name is present in the caller-supplied `namesToInclude` list (this
+is what lets a renamed/deleted category still show up correctly on
+its own existing transaction elsewhere in the app). v110 passed a
+literal `["Salary"]` as that list — covering the Main Category itself,
+but not any of its Subcategories — so every Subcategory got silently
+filtered out of the dropdown, leaving "Salary" rendered as a single
+flat option with nothing nested under it (see screenshot: the same
+dropdown that correctly showed "Salary" → "Salary (General)"/
+"Salary -RS"/"Salary -VF" on the ordinary Edit Ledger Entry form
+showed no Subcategories at all here).
+
+- **Fix**: `openSalaryEntryForm()` now passes every existing income
+  category name (`dynamicCategories.filter(c => c.type === "income")
+  .map(c => c.name)`) as `namesToInclude` — the exact same convention
+  the main transaction form's own Category select already uses via
+  its `currentCats` variable — so `buildCategoryOptionsHTML()` now
+  correctly includes every Subcategory that exists, not just Main
+  Categories.
+- No IndexedDB schema/version changes — one-line fix to which names
+  get passed into an existing, unchanged builder function. Verified
+  with `node --check` plus the data-click/data-change/data-input ↔
+  handler and `getElementById` ↔ element-id cross-reference scripts
+  (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v111.
+
+## v112: new "Default Receive Account" setting — applies to both the
+ordinary Income form and Salary Entry's Bank Account
+
+Previously "Default Payment Account" pre-selected the account field
+on every new transaction type (Income, Expense, and Transfer's "from"
+side) — not just Expenses, despite the name. That meant incoming
+money (Income entries, and Salary Entry's Bank Account) always
+defaulted to whatever account was set up for outgoing spending, which
+often isn't the same account a household actually receives salary
+into.
+
+- **New "Default Receive Account" selector** on the Accounts page,
+  right below Default Payment Account — same style/behavior
+  (`populateDefaultReceiveAccountSelect()`/`saveDefaultReceiveAccount()`
+  mirror the existing Default Payment Account functions exactly), and
+  hidden alongside it whenever a sidebar shortcut narrows the Accounts
+  list to one group/sub-group (same convention as v62's
+  `defaultPaymentAccountSection`/`Row` hiding).
+- **Ordinary Income form**: `openTransactionForm()`'s pre-select logic
+  now picks Default Receive Account for `type === "income"`, and keeps
+  using Default Payment Account for Expense and Transfer's "from"
+  side — a one-line branch (`type === "income" ? defaultReceiveAccount
+  : defaultPaymentAccount`) instead of always using the payment one.
+- **Salary Entry's Bank Account** now defaults to Default Receive
+  Account when the modal opens (Member starts on "All Members", so
+  this is the only default in play at that point) — picking a
+  specific Member afterward can still nudge it further via the
+  existing member-specific smart-default from v107.
+- **New setting persisted** as `defaultReceiveAccount` in the SETTINGS
+  store (same `{key, value}` shape as every other preference here) —
+  loaded on bootstrap, and already covered by the full-SETTINGS-store
+  backup/restore dump from v65 with no format change; only the
+  restore-side switch needed a new `case` to update the in-memory
+  variable when importing an older backup that predates this setting
+  (harmlessly absent — restores fine without it, just no default).
+- No IndexedDB schema/version bump — a new key in an existing
+  key/value store. Verified with `node --check` plus the data-click/
+  data-change/data-input ↔ handler and `getElementById` ↔ element-id
+  cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v112.
+
+## v113: fixed — Salary Entry's Default Receive Account was getting
+overwritten the moment a specific Member was picked
+
+Reported via screenshots: with Member = "All Members", Bank Account
+correctly defaulted to the configured Default Receive Account (PBB
+Current A/c). But switching Member to "LIM VF" immediately overwrote
+it with that member's own solo Bank/Cash account (RHB Current A/c) —
+silently discarding the explicit Default Receive Account setting.
+
+- **Root cause**: `handleSalaryMemberChange()`'s per-member
+  smart-default (added in v107, to help someone bank into their own
+  solo account when no shared default was configured) ran
+  unconditionally, with no awareness of Default Receive Account
+  (added later, in v112) — so it always overwrote whatever
+  `openSalaryEntryForm()` had just defaulted Bank Account to.
+- **Fix**: the per-member solo-account guess is now only applied
+  when Default Receive Account is NOT configured (or points at an
+  account that no longer exists). Default Receive Account — an
+  explicit, deliberate setting on the Accounts page — now always
+  wins over the member-specific guess, exactly matching how it
+  already behaves with Member left on "All Members". The EPF/CPF
+  Account per-member default is unaffected — that one has no
+  Default-Account-style setting to defer to.
+- No IndexedDB schema/version changes — pure default-selection logic
+  fix. Verified with `node --check` plus the data-click/data-change/
+  data-input ↔ handler and `getElementById` ↔ element-id
+  cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v113.
+
+## v114: fixed a latent bug — renaming a seeded default category (e.g.
+"Rental Income" → "Rental Income -Warehouse") would have silently
+recreated a duplicate under the old name on next launch
+
+Reported via screenshot: "Rental Income" appeared in the Default
+Income Category dropdown but not on the Categories management page.
+Explanation, same underlying mechanism as the original Freelance/
+Investments/Salary case earlier in this project: "Rental Income" is
+one of the literal names baked into `DEFAULT_CATEGORIES`, and
+`buildCategoryOptionsHTML()`'s dropdown always includes every
+`DEFAULT_CATEGORIES` name as a legacy/fallback option even when no
+real category record matches it by that exact name anymore — which,
+here, is exactly what happened: the user's real category (still the
+very same record, same id) had been renamed to "Rental Income
+-Warehouse", so nothing in Categories is literally named "Rental
+Income" anymore, yet the dropdown still shows it as an unmatched
+leftover option (harmless on its own — it's just there so any old
+transaction still filed under the literal string "Rental Income"
+keeps a dropdown entry to display against).
+
+- **The actually risky part, now fixed**: `ensureDefaultCategories()`
+  (idempotent, runs every launch) previously matched an existing
+  category purely by **current name** — so the moment "Rental Income"
+  no longer matched by name (because the user renamed it), the next
+  launch would treat it as "missing" and silently insert a brand-new
+  duplicate `cat_rental_income` category, re-fragmenting the user's
+  transaction history across two "Rental Income"-ish categories they
+  never asked for.
+- **Fix**: the missing-category check now also matches by the
+  **deterministic id** a `DEFAULT_CATEGORIES` entry would have been
+  seeded with (`slugify(c.name)`) — since renaming a category via Edit
+  Category keeps its original `id`, checking the id (not just the
+  current name) correctly recognizes "this default was already seeded
+  once, just renamed since" and skips re-inserting it. This
+  generalizes the same protection the existing one-off
+  `legacyBeting`/`legacyRentingExpenses` migrations already used
+  (matching by id, not name) to **every** `DEFAULT_CATEGORIES` entry,
+  present or future — no new one-time migration needed each time a
+  user renames a starter category.
+- No IndexedDB schema/version changes — matching-logic fix only, and
+  nothing to undo: since the duplicate hadn't actually been created
+  yet (this instance was caught before a reload), there's no cleanup
+  needed for existing data. Verified with `node --check` plus the
+  data-click/data-change/data-input ↔ handler and `getElementById` ↔
+  element-id cross-reference scripts (0 missing, 0 dupes).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v114.

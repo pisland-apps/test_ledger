@@ -601,6 +601,44 @@
         .back-to-top-btn.visible { display: flex; }
         .back-to-top-btn:active { background: #f1f5f9; }
 
+        /* Global "print this page" FAB — present on every page (workspace, ledger, all reports,
+           settings, etc.) so printing/saving-to-PDF is always one tap away, rather than being a
+           feature bolted onto just one or two report pages. Sits low-right, below the
+           back-to-top button so the two never overlap even when both happen to be visible.
+           Hidden automatically while the lock screen is up or a modal sheet is open (see the
+           sibling-combinator rules right below) — both handled in pure CSS, no extra JS needed
+           since #lockOverlay/.modal and this button are all direct children of <body> in that
+           order. It's also just a <button>, so the blanket `button { display: none }` print rule
+           further down hides it from the printed output itself automatically. */
+        .print-fab-btn {
+            position: fixed;
+            right: 20px;
+            bottom: 38px;
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            background: #fff;
+            color: var(--primary);
+            border: 1.5px solid var(--border-color);
+            font-size: 1.2rem;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+            cursor: pointer;
+            z-index: 48;
+        }
+        .print-fab-btn:active { background: #f1f5f9; }
+        #lockOverlay:not(.hidden) ~ .print-fab-btn { display: none; }
+        .modal.active ~ .print-fab-btn { display: none; }
+
+        /* Header block injected at the top of whichever page is being printed (see
+           printCurrentApp() in ledger.js) — invisible on-screen, only switched on inside the
+           @media print block below, so a printed page/PDF is self-labelled with what it is and
+           when it was produced without permanently cluttering the on-screen UI with it. */
+        #printHeader { display: none; }
+
         /* Quick-add type picker used on the Account Activity page's "+" FAB (v34). A lightweight
            popover, not a full history-tracked modal — avoids the modal system's history-stack
            bookkeeping since it only ever leads into openTransactionForm(), which pushes its own
@@ -992,6 +1030,61 @@
         }
         .export-hint-text.hidden { display: none; }
         #accountsPageFilterHint.hidden { display: none; }
+
+        /* ===== Print (printCurrentApp() in ledger.js drives this) =====
+           Goal: printing/"Save as PDF" from ANY page in the app — dashboard, ledger, every
+           report, settings, member pages, etc. — produces a clean document containing just that
+           page's content: no sidebar, no nav chrome, no buttons, no modals, no lock screen, no
+           mobile-width column squeezed into the middle of the paper. */
+        @media print {
+            /* Chrome-only elements that only make sense on a touch screen — hidden wholesale
+               rather than page-by-page, since every one of these is purely for interaction and
+               never carries printable data itself (see the ledger-row markup, which uses plain
+               div/span elements for actual transaction data specifically, so this blanket
+               button rule can never hide real content, only controls). */
+            button, input[type="file"], .sidebar-overlay, .sidebar-drawer, #lockOverlay,
+            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet {
+                display: none !important;
+            }
+            html, body {
+                background: #fff !important;
+                max-width: 100% !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            /* Only the currently active page prints — every other .page is already display:none
+               via .page.hidden; this just reaffirms it and strips the fixed/mobile-app framing
+               (max-width column, bottom padding reserved for a FAB, etc.) from the one that's
+               left so it reads as a normal printable document. */
+            .page.hidden { display: none !important; }
+            .page:not(.hidden) {
+                display: block !important;
+                position: static !important;
+                max-width: 100% !important;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            #printHeader {
+                display: block !important;
+                margin-bottom: 16px;
+                padding-bottom: 10px;
+                border-bottom: 2px solid #0f172a;
+            }
+            #printHeader .print-header-title { font-size: 1.15rem; font-weight: 800; color: #0f172a; }
+            #printHeader .print-header-sub { font-size: 0.78rem; color: #475569; margin-top: 2px; }
+            /* Cards/rows/summary figures keep a plain 1px border instead of their on-screen
+               shadow (shadows either vanish or print as ugly grey smudges) and are asked not to
+               split across a page break where avoidable. */
+            * { box-shadow: none !important; text-shadow: none !important; }
+            .card, .ledger-item, .config-item, .statement-row, .statement-card,
+            .member-networth-row, .net-savings-banner, .fund-subrow {
+                border: 1px solid #cbd5e1 !important;
+                break-inside: avoid;
+            }
+            h1, h2, h3, .section-header { break-after: avoid; }
+            a[href]::after { content: none !important; }
+        }
     </style>
 </head>
 <body>
@@ -1319,6 +1412,13 @@
         </div>
         <div class="form-row" id="defaultPaymentAccountRow" style="margin-bottom:18px;">
             <select id="defaultPaymentAccountSelect" class="form-input" data-change="saveDefaultPaymentAccount"></select>
+        </div>
+
+        <div class="section-header" id="defaultReceiveAccountSection">
+            <span class="section-title">Default Receive Account</span>
+        </div>
+        <div class="form-row" id="defaultReceiveAccountRow" style="margin-bottom:18px;">
+            <select id="defaultReceiveAccountSelect" class="form-input" data-change="saveDefaultReceiveAccount"></select>
         </div>
 
         <div class="section-header">
@@ -2557,6 +2657,11 @@
                 <select id="salaryBankAccount" style="display:none;"></select>
             </div>
 
+            <div class="form-row">
+                <label>Category</label>
+                <select id="salaryCategory" class="form-input"></select>
+            </div>
+
             <div class="form-row" id="salaryContribAccountRow" style="display:none;">
                 <label id="salaryContribAccountLabel">EPF / KWSP Account</label>
                 <button type="button" id="salaryContribAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryContribAccount" data-title="Select EPF/CPF Account">
@@ -2686,6 +2791,11 @@
             </div>
         </div>
     </div>
+
+    <!-- Global "print this page" button — deliberately placed last in <body> (after #lockOverlay
+         and every .modal) purely so the CSS sibling rules on .print-fab-btn above can hide it
+         while locked / while a modal sheet is open without needing any JS to track that state. -->
+    <button type="button" class="print-fab-btn" data-click="printCurrentApp" aria-label="Print this page" title="Print this page">🖨️</button>
 
     <!-- ================= ENGINE CONTROLLERS ================= -->
     <script src="ledger.js"></script>

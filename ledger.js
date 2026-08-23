@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v109";
+        const APP_VERSION = "v114";
         const APP_VERSION_DATE = "2026-08-22";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -832,6 +832,7 @@
         // Account pre-selected in the "Account" field whenever a NEW transaction entry is opened
         // (never applied when editing). Stored in the SETTINGS store, "" means no default set.
         let defaultPaymentAccount = "";
+        let defaultReceiveAccount = "";
 
         // Built-in starter categories (auto-provisioned if missing; user can still
         // rename/remove via the Categories manager same as any custom category).
@@ -1491,6 +1492,93 @@
             updateSidebarActiveState();
         }
 
+        // Human-readable title for whichever page is currently on screen — used for the printed
+        // document's own header line and as the browser tab/PDF filename while printing. Pages
+        // with a dynamic on-screen heading (an account's Ledger, a Fund's Activity, a Member's
+        // page, etc.) read that heading straight off the DOM so the printed title always matches
+        // what the user was actually looking at, instead of a generic page-type label.
+        function getActivePageTitle(pageId) {
+            switch (pageId) {
+                case "page-workspace": return "Dashboard — Net Worth Overview";
+                case "page-ledger": return document.getElementById("ledgerTargetTitle")?.textContent || "Account Ledger";
+                case "page-fundactivity": return document.getElementById("fundActivityTitle")?.textContent || "Fund Activity";
+                case "page-currencyactivity": return document.getElementById("currencyActivityTitle")?.textContent || "Currency Activity";
+                case "page-accounts": return "Financial Accounts";
+                case "page-categories": return "Categories";
+                case "page-backup": return "Export & Import";
+                case "page-autolock": return "Auto-Lock Settings";
+                case "page-database": return "Database";
+                case "page-spending-breakdown": return "Spending Breakdown";
+                case "page-income-breakdown": return "Income Breakdown";
+                case "page-savings": return "Savings Statement";
+                case "page-portfolio-report": return "Unit Trust Portfolio";
+                case "page-owner-networth-report": return "Financial Assets vs Real Estate";
+                case "page-datasecurity": return "Settings";
+                case "page-navupdate": return "Daily NAV Update";
+                case "page-members": return "Manage Members";
+                case "page-member": return document.getElementById("memberPageTitle")?.textContent || "Member";
+                default: return "Ledger";
+            }
+        }
+
+        // Prints (or "Save as PDF"s) whichever page is currently visible. Works the same way on
+        // every page in the app — there's no per-page print button/logic, just this one entry
+        // point wired to the single floating 🖨 button that's present everywhere (see
+        // .print-fab-btn in index.html) — the @media print CSS block does the work of hiding
+        // chrome and showing only the active .page.
+        async function printCurrentApp() {
+            const activePageId = APP_PAGE_IDS.find(id => {
+                const el = document.getElementById(id);
+                return el && !el.classList.contains("hidden");
+            });
+            if (!activePageId) { window.print(); return; }
+
+            const activeEl = document.getElementById(activePageId);
+            const title = getActivePageTitle(activePageId);
+
+            // The Ledger page paginates long transaction histories behind a "Load more" button
+            // (ledgerRenderLimit) so scrolling stays fast on a phone — but a printed statement
+            // should include everything, not just whatever happened to be loaded on screen yet.
+            // Temporarily lift that limit for the print, then restore it afterwards so normal
+            // on-screen scrolling/pagination behavior is unaffected.
+            const liftedLedgerLimit = (activePageId === "page-ledger" && ledgerRenderLimit < Infinity);
+            if (liftedLedgerLimit) {
+                ledgerRenderLimit = Infinity;
+                await renderApp();
+            }
+
+            const header = document.createElement("div");
+            header.id = "printHeader";
+            header.innerHTML = `
+                <div class="print-header-title">💰 My Ledger</div>
+                <div class="print-header-sub">${escapeHtml(title)} · Printed ${new Date().toLocaleString()}</div>
+            `;
+            activeEl.prepend(header);
+
+            const prevDocTitle = document.title;
+            document.title = `Ledger - ${title}`;
+
+            let cleanedUp = false;
+            const cleanup = () => {
+                if (cleanedUp) return;
+                cleanedUp = true;
+                clearTimeout(fallbackTimer);
+                header.remove();
+                document.title = prevDocTitle;
+                if (liftedLedgerLimit) {
+                    ledgerRenderLimit = LEDGER_PAGE_SIZE;
+                    renderApp();
+                }
+            };
+            // afterprint covers both "Print" and "Cancel" in every modern browser, but a
+            // fallback timeout guards against the rare browser that never fires it (some older
+            // WebViews) so the temporary header/title/expanded list can't get stuck.
+            window.addEventListener("afterprint", cleanup, { once: true });
+            const fallbackTimer = setTimeout(cleanup, 60000);
+
+            window.print();
+        }
+
         function navigateToLedgerPage(accountId, backTarget = "workspace") {
             workspaceScrollY = window.scrollY;
             activeLedgerAccountView = accountId;
@@ -1968,7 +2056,8 @@
         }
 
         // Fills the Default Payment Account dropdown with every account, and selects whatever is
-        // currently saved as the default.
+        // currently saved as the default. Used to pre-select the account field on new Expense
+        // and Transfer (from-side) entries — see openTransactionForm().
         async function populateDefaultPaymentAccountSelect() {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const select = document.getElementById("defaultPaymentAccountSelect");
@@ -1979,6 +2068,24 @@
         async function saveDefaultPaymentAccount() {
             defaultPaymentAccount = document.getElementById("defaultPaymentAccountSelect").value;
             await writeDB(STORES.SETTINGS, { key: "defaultPaymentAccount", value: defaultPaymentAccount });
+        }
+
+        // Same idea as populateDefaultPaymentAccountSelect(), but for money coming IN — used to
+        // pre-select the account field on new Income entries (see openTransactionForm()) and the
+        // Bank Account field in Salary Entry (see openSalaryEntryForm()). Kept as a separate
+        // setting from Default Payment Account since a household very often routes outgoing
+        // spending and incoming salary through different accounts on purpose (e.g. a joint
+        // account for salary/bills, a personal account for discretionary spending).
+        async function populateDefaultReceiveAccountSelect() {
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const select = document.getElementById("defaultReceiveAccountSelect");
+            select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))} (${escapeHtml(a.currency || a.type)})</option>`).join("");
+            select.value = accounts.some(a => a.id === defaultReceiveAccount) ? defaultReceiveAccount : "";
+        }
+
+        async function saveDefaultReceiveAccount() {
+            defaultReceiveAccount = document.getElementById("defaultReceiveAccountSelect").value;
+            await writeDB(STORES.SETTINGS, { key: "defaultReceiveAccount", value: defaultReceiveAccount });
         }
 
         let multiOpeningRowCounter = 0;
@@ -2456,6 +2563,7 @@
 
         async function renderAccountsPage() {
             await populateDefaultPaymentAccountSelect();
+            await populateDefaultReceiveAccountSelect();
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
             // Fetched once up front (not per-account inside the loop below) and grouped by
             // accountId, so each Unit Trust account row can list its individual fund holdings
@@ -2498,6 +2606,8 @@
             // unconditionally at the top of every Accounts view.
             document.getElementById("defaultPaymentAccountSection").classList.toggle("hidden", !!filter);
             document.getElementById("defaultPaymentAccountRow").classList.toggle("hidden", !!filter);
+            document.getElementById("defaultReceiveAccountSection").classList.toggle("hidden", !!filter);
+            document.getElementById("defaultReceiveAccountRow").classList.toggle("hidden", !!filter);
 
             let html = "";
             let lastGroup = null;
@@ -4774,10 +4884,21 @@
                 }
             }
 
-            const existingNames = new Set(existing.map(c => c.name.toLowerCase().trim()));
-            const missing = DEFAULT_CATEGORIES.filter(c => !existingNames.has(c.name.toLowerCase()));
-
             const slugify = s => "cat_" + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+
+            // Matched by EITHER current name OR the deterministic id a DEFAULT_CATEGORIES entry
+            // would have been seeded with (slugify(c.name)) — not name alone. Name-only matching
+            // meant renaming a seeded category away from its original DEFAULT_CATEGORIES name
+            // (e.g. "Rental Income" → "Rental Income -Warehouse") made it look "missing" on the
+            // very next launch, silently recreating a duplicate under the old name — exactly the
+            // kind of unwanted resurrection the id-based "legacyBeting"/"legacyRentingExpenses"
+            // migrations above were already special-cased to prevent, just for those two specific
+            // renames. Checking the seeded id generalizes that protection to every
+            // DEFAULT_CATEGORIES entry, present or future, without needing a new one-time
+            // migration each time a user renames one.
+            const existingIds = new Set(existing.map(c => c.id));
+            const existingNames = new Set(existing.map(c => c.name.toLowerCase().trim()));
+            const missing = DEFAULT_CATEGORIES.filter(c => !existingNames.has(c.name.toLowerCase()) && !existingIds.has(slugify(c.name)));
 
             // v101: two passes so a Subcategory's `parent` name (see DEFAULT_CATEGORIES comment)
             // can always be resolved to an id — Main Categories first (any entry with no `parent`,
@@ -5011,12 +5132,17 @@
                 // Split Expenses only makes sense for a brand-new Income/Expense entry.
                 document.getElementById("txSplitWrap").style.display = (type === "transfer") ? "none" : "block";
 
-                // Pre-select the user's default payment account, if one is set and still exists —
-                // new entries only, never when editing (handled above via tx.src). A preset
-                // account passed in (e.g. opening this form via the "+" FAB on that account's own
-                // Activity page — see quickAddChooseType()) takes priority over the stored default.
-                if (defaultPaymentAccount && accounts.some(a => a.id === defaultPaymentAccount)) {
-                    srcSelect.value = defaultPaymentAccount;
+                // Pre-select the user's default account, if one is set and still exists — new
+                // entries only, never when editing (handled above via tx.src). Income uses
+                // Default Receive Account; Expense and Transfer's "from" side use Default
+                // Payment Account — kept as two separate settings since a household very often
+                // routes outgoing spending and incoming salary through different accounts on
+                // purpose. A preset account passed in (e.g. opening this form via the "+" FAB on
+                // that account's own Activity page — see quickAddChooseType()) takes priority
+                // over either stored default.
+                const defaultSrcAccount = type === "income" ? defaultReceiveAccount : defaultPaymentAccount;
+                if (defaultSrcAccount && accounts.some(a => a.id === defaultSrcAccount)) {
+                    srcSelect.value = defaultSrcAccount;
                 }
                 if (presetSrcAccountId && accounts.some(a => a.id === presetSrcAccountId)) {
                     srcSelect.value = presetSrcAccountId;
@@ -6132,7 +6258,20 @@
             currSelect.innerHTML = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
             currSelect.value = baseCurrency;
 
+            const catSelect = document.getElementById("salaryCategory");
+            catSelect.innerHTML = buildCategoryOptionsHTML("income", dynamicCategories.filter(c => c.type === "income").map(c => c.name));
+            catSelect.value = "Salary";
+
             populateSalaryAccountSelects(accounts);
+            // Bank Account defaults to Default Receive Account, if one is set and still exists —
+            // same setting the ordinary Income form now also defaults to (see openTransactionForm()).
+            // Member defaults to "All Members" when the form first opens, so this is the only
+            // default in play at this point; picking a specific Member afterward may still nudge
+            // it further via handleSalaryMemberChange()'s own smart-default logic.
+            if (defaultReceiveAccount && accounts.some(a => a.id === defaultReceiveAccount)) {
+                document.getElementById("salaryBankAccount").value = defaultReceiveAccount;
+                syncAccountPickerButtonText("salaryBankAccount");
+            }
             handleSalarySchemeChange();
             recalcSalaryPreview();
             openModal("salaryModal");
@@ -6165,23 +6304,32 @@
         // Re-picking a Member never narrows either dropdown (see populateSalaryAccountSelects) —
         // it only nudges the two selects toward a sensible default for that person, so the full
         // account list (including joint accounts) stays reachable either way: Bank Account
-        // defaults to their own solely-owned Bank/Cash account if one exists; EPF/CPF Account
-        // defaults to any account under the Investment group's KWSP or CPF sub-group they're an
-        // owner of (solo OR joint, since a household's EPF/CPF pot is sometimes filed jointly).
-        // Left alone (no default change) when no match is found — "All Members" or a member with
-        // no matching account never overwrites whatever the user already picked by hand.
+        // defaults to their own solely-owned Bank/Cash account if one exists (but ONLY when no
+        // Default Receive Account is configured — see below); EPF/CPF Account defaults to any
+        // account under the Investment group's KWSP or CPF sub-group they're an owner of (solo
+        // OR joint, since a household's EPF/CPF pot is sometimes filed jointly). Left alone (no
+        // default change) when no match is found — "All Members" or a member with no matching
+        // account never overwrites whatever the user already picked by hand.
         async function handleSalaryMemberChange() {
             const memberId = document.getElementById("salaryMemberSelect").value;
             if (memberId === "all") return;
             const accounts = await readAllDB(STORES.ACCOUNTS);
 
-            const soloBank = accounts.find(a =>
-                Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberId &&
-                (a.group || DEFAULT_ACCOUNT_GROUP) === "Bank/Cash"
-            );
-            if (soloBank) {
-                document.getElementById("salaryBankAccount").value = soloBank.id;
-                syncAccountPickerButtonText("salaryBankAccount");
+            // Default Receive Account is an explicit, deliberate setting (Sidebar ▸ Accounts) —
+            // it should win over this per-member guess, not get silently overwritten by it.
+            // openSalaryEntryForm() already applies it once when the modal opens (while Member is
+            // still "All Members"); this only re-nudges Bank Account toward the member's own solo
+            // account when there's no Default Receive Account configured to defer to instead.
+            const hasDefaultReceive = defaultReceiveAccount && accounts.some(a => a.id === defaultReceiveAccount);
+            if (!hasDefaultReceive) {
+                const soloBank = accounts.find(a =>
+                    Array.isArray(a.memberIds) && a.memberIds.length === 1 && a.memberIds[0] === memberId &&
+                    (a.group || DEFAULT_ACCOUNT_GROUP) === "Bank/Cash"
+                );
+                if (soloBank) {
+                    document.getElementById("salaryBankAccount").value = soloBank.id;
+                    syncAccountPickerButtonText("salaryBankAccount");
+                }
             }
 
             const contribAcc = accounts.find(a =>
@@ -6260,10 +6408,14 @@
         // computeAccountBalances() already converts a transaction's currency into its account's
         // own currency at the live FX rate when they differ, same as every other Income/Expense
         // entry in the app, so a currency mismatch here is handled exactly like anywhere else.
+        // The Bank leg's category comes from the Category select (defaults to "Salary", but any
+        // of its Subcategories — e.g. a per-member "Salary -VF" — can be picked directly here
+        // instead of having to manually re-categorize the transaction afterward).
         async function handleSaveSalaryRecord() {
             const date = document.getElementById("salaryDate").value;
             const desc = document.getElementById("salaryDesc").value.trim();
             const bankAccountId = document.getElementById("salaryBankAccount").value;
+            const category = document.getElementById("salaryCategory").value;
             const scheme = document.getElementById("salaryScheme").value;
             const hasScheme = scheme === "epf" || scheme === "cpf";
             const contribAccountId = document.getElementById("salaryContribAccount").value;
@@ -6275,6 +6427,7 @@
             if (!date) { alert("Please select a date."); return; }
             if (!desc) { alert("Please enter a description."); return; }
             if (!bankAccountId) { alert("Please select a Bank Account."); return; }
+            if (!category) { alert("Please select a Category."); return; }
             if (isNaN(gross) || gross <= 0) { alert("Please enter a valid Gross Salary greater than zero."); return; }
             if (hasScheme && !contribAccountId) { alert("Please select an EPF/CPF Account, or switch Scheme to \"None\"."); return; }
             if (ee < 0 || er < 0) { alert("EE/ER amounts can't be negative."); return; }
@@ -6292,7 +6445,7 @@
             try {
                 if (netAmount > 0) {
                     await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
-                        amount: netAmount, src: bankAccountId, cat: "Salary"
+                        amount: netAmount, src: bankAccountId, cat: category
                     }));
                 }
                 if (hasScheme && ee > 0) {
@@ -8285,6 +8438,9 @@
             const storedDefaultPaymentAcc = await readKeyDB("settings", "defaultPaymentAccount");
             if (storedDefaultPaymentAcc) defaultPaymentAccount = storedDefaultPaymentAcc.value || "";
 
+            const storedDefaultReceiveAcc = await readKeyDB("settings", "defaultReceiveAccount");
+            if (storedDefaultReceiveAcc) defaultReceiveAccount = storedDefaultReceiveAcc.value || "";
+
             const storedRecentTxType = await readKeyDB("settings", "recentTxTypeFilter");
             if (storedRecentTxType) recentTxTypeFilter = storedRecentTxType.value || "both";
 
@@ -8360,10 +8516,10 @@
                 funds: await readAllDB(STORES.FUNDS),
                 navHistory: await readAllDB(STORES.NAV_HISTORY),
                 // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
-                // defaultIncomeCategory, defaultExpenseCategory, recentTx* widget filters,
-                // expandedAccountSubrows, plus baseCurrency/fxRates which are also kept below as
-                // their own top-level fields for backward compatibility with older backups/import
-                // code that reads them directly off the bundle).
+                // defaultReceiveAccount, defaultIncomeCategory, defaultExpenseCategory, recentTx*
+                // widget filters, expandedAccountSubrows, plus baseCurrency/fxRates which are
+                // also kept below as their own top-level fields for backward compatibility with
+                // older backups/import code that reads them directly off the bundle).
                 settings: await readAllDB(STORES.SETTINGS),
                 baseCurrency: baseCurrency,
                 fxRates: fxRates
@@ -8534,6 +8690,7 @@
                             await writeDB(STORES.SETTINGS, rec);
                             switch (rec.key) {
                                 case "defaultPaymentAccount": defaultPaymentAccount = rec.value || ""; break;
+                                case "defaultReceiveAccount": defaultReceiveAccount = rec.value || ""; break;
                                 case "defaultIncomeCategory": defaultIncomeCategory = rec.value || ""; break;
                                 case "defaultExpenseCategory": defaultExpenseCategory = rec.value || ""; break;
                                 case "recentTxTypeFilter": recentTxTypeFilter = rec.value || "both"; break;
@@ -8695,6 +8852,7 @@
             selectAccountPickerOption: (el) => selectAccountPickerOption(el),
             openSalaryEntryForm: () => openSalaryEntryForm(),
             handleSaveSalaryRecord: () => handleSaveSalaryRecord(),
+            printCurrentApp: () => printCurrentApp(),
         };
 
         const CHANGE_ACTIONS = {
@@ -8711,6 +8869,7 @@
             handleAutoLockChange: () => handleAutoLockChange(),
             saveDefaultCategories: () => saveDefaultCategories(),
             saveDefaultPaymentAccount: () => saveDefaultPaymentAccount(),
+            saveDefaultReceiveAccount: () => saveDefaultReceiveAccount(),
             toggleTxFdDescMode: () => toggleTxFdDescMode(),
             resetSavingsPageAndRender: () => renderSavingsStatement(),
             toggleTxManualFx: () => toggleTxManualFx(),
