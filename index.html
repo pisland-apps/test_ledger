@@ -1042,10 +1042,17 @@
                never carries printable data itself (see the ledger-row markup, which uses plain
                div/span elements for actual transaction data specifically, so this blanket
                button rule can never hide real content, only controls). */
-            button, input[type="file"], .sidebar-overlay, .sidebar-drawer, #lockOverlay,
-            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet {
+            button, input[type="file"], select, .sidebar-overlay, .sidebar-drawer, #lockOverlay,
+            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet, .print-filter-row {
                 display: none !important;
             }
+            /* Report pages replace their <select> filters (hidden above) with a plain-text
+               summary line instead — see #printHeader .print-header-filters below — so the
+               active Year/Month/Member filter is still visible on the printed page, just not as
+               a dropdown control. .print-filter-row marks the specific filter wrapper divs on
+               those report pages (deliberately NOT the generic .form-row/.filters classes,
+               which are reused all over the app for real form content that should still print
+               where it appears, e.g. Settings' default-account pickers). */
             html, body {
                 background: #fff !important;
                 max-width: 100% !important;
@@ -1073,6 +1080,7 @@
             }
             #printHeader .print-header-title { font-size: 1.15rem; font-weight: 800; color: #0f172a; }
             #printHeader .print-header-sub { font-size: 0.78rem; color: #475569; margin-top: 2px; }
+            #printHeader .print-header-filters { font-size: 0.78rem; color: #0f172a; font-weight: 700; margin-top: 6px; }
             /* Cards/rows/summary figures keep a plain 1px border instead of their on-screen
                shadow (shadows either vanish or print as ugly grey smudges) and are asked not to
                split across a page break where avoidable. */
@@ -1564,7 +1572,7 @@
             </div>
         </div>
 
-        <div class="filters" style="margin-bottom:12px;">
+        <div class="filters print-filter-row" style="margin-bottom:12px;">
             <select id="spendingMonthFilter" data-change="renderSpendingBreakdownPage">
                 <option value="all">All Months</option>
                 <option value="0">January</option><option value="1">February</option><option value="2">March</option>
@@ -1576,13 +1584,13 @@
                 <option value="all">All Years</option>
             </select>
         </div>
-        <div class="form-row" style="margin-bottom:12px;">
+        <div class="form-row print-filter-row" style="margin-bottom:12px;">
             <label>Member</label>
             <select id="spendingMemberFilter" class="form-input" data-change="renderSpendingBreakdownPage">
                 <option value="all">All Members (everyone, incl. joint)</option>
             </select>
         </div>
-        <div class="form-row" style="margin-bottom:14px;">
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
             <label>Chart Type</label>
             <select id="spendingChartType" class="form-input" data-change="renderSpendingBreakdownPage">
                 <option value="list">List (bars + %)</option>
@@ -1621,7 +1629,7 @@
             </div>
         </div>
 
-        <div class="filters" style="margin-bottom:12px;">
+        <div class="filters print-filter-row" style="margin-bottom:12px;">
             <select id="incomeMonthFilter" data-change="renderIncomeBreakdownPage">
                 <option value="all">All Months</option>
                 <option value="0">January</option><option value="1">February</option><option value="2">March</option>
@@ -1633,13 +1641,13 @@
                 <option value="all">All Years</option>
             </select>
         </div>
-        <div class="form-row" style="margin-bottom:12px;">
+        <div class="form-row print-filter-row" style="margin-bottom:12px;">
             <label>Member</label>
             <select id="incomeMemberFilter" class="form-input" data-change="renderIncomeBreakdownPage">
                 <option value="all">All Members (everyone, incl. joint)</option>
             </select>
         </div>
-        <div class="form-row" style="margin-bottom:14px;">
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
             <label>Chart Type</label>
             <select id="incomeChartType" class="form-input" data-change="renderIncomeBreakdownPage">
                 <option value="list">List (bars + %)</option>
@@ -1677,7 +1685,7 @@
             </div>
         </div>
 
-        <div class="filters" style="margin-bottom:12px;">
+        <div class="filters print-filter-row" style="margin-bottom:12px;">
             <select id="savingsYearFilter" data-change="resetSavingsPageAndRender">
                 <option value="all">All Years</option>
             </select>
@@ -1740,7 +1748,7 @@
             </div>
         </div>
 
-        <div class="form-row" style="margin-bottom:14px;">
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
             <label>Member</label>
             <select id="portfolioMemberFilter" class="form-input" data-change="renderPortfolioReportPage">
                 <option value="all">All Members (everyone, incl. joint)</option>

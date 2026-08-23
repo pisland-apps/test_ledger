@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v115";
+        const APP_VERSION = "v116";
         const APP_VERSION_DATE = "2026-08-23";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1521,11 +1521,50 @@
             }
         }
 
+        // Plain-text summary of a report page's active Year/Month/Member filters — printed in
+        // place of the <select> dropdowns themselves (which are hidden for print via the
+        // .print-filter-row rule in index.html), so the printed page still states what data
+        // it's actually showing. Reads each <select>'s selected *option text* (not its value),
+        // so it matches whatever the user sees on screen (e.g. "January", "All Years"). Returns
+        // null for pages with no filters (e.g. the Owner Net Worth report), which skips the
+        // filters line entirely.
+        function getActivePageFilterSummary(pageId) {
+            const selectedText = (id) => {
+                const el = document.getElementById(id);
+                if (!el || el.selectedIndex < 0) return null;
+                const opt = el.options[el.selectedIndex];
+                return opt ? opt.textContent.trim() : null;
+            };
+            let parts;
+            switch (pageId) {
+                case "page-spending-breakdown":
+                    parts = [selectedText("spendingYearFilter"), selectedText("spendingMonthFilter"), selectedText("spendingMemberFilter")];
+                    break;
+                case "page-income-breakdown":
+                    parts = [selectedText("incomeYearFilter"), selectedText("incomeMonthFilter"), selectedText("incomeMemberFilter")];
+                    break;
+                case "page-savings":
+                    parts = [selectedText("savingsYearFilter")];
+                    break;
+                case "page-portfolio-report":
+                    parts = [selectedText("portfolioMemberFilter")];
+                    break;
+                default:
+                    return null;
+            }
+            parts = parts.filter(Boolean);
+            return parts.length ? parts.join(" · ") : null;
+        }
+
         // Prints (or "Save as PDF"s) whichever page is currently visible. Works the same way on
         // every page in the app — there's no per-page print button/logic, just this one entry
         // point wired to the single floating 🖨 button that's present everywhere (see
         // .print-fab-btn in index.html) — the @media print CSS block does the work of hiding
-        // chrome and showing only the active .page.
+        // chrome and showing only the active .page. A handful of report pages additionally get
+        // their filter dropdowns swapped for a plain-text summary line and any collapsed detail
+        // sections force-expanded first, purely so the printed output isn't missing data the
+        // user simply hadn't clicked to reveal on screen (same idea as lifting the Ledger
+        // page's render limit below).
         async function printCurrentApp() {
             const activePageId = APP_PAGE_IDS.find(id => {
                 const el = document.getElementById(id);
@@ -1535,6 +1574,7 @@
 
             const activeEl = document.getElementById(activePageId);
             const title = getActivePageTitle(activePageId);
+            const filterSummary = getActivePageFilterSummary(activePageId);
 
             // The Ledger page paginates long transaction histories behind a "Load more" button
             // (ledgerRenderLimit) so scrolling stays fast on a phone — but a printed statement
@@ -1547,11 +1587,36 @@
                 await renderApp();
             }
 
+            // Net Savings Statement: each Main Category with Subcategories starts collapsed
+            // (see savingsExpandedMains/toggleSavingsMainExpand) — those subcategory rows simply
+            // aren't in the DOM at all until expanded, so a print taken as-is would silently
+            // drop them. Force every main category open for the print, then restore whatever the
+            // user actually had expanded on screen afterwards.
+            let savedSavingsExpanded = null;
+            if (activePageId === "page-savings") {
+                savedSavingsExpanded = savingsExpandedMains;
+                savingsExpandedMains = new Set(dynamicCategories.filter(c => !c.parentId).map(c => c.id));
+                renderSavingsStatement();
+            }
+
+            // Unit Trust Portfolio: the Fund Detail table is always fully rendered into the DOM
+            // (unlike the Ledger/Savings cases above), just visually collapsed behind
+            // display:none — so this is a simple show/hide rather than a re-render.
+            let savedPortfolioDetailDisplay = null;
+            if (activePageId === "page-portfolio-report") {
+                const wrap = document.getElementById("portfolioDetailWrap");
+                if (wrap) {
+                    savedPortfolioDetailDisplay = wrap.style.display;
+                    wrap.style.display = "";
+                }
+            }
+
             const header = document.createElement("div");
             header.id = "printHeader";
             header.innerHTML = `
                 <div class="print-header-title">💰 My Ledger</div>
                 <div class="print-header-sub">${escapeHtml(title)} · Printed ${new Date().toLocaleString()}</div>
+                ${filterSummary ? `<div class="print-header-filters">${escapeHtml(filterSummary)}</div>` : ""}
             `;
             activeEl.prepend(header);
 
@@ -1569,10 +1634,18 @@
                     ledgerRenderLimit = LEDGER_PAGE_SIZE;
                     renderApp();
                 }
+                if (savedSavingsExpanded !== null) {
+                    savingsExpandedMains = savedSavingsExpanded;
+                    renderSavingsStatement();
+                }
+                if (savedPortfolioDetailDisplay !== null) {
+                    const wrap = document.getElementById("portfolioDetailWrap");
+                    if (wrap) wrap.style.display = savedPortfolioDetailDisplay;
+                }
             };
             // afterprint covers both "Print" and "Cancel" in every modern browser, but a
             // fallback timeout guards against the rare browser that never fires it (some older
-            // WebViews) so the temporary header/title/expanded list can't get stuck.
+            // WebViews) so the temporary header/title/expanded state can't get stuck.
             window.addEventListener("afterprint", cleanup, { once: true });
             const fallbackTimer = setTimeout(cleanup, 60000);
 
