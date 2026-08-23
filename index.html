@@ -13,14 +13,23 @@
            see the CLICK_ACTIONS/CHANGE_ACTIONS/INPUT_ACTIONS tables in ledger.js). This means
            there's no sha256 hash to maintain: 'self' covers ledger.js regardless of its byte
            content, so there's nothing that can drift out of sync between a local build and
-           what actually gets deployed.
+           what actually gets deployed. Also covers lib/pdf.min.mjs (v121, vendored locally,
+           loaded via dynamic import() from ledger.js — see pdfjsLibPromise) — same-origin, so
+           no separate allowance needed.
          - style-src 'self' 'unsafe-inline': left loose — this app uses inline style="..."
            attributes throughout for one-off layout tweaks. Migrating all of those to CSS
            classes was judged high-effort/low-value: CSS injection has a much smaller blast
            radius than script injection, and connect-src below already limits the network
            requests that would make it useful to an attacker anyway.
-         - img-src 'self' data:: receipt/transaction photos are stored as base64 data URLs
-           in IndexedDB and displayed directly via <img src="data:...">; app icons are local.
+         - img-src 'self' data:: transaction attachments (receipt photos AND, as of v121,
+           PDFs) are stored as base64 data URLs in IndexedDB and displayed directly via
+           <img src="data:..."> / <a download href="data:...">; app icons are local. PDF
+           pages themselves are rendered onto <canvas> by pdf.js, not <img>, so they don't
+           need anything beyond this. Deliberately data: only, no blob: — nothing in the app
+           uses createObjectURL, so there was no reason to widen this.
+         - worker-src 'self': needed as of v121 for lib/pdf.worker.min.mjs (pdf.js's own
+           Worker, used to decode PDF pages off the main thread) — same-origin, vendored
+           locally alongside pdf.min.mjs.
          - connect-src 'self' https://open.er-api.com (v67): the app is otherwise offline-first
            (IndexedDB only) — the one exception is the optional "Fetch Live Rates" button in
            Currency Settings, which calls this single exchange-rate API (no key required, no
@@ -2359,19 +2368,15 @@
                 </div>
 
                 <div class="form-row">
-                    <label>Receipt / Photo (optional)</label>
+                    <label>Attachments (optional) — photos or PDFs</label>
                     <div style="display:flex; gap:8px;">
                         <button type="button" data-click="openCameraInput" class="submit-btn" style="margin-top:0; background:#e2e8f0; color:var(--text-main); flex:1;">📷 Take Photo</button>
-                        <button type="button" data-click="openGalleryInput" class="submit-btn" style="margin-top:0; background:#e2e8f0; color:var(--text-main); flex:1;">🖼️ Gallery</button>
+                        <button type="button" data-click="openFilesInput" class="submit-btn" style="margin-top:0; background:#e2e8f0; color:var(--text-main); flex:1;">📎 Add Files</button>
                     </div>
-                    <input type="file" id="txCameraInput" accept="image/*" capture="environment" style="display:none;" data-change="handleTxImageSelected">
-                    <input type="file" id="txGalleryInput" accept="image/*" style="display:none;" data-change="handleTxImageSelected">
+                    <input type="file" id="txCameraInput" accept="image/*" capture="environment" style="display:none;" data-change="handleTxAttachmentsSelected">
+                    <input type="file" id="txFilesInput" accept="image/*,application/pdf" multiple style="display:none;" data-change="handleTxAttachmentsSelected">
 
-                    <div id="txImagePreviewWrap" style="display:none; margin-top:10px; position:relative; width:fit-content;">
-                        <img id="txImagePreview" src="" style="max-width:140px; max-height:140px; border-radius:10px; border:1px solid var(--border-color); display:block;">
-                        <button type="button" data-click="removeTxImage" style="position:absolute; top:-8px; right:-8px; width:24px; height:24px; border-radius:50%; background:var(--expense-color); color:white; border:none; font-weight:700; cursor:pointer; line-height:1;">✕</button>
-                    </div>
-                    <p id="txImageStatus" style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;"></p>
+                    <div id="txAttachmentPreview" style="display:none; flex-direction:column; gap:6px; margin-top:10px;"></div>
                 </div>
 
                 <button type="button" data-click="handleTransactionSubmitMobile" id="txSubmitBtn" class="submit-btn">Commit Entry</button>
@@ -2777,11 +2782,27 @@
         </div>
     </div>
 
-    <!-- MODAL: Fullscreen image viewer for transaction receipts -->
-    <div class="modal" id="imageViewerModal" style="background:rgba(0,0,0,0.85);">
-        <div style="max-width:95vw; max-height:85vh; display:flex; flex-direction:column; align-items:center; gap:12px;">
-            <img id="imageViewerImg" src="" style="max-width:95vw; max-height:75vh; border-radius:10px; object-fit:contain;">
-            <button type="button" data-click="closeModal" data-modal="imageViewerModal" class="submit-btn" style="margin-top:0; width:auto; padding:10px 24px;">Close</button>
+    <!-- MODAL: Generalized attachment viewer — images render directly, PDFs render page-by-page
+         onto <canvas> via vendored pdf.js (see openAttachment() in ledger.js). Replaces the old
+         single-image imageViewerModal as of v121. -->
+    <div class="modal" id="attachmentViewerModal" style="background:rgba(0,0,0,0.85);">
+        <div class="modal-sheet" style="max-width:95vw; max-height:88vh; overflow-y:auto; background:white; border-radius:14px; padding:16px;">
+            <p id="attachmentViewerTitle" style="font-size:0.85rem; font-weight:700; margin-bottom:10px; word-break:break-all;"></p>
+            <div id="attachmentViewerBody" style="max-width:80vw;"></div>
+            <div style="display:flex; gap:8px; margin-top:14px;">
+                <a id="btnDownloadAttachment" href="" download="" class="submit-btn" style="margin-top:0; width:auto; padding:10px 20px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; background:#e2e8f0; color:var(--text-main);">⬇ Download</a>
+                <button type="button" data-click="closeModal" data-modal="attachmentViewerModal" class="submit-btn" style="margin-top:0; width:auto; padding:10px 24px;">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Attachment picker — shown when a ledger row's 📎 badge has more than one
+         attachment; tapping an entry opens it in attachmentViewerModal above. -->
+    <div class="modal" id="txAttachmentsPickerModal">
+        <div class="modal-sheet" style="max-width:340px;">
+            <p style="font-size:0.85rem; font-weight:700; margin-bottom:10px;">Attachments</p>
+            <div id="txAttachmentsPickerList" style="display:flex; flex-direction:column; gap:6px; max-height:50vh; overflow-y:auto;"></div>
+            <button type="button" data-click="closeModal" data-modal="txAttachmentsPickerModal" class="submit-btn" style="margin-top:14px; background:#e2e8f0; color:var(--text-main);">Close</button>
         </div>
     </div>
 
