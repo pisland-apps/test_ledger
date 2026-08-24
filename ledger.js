@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v128";
-        const APP_VERSION_DATE = "2026-08-24";
+        const APP_VERSION = "v129";
+        const APP_VERSION_DATE = "2026-08-25";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -740,6 +740,15 @@
         // is opened via navigateToLedgerPage(); recomputed every renderApp().
         let accountLedgerYear = "__fresh__"; // "__fresh__" = not yet initialized for this account view; null = user explicitly chose "All Years"; a number = one specific year
         let accountLedgerYearsCache = [];
+        // Portfolio General Log's own year filter (the "all accounts" ledger view) — a sibling
+        // to accountLedgerYear/accountLedgerYearsCache above, but scoped across every account's
+        // transactions combined instead of one account. Defaults to null ("All Years") rather
+        // than "__fresh__"-then-latest-year, since that's this page's long-standing default view
+        // and changing that default on every visit would be a surprising behavior change; sticky
+        // across visits within the session once the user picks a specific year. Recomputed every
+        // renderApp().
+        let portfolioLedgerYear = null;
+        let portfolioLedgerYearsCache = [];
         let ledgerBackToPage = "workspace"; 
 
         // v86: which page the Backup & Restore page's Back button should return to — set by
@@ -1718,22 +1727,40 @@
             renderApp();
         }
 
+        // These three handlers serve both year-nav modes (per-account Activity, and the
+        // Portfolio General Log's own nav added alongside it) since only one is ever visible/
+        // clickable at a time — activeLedgerAccountView === "all" distinguishes which cache/
+        // selection to move.
         function ledgerYearPrev() {
-            const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
-            if (idx > 0) { accountLedgerYear = accountLedgerYearsCache[idx - 1]; renderApp(); }
+            if (activeLedgerAccountView === "all") {
+                const idx = portfolioLedgerYearsCache.indexOf(portfolioLedgerYear);
+                if (idx > 0) { portfolioLedgerYear = portfolioLedgerYearsCache[idx - 1]; renderApp(); }
+            } else {
+                const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
+                if (idx > 0) { accountLedgerYear = accountLedgerYearsCache[idx - 1]; renderApp(); }
+            }
         }
 
         function ledgerYearNext() {
-            const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
-            if (idx >= 0 && idx < accountLedgerYearsCache.length - 1) { accountLedgerYear = accountLedgerYearsCache[idx + 1]; renderApp(); }
+            if (activeLedgerAccountView === "all") {
+                const idx = portfolioLedgerYearsCache.indexOf(portfolioLedgerYear);
+                if (idx >= 0 && idx < portfolioLedgerYearsCache.length - 1) { portfolioLedgerYear = portfolioLedgerYearsCache[idx + 1]; renderApp(); }
+            } else {
+                const idx = accountLedgerYearsCache.indexOf(accountLedgerYear);
+                if (idx >= 0 && idx < accountLedgerYearsCache.length - 1) { accountLedgerYear = accountLedgerYearsCache[idx + 1]; renderApp(); }
+            }
         }
 
         // Fired when the year <select> (which replaced the old plain "< 2019 >" label) changes —
         // lets the user jump straight to any year with data, or to "All Years" (accountLedgerYear
-        // = null) to see the account's complete transaction history on one page.
+        // / portfolioLedgerYear = null) to see the complete transaction history on one page.
         function ledgerYearSelectChange() {
             const val = document.getElementById("ledgerYearLabel").value;
-            accountLedgerYear = val === "all" ? null : parseInt(val, 10);
+            if (activeLedgerAccountView === "all") {
+                portfolioLedgerYear = val === "all" ? null : parseInt(val, 10);
+            } else {
+                accountLedgerYear = val === "all" ? null : parseInt(val, 10);
+            }
             renderApp();
         }
 
@@ -7699,6 +7726,28 @@
                 accountLedgerYear = "__fresh__";
             }
 
+            // --- Portfolio General Log's own year navigation ---
+            // Sibling of the per-account block just above, but scoped across every account's
+            // transactions combined — this is the unfiltered "all" ledger view (no account/
+            // category/type filter layered on top), i.e. the page opened via
+            // navigateToLedgerPage("all") from the sidebar's "Transactions" link.
+            const isPortfolioAllView = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
+            portfolioLedgerYearsCache = [];
+            if (isPortfolioAllView) {
+                portfolioLedgerYearsCache = [...new Set(txs.map(t => new Date(t.date).getFullYear()))].sort((a, b) => a - b);
+                // Unlike accountLedgerYear's "__fresh__" handling above, a specific selected year
+                // here is only cleared back to "All Years" if it no longer has any data at all
+                // (e.g. every transaction in that year was deleted) — it otherwise stays sticky
+                // across visits within the session rather than resetting to latest-year each time.
+                if (portfolioLedgerYearsCache.length > 0) {
+                    if (portfolioLedgerYear !== null && !portfolioLedgerYearsCache.includes(portfolioLedgerYear)) {
+                        portfolioLedgerYear = null;
+                    }
+                } else {
+                    portfolioLedgerYear = null;
+                }
+            }
+
             const yearNavEl = document.getElementById("ledgerYearNav");
             let accountYearIdx = -1;
             if (showFullAccountHistory && accountLedgerYearsCache.length > 0) {
@@ -7709,6 +7758,14 @@
                 yearSelect.value = accountLedgerYear === null ? "all" : String(accountLedgerYear);
                 document.getElementById("ledgerYearPrevBtn").disabled = accountLedgerYear === null || accountYearIdx <= 0;
                 document.getElementById("ledgerYearNextBtn").disabled = accountLedgerYear === null || accountYearIdx >= accountLedgerYearsCache.length - 1;
+            } else if (isPortfolioAllView && portfolioLedgerYearsCache.length > 0) {
+                accountYearIdx = portfolioLedgerYearsCache.indexOf(portfolioLedgerYear);
+                yearNavEl.style.display = "flex";
+                const yearSelect = document.getElementById("ledgerYearLabel");
+                yearSelect.innerHTML = portfolioLedgerYearsCache.map(y => `<option value="${y}">${y}</option>`).join("") + `<option value="all">All Years</option>`;
+                yearSelect.value = portfolioLedgerYear === null ? "all" : String(portfolioLedgerYear);
+                document.getElementById("ledgerYearPrevBtn").disabled = portfolioLedgerYear === null || accountYearIdx <= 0;
+                document.getElementById("ledgerYearNextBtn").disabled = portfolioLedgerYear === null || accountYearIdx >= portfolioLedgerYearsCache.length - 1;
             } else {
                 yearNavEl.style.display = "none";
             }
@@ -7999,7 +8056,7 @@
             // transactions. Same root problem as the per-account view fix below: a drill-in's whole
             // job is to show the complete history behind the number you clicked, so category/type
             // views now always show full history too, exactly like the account view already does.
-            const showFullHistoryForThisView = showFullAccountHistory || activeCategoryView !== "all" || directTypeView !== "all";
+            const showFullHistoryForThisView = showFullAccountHistory || activeCategoryView !== "all" || directTypeView !== "all" || isPortfolioAllView;
 
             txs.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(t => {
                 const d = new Date(t.date);
@@ -8053,7 +8110,10 @@
                     isBound = (t.src === activeLedgerAccountView || t.dest === activeLedgerAccountView)
                         && (accountLedgerYear === null || d.getFullYear() === accountLedgerYear);
                 } else {
-                    isBound = true;
+                    // Portfolio General Log (v128) — the pure "all accounts" view, now year-scoped
+                    // by its own nav (portfolioLedgerYear) exactly like a single account's Activity
+                    // view is above, rather than only via the Dashboard's separate Month/Year filter.
+                    isBound = (portfolioLedgerYear === null || d.getFullYear() === portfolioLedgerYear);
                 }
 
                 // v91: skip non-representative Split Expense group siblings for display — the
