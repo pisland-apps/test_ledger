@@ -1104,6 +1104,23 @@
                shadow (shadows either vanish or print as ugly grey smudges) and are asked not to
                split across a page break where avoidable. */
             * { box-shadow: none !important; text-shadow: none !important; }
+            /* v125 bugfix: Chrome (and most browsers) omit an element's background-color when
+               printing/exporting to PDF by default — the person has to manually tick "Background
+               graphics" under the print dialog's More settings, and even then it's easy to miss.
+               Without this rule every color-coded background across the app printed as nothing:
+               Spending/Income Breakdown's progress-bar-fill bars (buildBreakdownListHTML, styled
+               inline with background:${e.color}), the donut chart's legend swatches
+               (buildBreakdownDonutSVG), category-icon chips, member color dots, etc. — all silently
+               invisible, not just recolored, exactly as reported. print-color-adjust:exact (plus
+               its older -webkit- prefixed form some print/PDF engines still key off) tells the
+               browser to always render backgrounds on this page regardless of that checkbox's
+               state, which is the standard way sites keep chart/legend colors intact when printed.
+               Note this only affects background-color/background-image — the bar-chart and donut
+               chart SVGs (buildBreakdownBarSVG/buildBreakdownDonutSVG) use native SVG fill="..."
+               attributes instead, which were never affected by this in the first place (SVG shape
+               fills print normally); this rule is for every OTHER color in the app that's a plain
+               CSS background. */
+            * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
             .card, .ledger-item, .config-item, .statement-row, .statement-card,
             .member-networth-row, .net-savings-banner, .fund-subrow {
                 border: 1px solid #cbd5e1 !important;
