@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v126";
+        const APP_VERSION = "v127";
         const APP_VERSION_DATE = "2026-08-24";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2220,9 +2220,35 @@
         let multiOpeningRowCounter = 0;
         let fdOpeningRowCounter = 0;
 
+        // Fills a <select> with day-of-month options 1..31 — shared by Credit Card's Statement
+        // Day and Payment Due Day fields (v127). Both are purely informational in this Tier-1
+        // implementation (see the comment on #ccWrap in index.html) — nothing here buckets
+        // transactions by billing cycle, they're just captured for reference/display.
+        function populateDaySelect(sel, preselectDay) {
+            sel.innerHTML = Array.from({ length: 31 }, (_, i) => i + 1)
+                .map(d => `<option value="${d}">${d}</option>`).join("");
+            sel.value = preselectDay || "1";
+        }
+
+        // Credit Card's "Default Payment Account" — same exclude-self pattern as
+        // populateLinkedAccountSelect (Bank Loan's Related Account), but doesn't exclude other
+        // Credit Card accounts (paying one card from another isn't a normal flow, but there's no
+        // strong reason to forbid it either — e.g. a balance-transfer-style payment).
+        async function populateCcPaymentAccountSelect(preselectId) {
+            const sel = document.getElementById("newAccCcPaymentAccount");
+            const excludeId = document.getElementById("editAccountId").value;
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const candidates = accounts
+                .filter(a => a.id !== excludeId)
+                .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+            sel.innerHTML = `<option value="">(None)</option>` + candidates.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
+            sel.value = (preselectId && candidates.some(a => a.id === preselectId)) ? preselectId : "";
+        }
+
         function setAccountTypeUI(type) {
             document.getElementById("newAccType").value = type;
             const normalBtn = document.getElementById("accTypeBtnNormal");
+            const ccBtn = document.getElementById("accTypeBtnCc");
             const multiBtn = document.getElementById("accTypeBtnMulti");
             const fdBtn = document.getElementById("accTypeBtnFd");
             const utBtn = document.getElementById("accTypeBtnUt");
@@ -2230,10 +2256,11 @@
             const multiWrap = document.getElementById("multiOpeningWrap");
             const fdWrap = document.getElementById("fdOpeningWrap");
             const utWrap = document.getElementById("utInfoWrap");
+            const ccWrap = document.getElementById("ccWrap");
             const hint = document.getElementById("accTypeHint");
             const isEditing = document.getElementById("editAccountId").value !== "";
 
-            [normalBtn, multiBtn, fdBtn, utBtn].forEach(btn => {
+            [normalBtn, ccBtn, multiBtn, fdBtn, utBtn].forEach(btn => {
                 btn.style.background = "#e2e8f0"; btn.style.color = "var(--text-main)";
             });
 
@@ -2241,11 +2268,36 @@
             multiWrap.style.display = "none";
             fdWrap.style.display = "none";
             utWrap.style.display = "none";
+            ccWrap.style.display = "none";
 
             if (type === "normal") {
                 normalBtn.style.background = "var(--transfer-color)"; normalBtn.style.color = "white";
                 balCurrRow.style.display = "flex";
                 hint.textContent = "A single fixed currency, chosen now — e.g. a MYR bank account.";
+            } else if (type === "creditcard") {
+                ccBtn.style.background = "var(--transfer-color)"; ccBtn.style.color = "white";
+                hint.textContent = "A single fixed currency, same as Normal — spending is logged as an ordinary Expense (pushing the balance negative = amount owed), and the 💳 Pay button below logs a payment as a Transfer from your chosen account.";
+                balCurrRow.style.display = "flex";
+                ccWrap.style.display = "block";
+                // v127: new-account creation only defaults Group to "Credit Card" for
+                // convenience — never overrides it while editing an existing account, in case
+                // it was deliberately grouped elsewhere (matches the Multi-Currency/FD precedent
+                // of only auto-populating their opening-balance rows for a brand-new account).
+                if (!isEditing) {
+                    document.getElementById("newAccGroup").value = "Credit Card";
+                    handleAccGroupChange();
+                }
+                // v127 bugfix: always repopulate fresh (no "already populated, skip" guard) —
+                // an earlier version only populated once ever, so switching from editing one
+                // Credit Card account to creating a brand-new one left the previous account's
+                // Statement/Due Day still showing instead of resetting to the "1" default.
+                // editAccount() still overrides with the correct preselected values right after
+                // calling setAccountTypeUI(account.type), so this repopulation is never wasted
+                // work in that path — it's just always overwritten a moment later with the
+                // account's real saved values.
+                populateDaySelect(document.getElementById("newAccCcStatementDay"));
+                populateDaySelect(document.getElementById("newAccCcDueDay"));
+                populateCcPaymentAccountSelect();
             } else if (type === "multi") {
                 multiBtn.style.background = "var(--transfer-color)"; multiBtn.style.color = "white";
                 hint.textContent = "Holds separate currency balances under one account name — e.g. \"Bank A\" with its own SGD and MYR balances side by side, never mixed together.";
@@ -2474,6 +2526,12 @@
             document.getElementById("fdOpeningRows").innerHTML = "";
             renderAccountMemberCheckboxes([]);
 
+            // Credit Card (v127): explicit reset — setAccountTypeUI("normal") below hides
+            // #ccWrap but doesn't touch its own field values, so without this a Credit Limit
+            // typed while editing one account would still be sitting in the input the next time
+            // Credit Card is picked for a different (or brand-new) account.
+            document.getElementById("newAccCcLimit").value = "";
+
             setAccountTypeUI("normal");
 
             if (isEditing) {
@@ -2507,10 +2565,20 @@
                 hasRedrawFacility: (group === "Bank Loan" && document.getElementById("newAccHasRedraw").checked),
                 redrawAmount: (group === "Bank Loan" && document.getElementById("newAccHasRedraw").checked) ? (parseFloat(document.getElementById("newAccRedrawAmount").value) || 0) : 0,
                 redrawAsOfDate: (group === "Bank Loan" && document.getElementById("newAccHasRedraw").checked) ? (document.getElementById("newAccRedrawAsOfDate").value || "") : "",
+                // Credit Card (v127): Limit/Statement Day/Payment Due Day are purely
+                // informational display fields, and Default Payment Account only feeds the 💳
+                // Pay button's pre-selected source account — see setAccountTypeUI's comment on
+                // #ccWrap for why none of this affects balance/due-amount math. Cleared out (same
+                // as Real Estate/Bank Loan's fields above) when the account isn't a Credit Card,
+                // so re-typing an account away from Credit Card doesn't leave stale values behind.
+                creditLimit: (type === "creditcard") ? (parseFloat(document.getElementById("newAccCcLimit").value) || 0) : 0,
+                statementDay: (type === "creditcard") ? (parseInt(document.getElementById("newAccCcStatementDay").value, 10) || null) : null,
+                paymentDueDay: (type === "creditcard") ? (parseInt(document.getElementById("newAccCcDueDay").value, 10) || null) : null,
+                defaultPaymentAccountId: (type === "creditcard") ? (document.getElementById("newAccCcPaymentAccount").value || null) : null,
                 memberIds: getCheckedAccountMemberIds()
             };
 
-            if (type === "normal") {
+            if (type === "normal" || type === "creditcard") {
                 const balInput = document.getElementById("newAccBal").value;
                 const bal = balInput === "" ? 0 : parseFloat(balInput);
                 if (isNaN(bal)) { alert("Please enter a valid initial balance."); return; }
@@ -2790,7 +2858,9 @@
                         ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e0f2fe; color:#0369a1; font-weight:bold;">Multi-Currency</span>`
                         : a.type === "unittrust"
                             ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:bold;">Unit Trust</span>`
-                            : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
+                            : a.type === "creditcard"
+                                ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fce7f3; color:#9d174d; font-weight:bold;">Credit Card</span>`
+                                : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
 
                 const baseVal = accountBaseValue(a, nativeBalances);
 
@@ -2831,6 +2901,18 @@
                     : "";
 
                 const extraInfoLine = accountExtraInfoLine(a);
+
+                // Credit Card (v127): "Amount due" line + 💳 Pay button, both only shown when
+                // there's actually something owed (a card paid off in full, or never used, has
+                // nothing to show here) — amountDue is just this account's ordinary balance,
+                // negated (see openCreditCardPayment's comment for why that's the right number).
+                const ccAmountDue = a.type === "creditcard" ? Math.max(0, -(nativeBalances[a.id] || 0)) : 0;
+                const ccAmountDueLine = ccAmountDue > 0.005
+                    ? `<br><span style="font-size:0.72rem; color:#9d174d; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
+                    : "";
+                const ccPayBtnHTML = ccAmountDue > 0.005
+                    ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">💳 Pay</button>`
+                    : "";
 
                 // v62: subrows collapsed by default (see expandedAccountSubrows) — built into
                 // subrowsHtml first (before the main row, so the row can show a collapse/expand
@@ -2934,9 +3016,10 @@
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
                         <span>
                             <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
-                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}
+                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}
                         </span>
                         <span style="display:flex; align-items:center; gap:6px;">
+                            ${ccPayBtnHTML}
                             ${subrowToggleHTML}
                             <span style="color:var(--text-muted);">›</span>
                         </span>
@@ -2998,9 +3081,15 @@
             );
 
             setAccountTypeUI(account.type || "normal");
-            if (!account.type || account.type === "normal") {
+            if (!account.type || account.type === "normal" || account.type === "creditcard") {
                 document.getElementById("newAccBal").value = account.initialBalance;
                 document.getElementById("newAccCurrency").value = account.currency;
+            }
+            if (account.type === "creditcard") {
+                document.getElementById("newAccCcLimit").value = account.creditLimit || "";
+                populateDaySelect(document.getElementById("newAccCcStatementDay"), account.statementDay);
+                populateDaySelect(document.getElementById("newAccCcDueDay"), account.paymentDueDay);
+                await populateCcPaymentAccountSelect(account.defaultPaymentAccountId || "");
             }
             renderAccountMemberCheckboxes(Array.isArray(account.memberIds) ? account.memberIds : []);
 
@@ -3022,6 +3111,52 @@
         // is shared by several views (single account / category / type / "all").
         function editAccountFromLedgerHeader() {
             if (activeLedgerAccountView !== "all") editAccount(activeLedgerAccountView);
+        }
+
+        // Credit Card payment (v127, Tier 1 — see #ccWrap's comment in index.html for what
+        // "Tier 1" means here). A card payment is modeled as nothing more than an ordinary
+        // Transfer from the Default Payment Account into the card account — reusing the existing
+        // Transfer entry form (rather than a separate payment data model/UI) means it
+        // automatically gets correct balance math, category-free reporting, backup/restore, and
+        // Quick View/Edit/Delete for free, exactly like every other transaction in the app.
+        //
+        // "Amount Due" is simply this account's current balance, negated and floored at 0 — NOT
+        // a statement-cycle calculation. Spending on the card is logged as an ordinary Expense
+        // (src = the card account), which — via the existing generic applyToAccountBalance() in
+        // computeAccountBalances(), completely unmodified for this feature — already pushes the
+        // card's balance negative exactly the way any account's balance goes negative from
+        // overspending. So "amount owed" IS just -balance; there's deliberately no separate
+        // running total to keep in sync with it. See this feature's design discussion for why
+        // full statement-cycle bucketing (splitting "this cycle" vs "prior cycle, still unpaid"
+        // amounts, as some banking apps show) was scoped out of this round.
+        //
+        // Called two ways: the Accounts/Member page's 💳 Pay button passes its own <button>
+        // element (data-id = account id, read via el.dataset.id below); openCreditCardPaymentFromLedgerHeader
+        // (the Activity page's own Pay button) calls this with the account id string directly,
+        // same dual-signature pattern as openTransactionForm/openAttachment elsewhere in this file.
+        async function openCreditCardPayment(accountIdOrEl) {
+            const accountId = typeof accountIdOrEl === "string" ? accountIdOrEl : accountIdOrEl.dataset.id;
+            const { accounts, nativeBalances } = await computeAccountBalances();
+            const acc = accounts.find(a => a.id === accountId);
+            if (!acc || acc.type !== "creditcard") return;
+
+            await openTransactionForm("transfer", null, acc.defaultPaymentAccountId || null);
+            // openTransactionForm's presetSrcAccountId param only pre-selects the SOURCE side —
+            // the destination (this card) is set directly here afterward, since every other use
+            // of that param presets where money comes FROM (e.g. opening the form from an
+            // account's own Activity page quick-add), whereas a card payment's fixed/known side
+            // is where money goes TO. Both remain fully editable — nothing here locks the fields.
+            document.getElementById("destAccount").value = accountId;
+            document.getElementById("txCurrency").value = acc.currency;
+            const amountDue = Math.max(0, -(nativeBalances[acc.id] || 0));
+            if (amountDue > 0.005) document.getElementById("txAmount").value = amountDue.toFixed(2);
+            document.getElementById("txDesc").value = "Credit Card Payment";
+        }
+
+        // Wired to the Activity page's own 💳 Pay button — reads which account is currently
+        // being viewed rather than a data-id, same reasoning as editAccountFromLedgerHeader above.
+        function openCreditCardPaymentFromLedgerHeader() {
+            if (activeLedgerAccountView !== "all") openCreditCardPayment(activeLedgerAccountView);
         }
 
         // ================= UNIT TRUST: Funds subsystem (v39) =================
@@ -3923,6 +4058,13 @@
         // in sync automatically instead of drifting out of step with separately-written markup.
         function accountExtraInfoLine(a) {
             const group = a.group || DEFAULT_ACCOUNT_GROUP;
+            if (a.type === "creditcard" && (a.creditLimit || a.statementDay || a.paymentDueDay)) {
+                const bits = [];
+                if (a.creditLimit) bits.push(`Limit ${formatBalanceHTML(a.creditLimit, a.currency || baseCurrency)}`);
+                if (a.statementDay) bits.push(`Statement day ${a.statementDay}`);
+                if (a.paymentDueDay) bits.push(`Due day ${a.paymentDueDay}`);
+                return bits.length ? `<br><span style="font-size:0.7rem; color:#9d174d; font-weight:600;">💳 ${bits.join(" · ")}</span>` : "";
+            }
             if (group === "Real Estate" && (a.propertyType || a.holdingStartDate)) {
                 const bits = [];
                 if (a.propertyType) bits.push(escapeHtml(a.propertyType));
@@ -4643,7 +4785,9 @@
                         ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e0f2fe; color:#0369a1; font-weight:bold;">Multi-Currency</span>`
                         : a.type === "unittrust"
                             ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:bold;">Unit Trust</span>`
-                            : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
+                            : a.type === "creditcard"
+                                ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fce7f3; color:#9d174d; font-weight:bold;">Credit Card</span>`
+                                : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
 
                 let balSummary;
                 if (a.type === "multi") {
@@ -4675,10 +4819,23 @@
 
                 const extraInfoLine = accountExtraInfoLine(a);
 
+                // Credit Card (v127): same "Amount due" line + 💳 Pay button as the main Accounts
+                // page (renderAccountsPage) — see that copy's comment for what amountDue means.
+                const ccAmountDue = a.type === "creditcard" ? Math.max(0, -(nativeBalances[a.id] || 0)) : 0;
+                const ccAmountDueLine = ccAmountDue > 0.005
+                    ? ` · <span style="color:#9d174d; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
+                    : "";
+                const ccPayBtnHTML = ccAmountDue > 0.005
+                    ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer; margin-right:6px;">💳 Pay</button>`
+                    : "";
+
                 html += `
                     <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="member">
-                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}${excludedLine}${extraInfoLine}</span>
-                        <span style="color:var(--text-muted);">›</span>
+                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}</span>
+                        <span style="display:flex; align-items:center; gap:6px;">
+                            ${ccPayBtnHTML}
+                            <span style="color:var(--text-muted);">›</span>
+                        </span>
                     </div>`;
             });
             document.getElementById("memberPageAccountsList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts tagged to this member yet.</p>`;
@@ -5152,7 +5309,7 @@
             Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).forEach(c => { currSelect.innerHTML += `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`; });
             const sortedAccountsForTxForm = sortAccountsByGroupThenName(accounts);
             sortedAccountsForTxForm.forEach(a => {
-                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : a.type === "creditcard" ? "💳 " : "";
                 const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
                 // v68: owner alone can still leave two accounts looking identical (e.g. two
                 // "HSBC Loan" accounts under the same family member) — accountRelatedSuffix
@@ -6187,7 +6344,7 @@
             // Destination account pickers for both flows — any account except this same FD placement's
             // holding account makes sense as a target (though we don't hard-block picking it either).
             const destOptions = accounts.map(a => {
-                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : a.type === "creditcard" ? "💳 " : "";
                 const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
                 return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel} — ${escapeHtml(accountOwnerNamesText(a) + accountRelatedSuffix(a, accounts))}</option>`;
             }).join("");
@@ -6691,7 +6848,7 @@
         function populateSalaryAccountSelects(accounts) {
             const sorted = sortAccountsByGroupThenName(accounts);
             const optionsHTML = sorted.map(a => {
-                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : "";
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : a.type === "creditcard" ? "💳 " : "";
                 const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
                 const ownerLabel = ` — ${escapeHtml(accountOwnerNamesText(a) + accountRelatedSuffix(a, accounts))}`;
                 return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}${ownerLabel}</option>`;
@@ -7611,6 +7768,22 @@
                 }
             } else {
                 extraInfoBanner.style.display = "none";
+            }
+
+            // Credit Card (v127): Amount Due + 💳 Pay banner — see openCreditCardPayment()'s
+            // comment for what "Amount Due" means here (just the ordinary balance, negated).
+            const ccBanner = document.getElementById("ledgerCcBanner");
+            if (showFullAccountHistory) {
+                const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
+                const amountDue = (viewingAcc && viewingAcc.type === "creditcard") ? Math.max(0, -(nativeBalances[viewingAcc.id] || 0)) : 0;
+                if (viewingAcc && viewingAcc.type === "creditcard" && amountDue > 0.005) {
+                    document.getElementById("ledgerCcAmountDue").innerHTML = formatBalanceHTML(amountDue, viewingAcc.currency);
+                    ccBanner.style.display = "flex";
+                } else {
+                    ccBanner.style.display = "none";
+                }
+            } else {
+                ccBanner.style.display = "none";
             }
 
             // Fund Holdings section (Unit Trust accounts only) — shown above the normal
@@ -9220,6 +9393,8 @@
             toggleSavingsMainExpand: (el) => toggleSavingsMainExpand(el.dataset.id),
             deleteAccountFromForm: () => deleteAccountFromForm(),
             editAccountFromLedgerHeader: () => editAccountFromLedgerHeader(),
+            openCreditCardPayment: (el) => openCreditCardPayment(el),
+            openCreditCardPaymentFromLedgerHeader: () => openCreditCardPaymentFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportBackup: () => exportBackup(),
             openImportInput: () => document.getElementById("importInput").click(),

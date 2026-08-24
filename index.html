@@ -1386,6 +1386,15 @@
              accountExtraInfoLine() helper used on the Accounts page and member pages, so this
              banner is populated with its raw HTML rather than a single text value. -->
         <div id="ledgerExtraInfoBanner" style="display:none; font-size:0.78rem; font-weight:700; border-radius:10px; padding:8px 12px; margin:-6px 0 14px; text-align:center; background:#f0fdf4; border:1px solid #bbf7d0; color:#166534;"></div>
+        <!-- Credit Card (v127): Amount Due + 💳 Pay button, shown only when viewing a credit-card
+             account (see navigateToLedgerPage's population of this banner). "Amount Due" here is
+             the same figure as the Current Balance banner above (just relabeled/re-signed for a
+             card — see openCreditCardPayment's own comment on why) so this deliberately doesn't
+             duplicate that number as a separate stored/computed value. -->
+        <div id="ledgerCcBanner" style="display:none; align-items:center; justify-content:space-between; gap:10px; font-size:0.78rem; font-weight:700; border-radius:10px; padding:10px 12px; margin:-6px 0 14px; background:#fdf2f8; border:1px solid #fbcfe8; color:#9d174d;">
+            <span>💳 Amount due: <span id="ledgerCcAmountDue">RM0.00</span></span>
+            <button type="button" data-click="openCreditCardPaymentFromLedgerHeader" style="background:#db2777; color:white; border:none; border-radius:8px; padding:7px 14px; font-size:0.76rem; font-weight:700; cursor:pointer; white-space:nowrap;">💳 Pay</button>
+        </div>
         <div id="ledgerYearNav" style="display:none; align-items:center; justify-content:center; gap:16px; padding:10px 0 14px;">
             <button type="button" class="btn-util" id="ledgerYearPrevBtn" data-click="ledgerYearPrev" style="padding:6px 14px; font-size:1rem;">&lt;</button>
             <select id="ledgerYearLabel" data-change="ledgerYearSelectChange" style="font-weight:800; font-size:1.05rem; min-width:100px; text-align:center; text-align-last:center; padding:6px 8px; border-radius:8px; border:1.5px solid var(--border-color); background:var(--bg-color); color:var(--text-main);"></select>
@@ -1997,6 +2006,7 @@
                     <label>Account Type</label>
                     <div style="display:flex; gap:6px; flex-wrap:wrap;">
                         <button type="button" id="accTypeBtnNormal" data-click="setAccountTypeUI" data-type="normal" class="submit-btn" style="margin-top:0; flex:1; font-size:0.72rem; padding:10px 4px; min-width:70px;">🏛️ Normal</button>
+                        <button type="button" id="accTypeBtnCc" data-click="setAccountTypeUI" data-type="creditcard" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">💳 Credit Card</button>
                         <button type="button" id="accTypeBtnMulti" data-click="setAccountTypeUI" data-type="multi" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">💱 Multi-Currency</button>
                         <button type="button" id="accTypeBtnFd" data-click="setAccountTypeUI" data-type="fd" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">🏦 Fixed Deposit</button>
                         <button type="button" id="accTypeBtnUt" data-click="setAccountTypeUI" data-type="unittrust" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">🧺 Unit Trust</button>
@@ -2008,6 +2018,37 @@
 
                 <div id="utInfoWrap" style="display:none; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:10px 12px; margin-bottom:12px; font-size:0.76rem; color:#92400e;">
                     🧺 After saving, open this account's own page to add funds and log Buy/Sell/Dividend/Contribution transactions.
+                </div>
+
+                <!-- Credit Card (v127): Limit/Statement Day/Payment Due Day are purely informational
+                     — this is Tier 1 (see setAccountTypeUI's comment above the "creditcard" branch):
+                     "Amount Due" is just this account's ordinary running balance (spending on the
+                     card is logged as an Expense exactly like any other account, pushing the balance
+                     negative), NOT a separate statement-cycle calculation that buckets transactions
+                     into billing periods — Statement Day is shown alongside Payment Due Day for
+                     reference only, nothing here computes which transactions fall in which cycle.
+                     Default Payment Account feeds the 💳 Pay button (openCreditCardPayment) — the
+                     account a payment transfer defaults to coming from, editable per-payment. -->
+                <div id="ccWrap" style="display:none; background:#fdf2f8; border:1px solid #fbcfe8; border-radius:10px; padding:12px; margin-bottom:12px;">
+                    <div class="form-row">
+                        <label>Credit Limit</label>
+                        <input type="number" id="newAccCcLimit" step="0.01" placeholder="0.00">
+                    </div>
+                    <div class="form-row-inline">
+                        <div>
+                            <label>Statement Day</label>
+                            <select id="newAccCcStatementDay" class="form-input"></select>
+                        </div>
+                        <div>
+                            <label>Payment Due Day</label>
+                            <select id="newAccCcDueDay" class="form-input"></select>
+                        </div>
+                    </div>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <label>Default Payment Account</label>
+                        <select id="newAccCcPaymentAccount" class="form-input"></select>
+                        <p style="font-size:0.7rem; color:var(--text-muted); margin-top:4px;">Which account the 💳 Pay button defaults to paying from — you can still change it per payment.</p>
+                    </div>
                 </div>
 
                 <div class="form-row">
