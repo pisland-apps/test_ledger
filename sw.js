@@ -4,7 +4,7 @@
 // files the Service Worker serves; APP_VERSION is just the display label in the corner of the
 // screen. They don't sync automatically (different files, different load times) — when you bump
 // one, bump the other too. See the matching reminder comment on APP_VERSION in ledger.js.
-const CACHE_NAME = "ledger-cache-v121";
+const CACHE_NAME = "ledger-cache-v122";
 // NOTE: deliberately does NOT include "./index.html" here. On hosts that
 // redirect /index.html -> / (e.g. Cloudflare Pages -- GitHub Pages doesn't do
 // this), caching that URL bakes in a redirected Response, and Chrome refuses
@@ -17,9 +17,6 @@ const ASSETS_TO_CACHE = [
     "./manifest.json",
     "./icon-192.png",
     "./icon-512.png",
-    // v121: vendored pdf.js, lazily dynamic-import()ed from ledger.js only the first time a
-    // PDF attachment is actually opened — still pre-cached here like every other asset so it
-    // works offline the first time it's needed too, not just on a second visit.
     "./lib/pdf.min.mjs",
     "./lib/pdf.worker.min.mjs"
 ];

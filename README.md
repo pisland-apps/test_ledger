@@ -11,6 +11,8 @@ ledger.js       ← all app logic (external file — see CSP notes in index.html
 sw.js           ← Service Worker: offline caching (CACHE_NAME / ASSETS_TO_CACHE)
 manifest.json   ← Web App Manifest (installable as a PWA)
 icon-192.png / icon-512.png
+lib/            ← vendored pdf.js (pdf.min.mjs + pdf.worker.min.mjs), used by the
+                  transaction-attachment PDF viewer added in v121 — no CDN dependency
 ```
 
 ## Deploy checklist
@@ -18,6 +20,9 @@ icon-192.png / icon-512.png
 - [ ] Push **`index.html` and `ledger.js` together** — the CSP requires app
       logic to live in the external `ledger.js`; if only `index.html` goes
       up, the page loads to a blank screen (it requests a file that isn't there).
+- [ ] Push the **`lib/` folder too** (`pdf.min.mjs` + `pdf.worker.min.mjs`,
+      added v121) — without it, opening a PDF attachment fails (the camera/
+      image-attachment path is unaffected, only PDF preview needs these).
 - [ ] Bump **both** version markers if you're shipping a change worth being
       able to identify at a glance — they do **not** sync automatically,
       since they live in different files:
