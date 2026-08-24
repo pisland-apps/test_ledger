@@ -35,28 +35,27 @@
         const versionBadgeEl = document.getElementById("versionBadge");
         if (versionBadgeEl) versionBadgeEl.textContent = `${APP_VERSION} · ${APP_VERSION_DATE}`;
 
-        // pdf.js — vendored locally under lib/ (no CDN dependency, matches the companion
-        // Family Health & Shield app's approach). pdfjs-dist 4.x only ships ES module
-        // builds, so it's loaded via dynamic import() rather than a <script> tag — this file
-        // (ledger.js) is a classic non-deferred script, so a `<script type="module">` for
-        // pdf.js could easily end up running after it, leaving window.pdfjsLib unset right
-        // when it's needed. Awaiting this promise at the point of use (openAttachment())
-        // avoids that regardless of load order. Worker vendored at lib/pdf.worker.min.mjs —
-        // must stay in lockstep with lib/pdf.min.mjs's package/version.
+        const DB_NAME = "EnterpriseMultiCurrencyLedgerDB_v4";
+        const DB_VERSION = 5;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory" };
+
+        // v121: pdf.js — same vendored-locally pattern as border-day-ledger/tax-tracker/
+        // wealth-planner (see CSP-hardening notes: no CDN dependency, no SRI question since
+        // it's same-origin). Loaded once, lazily, the first time a PDF attachment is actually
+        // opened — most sessions never touch a PDF at all, so there's no reason to pay the
+        // ~500KB parse cost on every launch. As of pdfjs-dist 3.x/4.x+ this only ships an ES
+        // module build, hence the dynamic import() from this plain (non-module) script rather
+        // than a <script type="module">. The worker is vendored alongside it at
+        // ./lib/pdf.worker.min.mjs — CSP's existing `worker-src 'self'` already covers it, no
+        // CSP change needed for either file.
         const pdfjsLibPromise = import("./lib/pdf.min.mjs").then((mod) => {
             mod.GlobalWorkerOptions.workerSrc = "lib/pdf.worker.min.mjs";
             return mod;
         });
-
-        const DB_NAME = "EnterpriseMultiCurrencyLedgerDB_v4";
-        // v121: DB_VERSION 5→6 adds the ATTACHMENTS store (multi-attachment receipts —
-        // images and PDFs — replacing the old single inline `image` field on a transaction).
-        const DB_VERSION = 6;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -770,16 +769,14 @@
         let ledgerRenderLimit = 50;
         const LEDGER_PAGE_SIZE = 50;
 
-        // v121: replaced the old single currentTxImageData (one inline receipt photo) with a
-        // multi-attachment model, images and PDFs, styled after the companion Family Health &
-        // Shield app. tempTxAttachments holds newly-picked files not yet written to IndexedDB
-        // (full data inline); existingTxAttachments holds the lightweight {id,name,mime,thumb,size}
-        // refs already stored under STORES.ATTACHMENTS for the transaction being edited (id === ""
-        // for a brand-new entry means this starts empty). Removing an existing one just drops it
-        // from this array — the actual IDB record isn't deleted until save time (see
-        // handleTransactionSubmitMobile), so cancelling the form leaves it untouched.
-        let tempTxAttachments = [];
-        let existingTxAttachments = [];
+        // Holds the compressed base64 image, or a raw base64 PDF, (if any) currently attached
+        // in the open transaction form. Which one it is gets sniffed later from the data: URL's
+        // own mime prefix — no separate type field needed.
+        let currentTxImageData = null;
+        // Original filename of the currently-attached PDF (used for the viewer title + display
+        // in the form). Always null for images — the compressed JPEG has no meaningful original
+        // name and the receipt UI never showed one.
+        let currentTxAttachmentName = null;
 
         // v88: Transaction Quick View / Options / Refund / Split state.
         // Which transaction id the Quick View modal is currently showing — set by openTxQuickView(),
@@ -1162,15 +1159,6 @@
                         // One record per NAV Date (keyPath "date", e.g. "2026-08-17") — re-saving
                         // the same date overwrites it rather than creating a duplicate History row.
                         database.createObjectStore(STORES.NAV_HISTORY, { keyPath: "date" });
-                    }
-                    if (!database.objectStoreNames.contains(STORES.ATTACHMENTS)) {
-                        // v121: one record per attachment file (id, name, mime, data — data is a full
-                        // base64 data URL). Goes through the same writeDB()/encryptRecord() path as
-                        // every other store, so it's encrypted (when app-lock is set up) exactly like
-                        // accounts/transactions/etc — no separate crypto path needed. Transactions only
-                        // keep a lightweight {id, name, mime, thumb, size} reference in their own
-                        // `attachments` array; the actual file bytes live only here.
-                        database.createObjectStore(STORES.ATTACHMENTS, { keyPath: "id" });
                     }
                 };
                 request.onerror = (e) => reject(e.target.error);
@@ -2008,13 +1996,7 @@
                 const localAppBytes = JSON.stringify(txs).length * 2 + 150000; 
                 const appMB = (localAppBytes / (1024 * 1024)).toFixed(2);
 
-                // v121: attachments now live in their own store — surface a real count/size
-                // instead of the old hardcoded "0 attachments" placeholder.
-                const atts = await readAllDB(STORES.ATTACHMENTS);
-                const attBytes = JSON.stringify(atts).length;
-                const attMB = (attBytes / (1024 * 1024)).toFixed(2);
-
-                document.getElementById("appStorageText").textContent = `App Local Database footprint: ~${appMB} MB (${atts.length} attachment${atts.length === 1 ? '' : 's'}, ${attMB} MB)`;
+                document.getElementById("appStorageText").textContent = `App Local Database footprint: ~${appMB} MB (0 attachments, 0.00 MB)`;
                 document.getElementById("systemQuotaText").textContent = `Total browser quota limit: ~${totalMB} MB, Used: ${usedMB} MB (across local sandboxes)`;
                 
                 const percentage = Math.min((estimate.usage / estimate.quota) * 100, 100);
@@ -3613,7 +3595,6 @@
                 fund.units = Math.max(0, (fund.units || 0) + unitDelta);
                 await writeDB(STORES.FUNDS, fund);
             }
-            await deleteTxAttachments(tx);
             await deleteDB(STORES.TRANSACTIONS, tx.id);
             closeModal("fundTxModal");
             renderApp();
@@ -3649,7 +3630,6 @@
                 fund.units = Math.max(0, (fund.units || 0) + unitDelta);
                 await writeDB(STORES.FUNDS, fund);
             }
-            await deleteTxAttachments(tx);
             await deleteDB(STORES.TRANSACTIONS, tx.id);
             renderApp();
         }
@@ -4142,7 +4122,6 @@
                 const allTx = await readAllDB(STORES.TRANSACTIONS);
                 const linkedTx = allTx.filter(t => t.src === id || t.dest === id);
                 for (const t of linkedTx) {
-                    await deleteTxAttachments(t);
                     await deleteDB(STORES.TRANSACTIONS, t.id);
                 }
                 // Cascade-delete any Unit Trust funds filed under this account too — they're
@@ -5239,16 +5218,7 @@
                 document.getElementById("txSubmitBtn").textContent = "Save Changes";
                 document.getElementById("txDeleteBtn").style.display = "block";
 
-                // v121: load already-saved attachments (id/name/mime/thumb/size refs — no full
-                // file data pulled in here, that's only fetched on demand when one is opened).
-                // A legacy pre-v121 entry that only has the old inline tx.image field is seeded
-                // as one existing attachment with a null id — handleTransactionSubmitMobile()
-                // notices the missing id at save time and migrates it into a real IndexedDB
-                // attachment then, so it only needs handling in one place.
-                existingTxAttachments = Array.isArray(tx.attachments) ? tx.attachments.map(a => ({ ...a })) :
-                    (tx.image ? [{ id: null, name: "Receipt.jpg", mime: "image/jpeg", thumb: tx.image, size: tx.image.length, legacyData: tx.image }] : []);
-                tempTxAttachments = [];
-                renderTxAttachmentPreview();
+                setTxImagePreview(tx.image || null, tx.attachmentName || null);
 
                 // Editing: default to "manual" so an existing saved Description stays visible
                 // and editable rather than being hidden the moment the FD block re-appears.
@@ -5329,9 +5299,7 @@
                 document.getElementById("txSubmitBtn").textContent = "Commit Entry";
                 document.getElementById("txDeleteBtn").style.display = "none";
 
-                existingTxAttachments = [];
-                tempTxAttachments = [];
-                renderTxAttachmentPreview();
+                setTxImagePreview(null);
 
                 document.getElementById("txFdReference").value = "";
                 document.getElementById("txFdStartDate").value = "";
@@ -5571,24 +5539,108 @@
             closeModal("calcPadModal");
         }
 
-        // --- RECEIPT ATTACHMENTS (images + PDFs, multiple per transaction) ---
+        // --- RECEIPT / PHOTO / PDF ATTACHMENT ---
 
-        function makeAttId() {
-            return "att_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+        // v121: extended from image-only to also accept a PDF, following the same pattern
+        // border-day-ledger used — sniff the mime prefix off the stored data: URL itself
+        // rather than adding a separate "type" field, so existing records (`t.image` always an
+        // image data URL) keep working unchanged; a PDF just happens to also be storable in
+        // that same field now. `nameOrNull` is the original filename, only ever set for PDFs
+        // (kept for the viewer title + this preview chip — a compressed-JPEG receipt never had
+        // a meaningful original name to show).
+        function setTxImagePreview(base64OrNull, nameOrNull) {
+            currentTxImageData = base64OrNull;
+            currentTxAttachmentName = base64OrNull ? (nameOrNull || null) : null;
+            const wrap = document.getElementById("txImagePreviewWrap");
+            const img = document.getElementById("txImagePreview");
+            const pdfChip = document.getElementById("txPdfPreviewChip");
+            const pdfName = document.getElementById("txPdfPreviewName");
+            const status = document.getElementById("txImageStatus");
+            const isPdf = !!base64OrNull && base64OrNull.startsWith("data:application/pdf");
+
+            if (base64OrNull) {
+                wrap.style.display = "block";
+                if (isPdf) {
+                    img.style.display = "none";
+                    img.src = "";
+                    pdfChip.style.display = "flex";
+                    pdfName.textContent = currentTxAttachmentName || "Attachment.pdf";
+                } else {
+                    pdfChip.style.display = "none";
+                    img.style.display = "block";
+                    img.src = base64OrNull;
+                }
+                status.textContent = "";
+            } else {
+                img.src = "";
+                img.style.display = "block";
+                pdfChip.style.display = "none";
+                wrap.style.display = "none";
+                status.textContent = "";
+            }
+            // Reset the file inputs so selecting the same file again still fires 'change'.
+            document.getElementById("txCameraInput").value = "";
+            document.getElementById("txGalleryInput").value = "";
         }
 
-        function readFileAsDataUrl(file) {
-            return new Promise((resolve) => {
-                const reader = new FileReader();
-                reader.onload = (e) => resolve(e.target.result);
-                reader.onerror = () => resolve(null);
+        function removeTxImage() {
+            setTxImagePreview(null);
+        }
+
+        function handleTxImageSelected(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const isImage = file.type.startsWith("image/");
+            const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name || "");
+            if (!isImage && !isPdf) {
+                alert("Please select an image or PDF file.");
+                return;
+            }
+
+            const status = document.getElementById("txImageStatus");
+            const reader = new FileReader();
+
+            // PDFs are stored as-is (no compression pipeline makes sense for a PDF) — just the
+            // raw data: URL plus the original filename.
+            if (isPdf) {
+                status.textContent = "Reading PDF...";
+                reader.onload = (e) => {
+                    setTxImagePreview(e.target.result, file.name);
+                    const approxKb = Math.round((e.target.result.length * 0.75) / 1024);
+                    status.textContent = `Attached (~${approxKb} KB)`;
+                };
+                reader.onerror = () => {
+                    alert("Could not read the selected file.");
+                    status.textContent = "";
+                };
                 reader.readAsDataURL(file);
-            });
+                return;
+            }
+
+            status.textContent = "Processing image...";
+            reader.onload = (e) => {
+                const rawDataUrl = e.target.result;
+                compressImage(rawDataUrl, 1024, 0.7)
+                    .then((compressedDataUrl) => {
+                        setTxImagePreview(compressedDataUrl, null);
+                        const approxKb = Math.round((compressedDataUrl.length * 0.75) / 1024);
+                        status.textContent = `Attached (~${approxKb} KB)`;
+                    })
+                    .catch(() => {
+                        alert("Could not process this image. Please try another one.");
+                        status.textContent = "";
+                    });
+            };
+            reader.onerror = () => {
+                alert("Could not read the selected file.");
+                status.textContent = "";
+            };
+            reader.readAsDataURL(file);
         }
 
         // Resizes + re-encodes an image as JPEG to keep IndexedDB storage usage reasonable.
-        // Receipts don't need full camera resolution to stay legible. Also reused at a small
-        // size/quality to build the inline preview thumbnail kept on the transaction record.
+        // Receipts don't need full camera resolution to stay legible.
         function compressImage(dataUrl, maxDimension, quality) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
@@ -5619,240 +5671,64 @@
             });
         }
 
-        function formatAttBytes(n) {
-            if (!n) return "";
-            if (n < 1024) return n + " B";
-            if (n < 1024 * 1024) return (n / 1024).toFixed(0) + " KB";
-            return (n / 1024 / 1024).toFixed(1) + " MB";
-        }
-
-        // Fired by both the camera input (image/* only) and the "Add Files" input
-        // (image/*,application/pdf, multiple). Reads every selected file, compresses images
-        // (a small inline thumb is generated for the preview list; PDFs show a 📄 icon
-        // instead — a full-page thumbnail isn't worth the pdf.js render cost just for a list
-        // row), and appends each to tempTxAttachments. Actual IndexedDB writes happen only on
-        // save (handleTransactionSubmitMobile) — cancelling the form discards these.
-        async function handleTxAttachmentsSelected(event) {
-            const files = Array.from(event.target.files || []);
-            for (const file of files) {
-                const isImage = file.type.startsWith("image/");
-                const isPdf = file.type === "application/pdf";
-                if (!isImage && !isPdf) {
-                    alert(`"${file.name}" isn't an image or a PDF — skipped.`);
-                    continue;
-                }
-                if (isPdf && file.size > 8 * 1024 * 1024) {
-                    const mb = (file.size / 1024 / 1024).toFixed(1);
-                    if (!confirm(`"${file.name}" is ${mb}MB. Large PDFs take longer to store. Add it anyway?`)) continue;
-                }
-
-                let data, thumb;
-                if (isImage) {
-                    const raw = await readFileAsDataUrl(file);
-                    if (!raw) { alert(`Couldn't read "${file.name}" — it wasn't added.`); continue; }
-                    try {
-                        data = await compressImage(raw, 1280, 0.75);
-                        thumb = await compressImage(raw, 96, 0.5);
-                    } catch (err) {
-                        alert(`Could not process "${file.name}" — it wasn't added.`);
-                        continue;
-                    }
-                } else {
-                    data = await readFileAsDataUrl(file);
-                    if (!data) { alert(`Couldn't read "${file.name}" — it wasn't added.`); continue; }
-                    thumb = null;
-                }
-
-                tempTxAttachments.push({
-                    name: file.name,
-                    mime: isImage ? "image/jpeg" : "application/pdf",
-                    data,
-                    thumb,
-                    size: data.length
-                });
-            }
-            renderTxAttachmentPreview();
-            // Reset both file inputs so selecting the same file again still fires 'change'.
-            document.getElementById("txCameraInput").value = "";
-            document.getElementById("txFilesInput").value = "";
-        }
-
-        // Renders the combined list — already-saved attachments (existingTxAttachments, only
-        // present when editing) plus newly-picked-but-unsaved ones (tempTxAttachments) — into
-        // the transaction form's attachment preview area, each with its own Remove button.
-        function renderTxAttachmentPreview() {
-            const wrap = document.getElementById("txAttachmentPreview");
-            const items = [];
-            existingTxAttachments.forEach((att, idx) => {
-                items.push(renderTxAttachmentRow(att, `removeExistingTxAttachment" data-idx="${idx}`));
-            });
-            tempTxAttachments.forEach((att, idx) => {
-                items.push(renderTxAttachmentRow(att, `removeTempTxAttachment" data-idx="${idx}`));
-            });
-            wrap.innerHTML = items.join("");
-            wrap.style.display = items.length ? "flex" : "none";
-        }
-
-        function renderTxAttachmentRow(att, removeDataClick) {
-            const isImage = (att.mime || "").startsWith("image/");
-            const thumbSrc = att.thumb || (isImage ? att.data : null);
-            const icon = isImage ? "🖼️" : "📄";
-            return `
-                <div class="tx-att-item" style="display:flex; align-items:center; gap:8px; background:#f8fafc; border:1px solid var(--border-color); border-radius:8px; padding:6px 8px;">
-                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:#e2e8f0; font-size:1.1rem;">
-                        ${thumbSrc ? `<img src="${thumbSrc}" alt="" style="width:100%; height:100%; object-fit:cover;">` : icon}
-                    </div>
-                    <div style="flex:1; min-width:0;">
-                        <div style="font-size:0.78rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
-                        <div style="font-size:0.68rem; color:var(--text-muted);">${formatAttBytes(att.size)}</div>
-                    </div>
-                    <button type="button" data-click="${removeDataClick}" style="border:none; background:none; color:var(--expense-color); font-weight:700; font-size:1rem; cursor:pointer; padding:2px 6px; flex-shrink:0;">✕</button>
-                </div>
-            `;
-        }
-
-        function removeExistingTxAttachment(el) {
-            const idx = parseInt(el.dataset.idx, 10);
-            existingTxAttachments.splice(idx, 1);
-            renderTxAttachmentPreview();
-        }
-
-        function removeTempTxAttachment(el) {
-            const idx = parseInt(el.dataset.idx, 10);
-            tempTxAttachments.splice(idx, 1);
-            renderTxAttachmentPreview();
-        }
-
-        // Object URLs are deliberately NOT used anywhere in the attachment viewer below — every
-        // attachment's bytes are already available as a data: URL (either read straight off the
-        // transaction record for a legacy single-image entry, or resolved from IndexedDB via
-        // readKeyDB(STORES.ATTACHMENTS, id) below), so <img src="data:..."> and an <a download
-        // href="data:...">  work directly with no createObjectURL/revokeObjectURL bookkeeping and
-        // no img-src CSP change needed (data: was already allowed).
-
-        // Opens the small picker listing every attachment on a transaction (tapped from the 📎
-        // badge on a ledger row) — or, if there's only one, skips straight to the full viewer.
-        function openTxAttachmentsBadge(el, event) {
+        // v121: extended to also view PDF attachments, same mime-sniff-off-the-data-URL
+        // approach as border-day-ledger. Deliberately NOT an <iframe src="blob:..."> / native
+        // PDF plugin (inconsistent across platforms — Chrome/Android in particular can render
+        // some PDFs blank via that path). pdf.js decodes the bytes in JS and renders each page
+        // onto its own <canvas> instead, so the result is identical on every device and never
+        // executes anything embedded in the PDF (isEvalSupported: false below is belt-and-
+        // suspenders on top of only ever calling getPage()/render(), never touching any
+        // AcroForm/embedded-JS path).
+        async function openImageViewer(base64, event, name) {
             if (event) event.stopPropagation();
-            let atts;
-            try { atts = JSON.parse(el.dataset.attachments || "[]"); } catch (err) { atts = []; }
-            // Legacy transactions saved before v121 kept one inline image directly on the record
-            // (t.image) instead of an `attachments` array — synthesize a matching pseudo-entry so
-            // the same viewer code path handles both without a separate legacy branch everywhere.
-            if (el.dataset.legacyImage) {
-                atts = [{ name: "Receipt.jpg", mime: "image/jpeg", data: el.dataset.legacyImage, legacy: true }];
-            }
-            if (atts.length === 0) return;
-            if (atts.length === 1) { openAttachment(atts[0]); return; }
+            if (!base64) return;
+            const isPdf = base64.startsWith("data:application/pdf");
+            const imgEl = document.getElementById("imageViewerImg");
+            const pdfBody = document.getElementById("pdfViewerBody");
+            const titleEl = document.getElementById("imageViewerTitle");
+            titleEl.textContent = name || (isPdf ? "Attachment" : "");
+            titleEl.style.display = titleEl.textContent ? "block" : "none";
 
-            const list = document.getElementById("txAttachmentsPickerList");
-            list.innerHTML = atts.map((att, idx) => `
-                <div class="tx-att-item" data-click="openAttachmentFromPicker" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:#f8fafc; border:1px solid var(--border-color); border-radius:8px; padding:8px; cursor:pointer;">
-                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:#e2e8f0; font-size:1.1rem;">
-                        ${att.thumb ? `<img src="${att.thumb}" alt="" style="width:100%; height:100%; object-fit:cover;">` : ((att.mime || "").startsWith("image/") ? "🖼️" : "📄")}
-                    </div>
-                    <div style="flex:1; min-width:0; font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
-                </div>
-            `).join("");
-            txAttachmentsPickerCurrent = atts;
-            openModal("txAttachmentsPickerModal");
-        }
-        let txAttachmentsPickerCurrent = [];
-
-        function openAttachmentFromPicker(el) {
-            const idx = parseInt(el.dataset.idx, 10);
-            const att = txAttachmentsPickerCurrent[idx];
-            if (att) openAttachment(att);
-        }
-
-        // Deletes every IndexedDB attachment blob referenced by a transaction — used wherever a
-        // transaction itself is deleted (options-menu delete, account-delete cascade, fund-tx
-        // delete) so a removed transaction doesn't leave orphaned attachment records behind.
-        // Legacy pre-v121 entries only carry inline `image` data on the transaction record
-        // itself (nothing separate in STORES.ATTACHMENTS), so there's nothing to clean up there.
-        async function deleteTxAttachments(tx) {
-            if (!tx || !Array.isArray(tx.attachments)) return;
-            for (const att of tx.attachments) {
-                if (att && att.id) {
-                    try { await deleteDB(STORES.ATTACHMENTS, att.id); } catch (err) { /* non-fatal */ }
-                }
-            }
-        }
-
-        // Resolves an attachment's full bytes and renders it into attachmentViewerModal — images
-        // directly via <img>, PDFs page-by-page onto <canvas> via pdf.js (never handed to an
-        // <iframe>/native plugin, so rendering is identical across every platform and no
-        // PDF-embedded JavaScript is ever executed — pdf.js only reads page content). Accepts
-        // either a lightweight ref ({id, ...}, resolved from IndexedDB) or one already carrying
-        // its data inline (a legacy single-image entry, or a not-yet-saved temp attachment).
-        async function openAttachment(att) {
-            if (!att) return;
-            const body = document.getElementById("attachmentViewerBody");
-            body.innerHTML = "<p style=\"font-size:0.85rem; color:var(--text-muted);\">Loading…</p>";
-            document.getElementById("attachmentViewerTitle").textContent = att.name || "Attachment";
-            openModal("attachmentViewerModal");
-
-            let dataUrl = att.data || null;
-            if (!dataUrl && att.id) {
-                try {
-                    const rec = await readKeyDB(STORES.ATTACHMENTS, att.id);
-                    dataUrl = rec ? rec.data : null;
-                } catch (err) {
-                    body.innerHTML = "<p style=\"color:var(--expense-color);\">Could not load this attachment.</p>";
-                    return;
-                }
-            }
-            if (!dataUrl) {
-                body.innerHTML = "<p style=\"color:var(--expense-color);\">This attachment's file data could not be found.</p>";
+            if (!isPdf) {
+                pdfBody.style.display = "none";
+                pdfBody.innerHTML = "";
+                imgEl.style.display = "block";
+                imgEl.src = base64;
+                openModal("imageViewerModal");
                 return;
             }
 
-            const isPdf = (att.mime === "application/pdf") || /\.pdf$/i.test(att.name || "");
-            body.innerHTML = "";
-            const dl = document.getElementById("btnDownloadAttachment");
-            dl.href = dataUrl;
-            dl.download = att.name || "attachment";
-
-            if (isPdf) {
-                body.innerHTML = "<p style=\"font-size:0.85rem; color:var(--text-muted);\">Loading PDF…</p>";
-                try {
-                    const base64 = dataUrl.split(",")[1] || "";
-                    const bytes = b64ToBuf(base64);
-                    const pdfjsLib = await pdfjsLibPromise;
-                    // isEvalSupported: false — belt-and-suspenders on top of only ever calling
-                    // getPage()/render() here: tells pdf.js not to use eval()/new Function() for
-                    // any internal optimization, so a malicious PDF can't get script execution
-                    // out of the parser. Harmless for rendering — eval is only ever used there as
-                    // a speed optimization, never a required code path.
-                    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false }).promise;
-                    body.innerHTML = "";
-                    const containerWidth = body.clientWidth || 320;
-                    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-                        const page = await pdf.getPage(pageNum);
-                        const unscaledViewport = page.getViewport({ scale: 1 });
-                        const scale = Math.max(0.1, (containerWidth - 16) / unscaledViewport.width);
-                        const viewport = page.getViewport({ scale });
-                        const canvas = document.createElement("canvas");
-                        canvas.width = viewport.width;
-                        canvas.height = viewport.height;
-                        canvas.style.display = "block";
-                        canvas.style.maxWidth = "100%";
-                        canvas.style.margin = "0 auto 10px";
-                        canvas.style.boxShadow = "0 1px 4px rgba(0,0,0,0.15)";
-                        body.appendChild(canvas);
-                        await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
-                    }
-                } catch (pdfErr) {
-                    body.innerHTML = "<p style=\"color:var(--expense-color);\">Could not preview this PDF: " + escapeHtml(pdfErr.message) + "<br><br>Use Download below to save it and open it another way.</p>";
+            imgEl.style.display = "none";
+            imgEl.src = "";
+            pdfBody.style.display = "block";
+            pdfBody.innerHTML = '<div style="color:#f8fafc; text-align:center; padding:30px;">Loading PDF…</div>';
+            openModal("imageViewerModal");
+            try {
+                const base64Data = base64.split(",")[1];
+                const binary = atob(base64Data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                const pdfjsLib = await pdfjsLibPromise;
+                const pdf = await pdfjsLib.getDocument({ data: bytes, isEvalSupported: false }).promise;
+                pdfBody.innerHTML = "";
+                const containerWidth = Math.min(window.innerWidth * 0.95, 700);
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    const page = await pdf.getPage(pageNum);
+                    const unscaledViewport = page.getViewport({ scale: 1 });
+                    const scale = Math.max(0.1, (containerWidth - 20) / unscaledViewport.width);
+                    const viewport = page.getViewport({ scale });
+                    const canvas = document.createElement("canvas");
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    canvas.style.display = "block";
+                    canvas.style.maxWidth = "100%";
+                    canvas.style.margin = "0 auto 12px";
+                    canvas.style.borderRadius = "8px";
+                    pdfBody.appendChild(canvas);
+                    await page.render({ canvasContext: canvas.getContext("2d"), viewport }).promise;
                 }
-            } else {
-                const img = document.createElement("img");
-                img.src = dataUrl;
-                img.style.maxWidth = "100%";
-                img.style.maxHeight = "70vh";
-                img.style.display = "block";
-                img.style.margin = "0 auto";
-                body.appendChild(img);
+            } catch (err) {
+                pdfBody.innerHTML = '<div style="color:#f8fafc; text-align:center; padding:30px;">Could not preview this PDF' + (err && err.message ? (": " + escapeHtml(err.message)) : "") + '.</div>';
             }
         }
 
@@ -6427,44 +6303,6 @@
                 }
             }
 
-            // v121: persist attachments before building the record. tempTxAttachments (newly
-            // picked, full data inline) each get a fresh IndexedDB id; existingTxAttachments
-            // entries are either already-saved refs (kept as-is) or — for a legacy pre-v121
-            // entry — a `legacyData` payload that gets migrated into a real IndexedDB attachment
-            // right now. Anything present on the ORIGINAL record but no longer in the kept list
-            // (i.e. removed via the ✕ button) is deleted from IndexedDB only after the
-            // transaction itself saves successfully, so a failed save doesn't orphan-delete data
-            // still referenced by the untouched original record.
-            let finalAttachments = [];
-            let attachmentIdsToDelete = [];
-            try {
-                for (const att of existingTxAttachments) {
-                    if (att.legacyData) {
-                        const id = makeAttId();
-                        await writeDB(STORES.ATTACHMENTS, { id, name: att.name, mime: att.mime, data: att.legacyData });
-                        finalAttachments.push({ id, name: att.name, mime: att.mime, thumb: att.thumb, size: att.size });
-                    } else {
-                        finalAttachments.push({ id: att.id, name: att.name, mime: att.mime, thumb: att.thumb, size: att.size });
-                    }
-                }
-                for (const att of tempTxAttachments) {
-                    const id = makeAttId();
-                    await writeDB(STORES.ATTACHMENTS, { id, name: att.name, mime: att.mime, data: att.data });
-                    finalAttachments.push({ id, name: att.name, mime: att.mime, thumb: att.thumb, size: att.size });
-                }
-            } catch (err) {
-                const msg = (err && err.name === "QuotaExceededError")
-                    ? "Not enough storage space to save these attachments. Try removing one or freeing up space."
-                    : "Could not save attachments: " + (err && err.message ? err.message : err);
-                alert(msg);
-                return;
-            }
-            const originalAttachmentIds = new Set(
-                (existingTxForEdit && Array.isArray(existingTxForEdit.attachments) ? existingTxForEdit.attachments.map(a => a.id) : []).filter(Boolean)
-            );
-            const keptAttachmentIds = new Set(finalAttachments.map(a => a.id).filter(Boolean));
-            attachmentIdsToDelete = [...originalAttachmentIds].filter(id => !keptAttachmentIds.has(id));
-
             const record = {
                 type: document.getElementById("txType").value,
                 desc: desc,
@@ -6483,8 +6321,8 @@
                 // e.g. "[Commute]" on the ledger even though Transfers have no category.
                 cat: document.getElementById("txType").value === "transfer" ? preservedTransferCat : document.getElementById("txCategory").value,
                 date: dateVal,
-                image: null, // v121: superseded by `attachments` below; kept null going forward (legacy entries are migrated into `attachments` above the moment they're next edited).
-                attachments: finalAttachments,
+                image: currentTxImageData || null,
+                attachmentName: currentTxAttachmentName || null,
                 // v88: To/From (payee) and free-text Notes — optional on every type, blank stored as
                 // null (not "") so existing code that checks `t.notes` truthy keeps working unchanged.
                 // v96: the "To/From" field itself was removed from the entry form (Notes now covers
@@ -6576,10 +6414,10 @@
                     for (const row of splitRows) {
                         const extraRecord = Object.assign({}, record, { cat: row.cat, amount: row.amount, splitGroupId });
                         delete extraRecord.id;
-                        // Only the first (main) row in a split carries the attachments, if any —
-                        // attaching the same files to every split part would be misleading.
+                        // Only the first (main) row in a split carries the receipt/attachment, if
+                        // any — attaching the same one to every split part would be misleading.
                         extraRecord.image = null;
-                        extraRecord.attachments = [];
+                        extraRecord.attachmentName = null;
                         await writeDB(STORES.TRANSACTIONS, extraRecord);
                     }
                 } else {
@@ -6587,15 +6425,10 @@
                 }
             } catch (err) {
                 const msg = (err && err.name === "QuotaExceededError")
-                    ? "Not enough storage space to save this transaction. Try removing an attachment or freeing up space."
+                    ? "Not enough storage space to save this photo. Try removing the image or freeing up space."
                     : "Could not save transaction: " + (err && err.message ? err.message : err);
                 alert(msg);
                 return;
-            }
-            // Only delete newly-orphaned attachment blobs after the transaction itself saved
-            // successfully (see the comment above where attachmentIdsToDelete is computed).
-            for (const id of attachmentIdsToDelete) {
-                try { await deleteDB(STORES.ATTACHMENTS, id); } catch (err) { /* non-fatal — a leftover blob costs storage, not correctness */ }
             }
             pendingRefundOf = null;
             closeModal("txModal");
@@ -6864,8 +6697,6 @@
                 if (!ok) return false;
             }
             try {
-                const tx = (await readAllDB(STORES.TRANSACTIONS)).find(t => t.id === id);
-                if (tx) await deleteTxAttachments(tx);
                 await deleteDB(STORES.TRANSACTIONS, id);
             } catch (err) {
                 alert("Could not delete transaction: " + (err && err.message ? err.message : err));
@@ -7859,9 +7690,8 @@
                 const refundBadge = t.isRefund
                     ? `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">↩️ Refund</span>`
                     : '';
-                const attCount = (Array.isArray(t.attachments) ? t.attachments.length : 0) + (t.image ? 1 : 0);
-                const receiptBadge = attCount > 0
-                    ? `<span data-click="openTxAttachmentsBadge" data-attachments="${escapeHtml(JSON.stringify(t.attachments || []))}" ${t.image ? `data-legacy-image="${escapeHtml(t.image)}"` : ''} style="cursor:pointer; margin-left:4px;" title="View attachment${attCount > 1 ? 's' : ''}">📎${attCount > 1 ? `<span style="font-size:0.6rem; vertical-align:top;">×${attCount}</span>` : ''}</span>`
+                const receiptBadge = t.image
+                    ? `<span data-click="openImageViewer" data-image="${escapeHtml(t.image)}" data-name="${escapeHtml(t.attachmentName || "")}" style="cursor:pointer; margin-left:4px;" title="${t.attachmentName ? "View attached PDF" : "View attached photo"}">📎</span>`
                     : '';
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
                 // Maturity date (v55) — shown inline on every FD placement row, not just inside
@@ -8890,10 +8720,6 @@
                 members: await readAllDB(STORES.MEMBERS),
                 funds: await readAllDB(STORES.FUNDS),
                 navHistory: await readAllDB(STORES.NAV_HISTORY),
-                // v121: attachment file blobs (id/name/mime/data) referenced by transactions'
-                // own `attachments` arrays — without this, a restored backup's transactions
-                // would still list attachments, but tapping one would fail to load.
-                attachments: await readAllDB(STORES.ATTACHMENTS),
                 // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
                 // defaultReceiveAccount, defaultIncomeCategory, defaultExpenseCategory, recentTx*
                 // widget filters, expandedAccountSubrows, plus baseCurrency/fxRates which are
@@ -9034,9 +8860,6 @@
                     if (db.objectStoreNames.contains(STORES.NAV_HISTORY)) {
                         await clearStoreDB(STORES.NAV_HISTORY);
                     }
-                    if (db.objectStoreNames.contains(STORES.ATTACHMENTS)) {
-                        await clearStoreDB(STORES.ATTACHMENTS);
-                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -9057,12 +8880,6 @@
                     }
                     if (bundle.navHistory) {
                         for (const rec of bundle.navHistory) await writeDB(STORES.NAV_HISTORY, rec);
-                    }
-                    // v121: attachment blobs — written with their ORIGINAL ids (unlike transactions,
-                    // whose auto-increment `id` is deleted above before re-import) so each restored
-                    // transaction's own `attachments[].id` refs keep resolving correctly.
-                    if (bundle.attachments) {
-                        for (const att of bundle.attachments) await writeDB(STORES.ATTACHMENTS, att);
                     }
 
                     // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
@@ -9174,11 +8991,8 @@
             resetAccountForm: () => resetAccountForm(),
             handleCreateCategoryMobile: () => handleCreateCategoryMobile(),
             openCameraInput: () => document.getElementById("txCameraInput").click(),
-            openFilesInput: () => document.getElementById("txFilesInput").click(),
-            removeExistingTxAttachment: (el) => removeExistingTxAttachment(el),
-            removeTempTxAttachment: (el) => removeTempTxAttachment(el),
-            openTxAttachmentsBadge: (el, e) => openTxAttachmentsBadge(el, e),
-            openAttachmentFromPicker: (el) => openAttachmentFromPicker(el),
+            openGalleryInput: () => document.getElementById("txGalleryInput").click(),
+            removeTxImage: () => removeTxImage(),
             handleTransactionSubmitMobile: () => handleTransactionSubmitMobile(),
             confirmResolveFd: () => confirmResolveFd(),
             loadMoreLedgerRows: () => { ledgerRenderLimit += LEDGER_PAGE_SIZE; renderApp(); },
@@ -9195,6 +9009,7 @@
             toggleCategoryExcludeFromSavings: (el) => toggleCategoryExcludeFromSavings(el.dataset.id),
             openResolveFdModal: (el) => openResolveFdModal(Number(el.dataset.id)),
             navigateToLedgerPage: (el) => navigateToLedgerPage(el.dataset.id, el.dataset.back || "workspace"),
+            openImageViewer: (el, e) => openImageViewer(el.dataset.image, e, el.dataset.name),
             deleteTxFromEditModal: () => deleteTxFromEditModal(),
             navigateToCategoryPage: (el) => navigateToCategoryPage(el.dataset.category, el.dataset.back || "workspace", el.dataset.year || "all", el.dataset.month || "all"),
             numpadDigit: (el) => numpadDigit(el.dataset.digit),
@@ -9253,7 +9068,7 @@
             handleBaseCurrencyChange: () => handleBaseCurrencyChange(),
             recalcTxFdMaturity: () => { recalcTxFdMaturity(); recalcTxSplitTotal(); },
             syncTransactionCurrency: () => syncTransactionCurrency(),
-            handleTxAttachmentsSelected: (el, e) => handleTxAttachmentsSelected(e),
+            handleTxImageSelected: (el, e) => handleTxImageSelected(e),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             handleAutoLockChange: () => handleAutoLockChange(),

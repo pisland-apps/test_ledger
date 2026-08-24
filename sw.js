@@ -17,6 +17,9 @@ const ASSETS_TO_CACHE = [
     "./manifest.json",
     "./icon-192.png",
     "./icon-512.png",
+    // v121: vendored pdf.js, lazily dynamic-import()ed from ledger.js only the first time a
+    // PDF attachment is actually opened — still pre-cached here like every other asset so it
+    // works offline the first time it's needed too, not just on a second visit.
     "./lib/pdf.min.mjs",
     "./lib/pdf.worker.min.mjs"
 ];
