@@ -1164,6 +1164,15 @@
             <button class="sidebar-item" data-click="navigateToNavUpdatePage">
                 <span class="sidebar-item-icon">📊</span> Daily NAV Update
             </button>
+            <!-- v126: "Transactions" — added on request. Wired to the existing "all-ledger"
+                 sidebarGo() target (navigateToLedgerPage("all") → the unfiltered "Portfolio
+                 General Log" view, every transaction across every account). That state/view
+                 already existed (it's the fallback shown after e.g. deleting the account
+                 currently being viewed — see navigateToLedgerPage()'s activeLedgerAccountView
+                 handling in ledger.js) but had no direct nav entry point until now. -->
+            <button class="sidebar-item" data-click="sidebarGo" data-target="all-ledger">
+                <span class="sidebar-item-icon">📒</span> Transactions
+            </button>
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
