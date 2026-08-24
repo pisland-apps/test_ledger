@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v127";
+        const APP_VERSION = "v128";
         const APP_VERSION_DATE = "2026-08-24";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2900,7 +2900,7 @@
                     ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
-                const extraInfoLine = accountExtraInfoLine(a);
+                const extraInfoLine = accountExtraInfoLine(a, nativeBalances);
 
                 // Credit Card (v127): "Amount due" line + 💳 Pay button, both only shown when
                 // there's actually something owed (a card paid off in full, or never used, has
@@ -3151,6 +3151,15 @@
             const amountDue = Math.max(0, -(nativeBalances[acc.id] || 0));
             if (amountDue > 0.005) document.getElementById("txAmount").value = amountDue.toFixed(2);
             document.getElementById("txDesc").value = "Credit Card Payment";
+            // v127 fix: openTransactionForm() already ran syncAccountPickerButtonText("destAccount")
+            // as its very last step (see the comment there), snapshotting the "To Account" button's
+            // visible label from whatever the <select> happened to hold at that moment — BEFORE the
+            // destAccount.value assignment above ever runs, since that only happens after this
+            // function's `await` on openTransactionForm resolves. So the underlying <select> was
+            // correctly pointed at this card, but the button the user actually sees stayed stuck on
+            // its earlier (wrong) label. Re-syncing it here, now that the value is actually set,
+            // makes the visible "To Account" button match the card just clicked.
+            syncAccountPickerButtonText("destAccount");
         }
 
         // Wired to the Activity page's own 💳 Pay button — reads which account is currently
@@ -4056,13 +4065,24 @@
         // under an account's name wherever it's listed. Shared by the Accounts page, a member's
         // own Accounts list, and the account's own Activity page header banner so all three stay
         // in sync automatically instead of drifting out of step with separately-written markup.
-        function accountExtraInfoLine(a) {
+        function accountExtraInfoLine(a, nativeBalances) {
             const group = a.group || DEFAULT_ACCOUNT_GROUP;
             if (a.type === "creditcard" && (a.creditLimit || a.statementDay || a.paymentDueDay)) {
                 const bits = [];
                 if (a.creditLimit) bits.push(`Limit ${formatBalanceHTML(a.creditLimit, a.currency || baseCurrency)}`);
                 if (a.statementDay) bits.push(`Statement day ${a.statementDay}`);
                 if (a.paymentDueDay) bits.push(`Due day ${a.paymentDueDay}`);
+                // v127: "Available" = credit limit minus whatever's currently owed (same amountDue
+                // math used everywhere else on the card, i.e. this account's balance negated and
+                // floored at 0). Only computable when both a limit is set AND balances were passed
+                // in by the caller — accountExtraInfoLine() is also called from a couple of spots
+                // that don't have nativeBalances handy (e.g. before it's been computed yet), so this
+                // stays optional rather than breaking those call sites.
+                if (a.creditLimit && nativeBalances) {
+                    const ccAmountDueForAvail = Math.max(0, -(nativeBalances[a.id] || 0));
+                    const available = Math.max(0, a.creditLimit - ccAmountDueForAvail);
+                    bits.push(`Available ${formatBalanceHTML(available, a.currency || baseCurrency)}`);
+                }
                 return bits.length ? `<br><span style="font-size:0.7rem; color:#9d174d; font-weight:600;">💳 ${bits.join(" · ")}</span>` : "";
             }
             if (group === "Real Estate" && (a.propertyType || a.holdingStartDate)) {
@@ -4817,7 +4837,7 @@
                     ? ` · <span style="color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
-                const extraInfoLine = accountExtraInfoLine(a);
+                const extraInfoLine = accountExtraInfoLine(a, nativeBalances);
 
                 // Credit Card (v127): same "Amount due" line + 💳 Pay button as the main Accounts
                 // page (renderAccountsPage) — see that copy's comment for what amountDue means.
@@ -7759,7 +7779,7 @@
             const extraInfoBanner = document.getElementById("ledgerExtraInfoBanner");
             if (showFullAccountHistory) {
                 const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
-                const infoHtml = viewingAcc ? accountExtraInfoLine(viewingAcc).replace(/^<br>/, "") : "";
+                const infoHtml = viewingAcc ? accountExtraInfoLine(viewingAcc, nativeBalances).replace(/^<br>/, "") : "";
                 if (infoHtml) {
                     extraInfoBanner.innerHTML = infoHtml;
                     extraInfoBanner.style.display = "block";
