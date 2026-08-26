@@ -889,12 +889,19 @@
         .calc-key-op { background: #e0e7ff; color: var(--primary); }
         .option-menu-btn { display:flex; align-items:center; padding: 14px; border-radius: 10px; border: none; background: #f1f5f9; color: var(--text-main); font-weight: 700; font-size: 0.88rem; cursor: pointer; text-align: left; width: 100%; }
         .option-menu-btn:active { opacity: 0.85; }
-        /* v99: custom Account picker — replaces the native <select> popup for srcAccount/
-           destAccount, whose expanded option-list font size Android Chrome renders using its own
-           system size regardless of page CSS (illegibly large on a phone, per the reference
-           screenshots) and can't be reduced from here. This button+modal combo fully controls
-           its own text size instead — see openAccountPicker()/selectAccountPickerOption() in
-           ledger.js. */
+        /* v142: label row for a grouped picker (Category's Main Category / Subcategory
+           <optgroup>s) inside #accountPickerList — see the select.children walk in
+           openAccountPicker(). Inert (no data-click), so it's never mistaken for a tappable
+           row and is automatically skipped by the type-ahead listener, which only ever
+           queries ".option-menu-btn". */
+        .option-group-label { font-size:0.72rem; font-weight:800; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted); padding:10px 4px 2px; }
+        /* v99: custom Account/Category picker — replaces the native <select> popup for
+           srcAccount/destAccount/txCategory (v142 added Category to this same picker), whose
+           expanded option-list font size Android Chrome renders using its own system size
+           regardless of page CSS (illegibly large on a phone, per the reference screenshots) and
+           can't be reduced from here. This button+modal combo fully controls its own text size
+           instead, and (for Category) its own grouping too — see openAccountPicker()/
+           selectAccountPickerOption() in ledger.js. */
         button.form-input.account-picker-btn { width:100%; padding:12px; border:1.5px solid var(--border-color); border-radius:8px; font-size:0.9rem; background:#f8fafc; height:44px; color:var(--text-main); display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; font-weight:700; cursor:pointer; }
         .account-picker-chevron { opacity:0.55; flex:0 0 auto; }
         .account-picker-btn span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
@@ -2378,7 +2385,19 @@
                     </div>
                 </div>
 
-                <div class="form-row" id="categoryRow"><label>Category</label><select id="txCategory" class="form-input"></select></div>
+                <!-- v142: category now opens the same custom popup as Account/To Account (see the
+                     account-picker-btn CSS comment above and openAccountPicker() in ledger.js),
+                     instead of the native <select> popup — same reasoning (illegible Android
+                     system-size option text), plus it now groups Main Category/Subcategory the
+                     same way the modal shows the list rather than an <optgroup>'s browser-default
+                     rendering. -->
+                <div class="form-row" id="categoryRow">
+                    <label>Category</label>
+                    <button type="button" id="txCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="txCategory" data-title="Select Category">
+                        <span id="txCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="txCategory" style="display:none;"></select>
+                </div>
 
                 <!-- Split Expenses (v88) — only offered for a brand-new Income/Expense entry (not
                      Transfer, not while editing an existing record — see openTxSplitAddRow() /
@@ -2631,8 +2650,9 @@
         </div>
     </div>
 
-    <!-- MODAL: Account picker (v99) — see the account-picker-btn CSS comment above for why this
-         exists instead of the native <select> popup for srcAccount/destAccount. -->
+    <!-- MODAL: Account/Category picker (v99, generalized to Category in v142) — see the
+         account-picker-btn CSS comment above for why this exists instead of the native <select>
+         popup, for any field that opens it via data-click="openAccountPicker". -->
     <div class="modal" id="accountPickerModal" style="z-index:1450;">
         <div class="modal-sheet" style="max-width:400px;">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:10px;">

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v142";
+        const APP_VERSION = "v144";
         const APP_VERSION_DATE = "2026-08-26";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1264,9 +1264,20 @@
         }
 
         window.addEventListener("popstate", (event) => {
+            // v143 fix: this used to call resetAccountForm() and return here, which reset the
+            // Add/Edit Account form to blank "Create New Account" state but left the modal's
+            // "active" class in place AND re-pushed a fresh history entry for it (see
+            // resetAccountForm's own pushVirtualState call). That meant one hardware/gesture
+            // back press while editing an account never actually closed anything — it just
+            // showed the same modal reset to blank (matching the × button's old "needs two
+            // clicks" bug, documented in closeModal() below) — while quietly consuming and
+            // replacing a history entry. A second back press then closed the modal for real,
+            // but by then the JS history stack and the real back stack were a step out of
+            // sync, so instead of landing on the account's Activity page, the app exited.
+            // Clearing the edit state here (without the re-push) and falling through to the
+            // normal modal-close logic below closes it in one press, exactly like × does.
             if (document.getElementById("editAccountId").value !== "") {
-                resetAccountForm();
-                return;
+                resetAccountForm(/* skipHistoryPush */ true);
             }
 
             // v88 fix: previously this scanned every known modal id and removed "active" from
@@ -2765,7 +2776,7 @@
             sel.value = (preselectId && candidates.some(a => a.id === preselectId)) ? preselectId : "";
         }
 
-        function resetAccountForm() {
+        function resetAccountForm(skipHistoryPush) {
             const isEditing = document.getElementById("editAccountId").value !== "";
             document.getElementById("editAccountId").value = "";
             document.getElementById("newAccName").value = "";
@@ -2791,7 +2802,7 @@
 
             setAccountTypeUI("normal");
 
-            if (isEditing) {
+            if (isEditing && !skipHistoryPush) {
                 pushVirtualState("accountsModal");
             }
         }
@@ -5666,6 +5677,15 @@
             // opened normally (the "+" buttons, editing a row) must never silently inherit those.
             pendingRefundOf = null;
             document.getElementById("txCategory").disabled = false;
+            // v142: txCategory's own disabled state (Refund flow locks it, see
+            // openRefundFromOptions()) doesn't do anything on its own anymore now that picking a
+            // category goes through the txCategoryBtn button+picker modal rather than the <select>
+            // directly — the button needs its own disabled reset here too, or a category locked by
+            // a previous Refund would stay un-tappable-but-also-un-lockable-looking on the next
+            // normal open.
+            const catBtn = document.getElementById("txCategoryBtn");
+            catBtn.disabled = false;
+            catBtn.style.opacity = "";
             resetTxSplitRows();
 
             const srcSelect = document.getElementById("srcAccount"); srcSelect.innerHTML = "";
@@ -5892,9 +5912,12 @@
             // v99: the visible Account/To Account buttons show a snapshot of the <select>'s
             // current option text (see openAccountPicker()) — refresh it here, once, after every
             // branch above has finished touching srcAccount/destAccount's value, rather than
-            // duplicating this call at each individual assignment site.
+            // duplicating this call at each individual assignment site. v142: txCategory joined
+            // the same picker pattern, so it needs the same refresh — harmless no-op for Transfers,
+            // where txCategory's <select> was left empty/untouched above.
             syncAccountPickerButtonText("srcAccount");
             syncAccountPickerButtonText("destAccount");
+            syncAccountPickerButtonText("txCategory");
 
             openModal("txModal");
         }
@@ -7736,6 +7759,12 @@
         // The underlying <select> stays in the DOM (just hidden) and remains the single source of
         // truth every other part of the app already reads via .value — this only changes how a
         // human picks a value for it, not how the rest of the codebase stores or reads one.
+        // v142: genuinely generic over any <select> — el.dataset.select just names the target id —
+        // so the Category field (txCategory) now opens through this same function/modal too,
+        // picking up the identical look, feel, and keyboard type-ahead the Account fields already
+        // had. Category's <select> is built with <optgroup>s (buildCategoryOptionsHTML(), Main
+        // Category / Subcategory), which this renders as inert group-label rows above their child
+        // options — see the select.children walk below.
         function openAccountPicker(el) {
             const selectId = el.dataset.select;
             const select = document.getElementById(selectId);
@@ -7748,12 +7777,25 @@
             clearTimeout(accountPickerTypeaheadTimer);
             document.getElementById("accountPickerTitle").textContent = el.dataset.title || "Select Account";
             const currentVal = select.value;
-            document.getElementById("accountPickerList").innerHTML = Array.from(select.options).map(opt => `
+            // v142: walks select.children (not the flat select.options) so a select built with
+            // <optgroup>s — e.g. txCategory's Main Category / Subcategory grouping from
+            // buildCategoryOptionsHTML() — renders the same grouped structure here instead of a
+            // flat list. A plain select (srcAccount/destAccount, no optgroups) renders exactly as
+            // before, just via this same loop. Group labels are inert (no data-click), so they're
+            // skipped automatically by option-menu-btn's click handling and by the typeahead
+            // listener below (which only ever queries for ".option-menu-btn").
+            const optionRowHTML = (opt) => `
                 <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:#e0e7ff;" : ""}">
                     <span>${opt.textContent}</span>
                     ${opt.value === currentVal ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
                 </button>
-            `).join("");
+            `;
+            document.getElementById("accountPickerList").innerHTML = Array.from(select.children).map(child => {
+                if (child.tagName === "OPTGROUP") {
+                    return `<div class="option-group-label">${escapeHtml(child.label)}</div>` + Array.from(child.children).map(optionRowHTML).join("");
+                }
+                return optionRowHTML(child);
+            }).join("");
             // Uses the shared openModal() (see "NATIVE ROUTING CORE" above) so this picker pushes
             // its own history entry and joins modalStack like every other modal. Previously this
             // just toggled the "active" class directly, with no history entry of its own — so the
@@ -7787,15 +7829,19 @@
         // option — called after every place in the codebase that sets an account-picker <select>'s
         // .value directly (bypassing the picker modal), so the button never goes stale. Follows
         // the `<selectId>BtnText` naming convention every account-picker button pair uses (e.g.
-        // srcAccount → srcAccountBtnText, salaryBankAccount → salaryBankAccountBtnText) — see the
-        // call sites in openTransactionForm()/duplicateTransactionFromOptions()/
-        // openRefundFromOptions()/openSalaryEntryForm()/handleSalaryMemberChange().
+        // srcAccount → srcAccountBtnText, salaryBankAccount → salaryBankAccountBtnText,
+        // txCategory → txCategoryBtnText) — see the call sites in openTransactionForm()/
+        // duplicateTransactionFromOptions()/openRefundFromOptions()/openSalaryEntryForm()/
+        // handleSalaryMemberChange().
         function syncAccountPickerButtonText(selectId) {
             const select = document.getElementById(selectId);
             const btnText = document.getElementById(selectId + "BtnText");
             if (!select || !btnText) return;
             const opt = select.options[select.selectedIndex];
-            btnText.textContent = opt ? opt.textContent : "Select account";
+            // Generic fallback (not "Select account") since v142 added txCategory as a picker
+            // field too — this only ever shows when a picker <select> has no options selected at
+            // all (e.g. txCategory while Transfer is chosen, whose Category row is hidden anyway).
+            btnText.textContent = opt ? opt.textContent : "Select...";
         }
 
         // v141: PC keyboard type-ahead for the Account picker — a native <select> lets you press
@@ -7817,9 +7863,15 @@
             const buttons = Array.from(document.querySelectorAll("#accountPickerList .option-menu-btn"));
             if (buttons.length === 0) return;
             const char = e.key.toLowerCase();
+            // v142: category rows (buildCategoryOptionsHTML) always lead with an emoji icon
+            // ("🏦 Rental Income"), so matching the raw label's first character would never fire
+            // for typed letters. pickerTypeaheadKey() strips any leading run of non-alphanumeric
+            // characters (icon + the space after it) before comparing, so typing "r" jumps to
+            // "Rental Income" the same way it already jumped to a plain account name.
+            const pickerTypeaheadKey = (text) => text.trim().replace(/^[^a-z0-9]+/i, "").toLowerCase();
             const matches = buttons.filter((btn) => {
                 const label = btn.querySelector("span");
-                return label && label.textContent.trim().toLowerCase().startsWith(char);
+                return label && pickerTypeaheadKey(label.textContent).startsWith(char);
             });
             if (matches.length === 0) return;
             e.preventDefault();
@@ -7911,6 +7963,7 @@
                 syncTransactionCurrency();
                 syncAccountPickerButtonText("srcAccount"); // v99 — see comment in openTransactionForm().
                 syncAccountPickerButtonText("destAccount");
+                syncAccountPickerButtonText("txCategory"); // v142 — see comment in openTransactionForm().
                 document.getElementById("txModalTitle").textContent = "Duplicate Entry";
             });
         }
@@ -7953,6 +8006,15 @@
                 catSelect.innerHTML = `<option value="${escapeHtml(catName)}">${icon} ${escapeHtml(catName)}</option>`;
                 catSelect.value = catName;
                 catSelect.disabled = true;
+                // v142: the button now stands in for the <select> (see openAccountPicker()) — a
+                // disabled button never dispatches click, so this alone stops openAccountPicker()
+                // from firing and re-opening a picker the user shouldn't be able to change; the
+                // dimmed opacity just makes that locked state visible, matching how a disabled
+                // <select> looks greyed out.
+                const catBtn = document.getElementById("txCategoryBtn");
+                catBtn.disabled = true;
+                catBtn.style.opacity = "0.6";
+                syncAccountPickerButtonText("txCategory");
 
                 document.getElementById("txDate").value = todayLocalStr();
                 document.getElementById("txSplitWrap").style.display = "none";
