@@ -71,21 +71,11 @@
             --text-main: #0f172a;
             --text-muted: #64748b;
             --primary: #6366f1;
-            --primary-dark: #4f46e5;
             --income-color: #10b981;
             --expense-color: #ef4444;
             --transfer-color: #3b82f6;
             --salary-color: #d97706;
             --border-color: #e2e8f0;
-            /* v143 visual refresh: shared elevation tokens so every card/surface uses a
-               consistent, subtle depth instead of relying on borders alone. Kept deliberately
-               soft (low opacity, small blur) so they read as gentle lift rather than heavy
-               drop-shadows, and are still fully stripped by the existing "* { box-shadow: none
-               !important }" print rule further down, so printed/PDF output is unaffected. */
-            --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
-            --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.05);
-            --shadow-md: 0 6px 20px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.05);
-            --shadow-primary: 0 8px 20px rgba(99, 102, 241, 0.28);
         }
 
         * {
@@ -121,10 +111,9 @@
         header {
             background: var(--card-bg);
             padding: 16px;
-            border-radius: 18px;
+            border-radius: 16px;
             border: 1px solid var(--border-color);
             margin-bottom: 20px;
-            box-shadow: var(--shadow-sm);
         }
 
         .net-worth-container {
@@ -204,7 +193,7 @@
 
         .action-btn {
             border: none;
-            border-radius: 14px;
+            border-radius: 12px;
             padding: 16px 4px; /* Touch friendly height */
             font-size: 0.78rem;
             font-weight: 700;
@@ -214,28 +203,19 @@
             flex-direction: column;
             align-items: center;
             gap: 4px;
-            transition: transform 0.1s ease, box-shadow 0.15s ease;
-            box-shadow: 0 3px 8px rgba(15, 23, 42, 0.12);
+            transition: transform 0.1s ease;
         }
-        .action-btn:active { transform: scale(0.96); box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12); }
-        /* v143: subtle top-to-bottom gradient (same base hue, ~8% lighter/darker at the
-           edges) instead of a flat fill — purely cosmetic, background-color kept as a
-           fallback/first-paint color underneath so nothing regresses if gradients are
-           unsupported. */
-        .btn-income { background-color: var(--income-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--income-color) 88%, white), var(--income-color)); }
-        .btn-expense { background-color: var(--expense-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--expense-color) 88%, white), var(--expense-color)); }
-        .btn-transfer { background-color: var(--transfer-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--transfer-color) 88%, white), var(--transfer-color)); }
-        .btn-salary { background-color: var(--salary-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--salary-color) 88%, white), var(--salary-color)); }
-        @media (hover: hover) {
-            .action-btn:hover { box-shadow: 0 5px 14px rgba(15, 23, 42, 0.18); transform: translateY(-1px); }
-        }
+        .action-btn:active { transform: scale(0.96); }
+        .btn-income { background-color: var(--income-color); }
+        .btn-expense { background-color: var(--expense-color); }
+        .btn-transfer { background-color: var(--transfer-color); }
+        .btn-salary { background-color: var(--salary-color); }
 
         .report-card {
             background: var(--card-bg);
             border-radius: 16px;
             border: 1.5px solid var(--border-color);
             padding: 16px;
-            box-shadow: var(--shadow-sm);
         }
 
         /* --- Daily NAV Update page (Card/Table/History views) --- */
@@ -268,7 +248,6 @@
             border: 1.5px solid var(--border-color);
             border-radius: 14px;
             padding: 14px;
-            box-shadow: var(--shadow-xs);
         }
         .navfund-card-name { font-weight: 800; font-size: 0.85rem; margin-bottom: 2px; }
         .navfund-card-current { font-size: 0.72rem; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; }
@@ -283,12 +262,12 @@
 
         .stat-box {
             padding: 14px;
-            border-radius: 12px;
+            border-radius: 10px;
             text-align: center;
             cursor: pointer;
-            transition: opacity 0.15s, transform 0.1s ease;
+            transition: opacity 0.15s;
         }
-        .stat-box:active { opacity: 0.8; transform: scale(0.98); }
+        .stat-box:active { opacity: 0.8; }
         .stat-box.income { background: #f0fdf4; border: 1px solid #bbf7d0; }
         .stat-box.expense { background: #fef2f2; border: 1px solid #fecaca; }
 
@@ -346,7 +325,6 @@
             border: 1.5px solid var(--border-color);
             border-radius: 16px;
             overflow: hidden;
-            box-shadow: var(--shadow-sm);
         }
 
         .account-list-row {
@@ -370,7 +348,6 @@
             font-size: 0.78rem;
             color: #555555;
             line-height: 1.6;
-            box-shadow: var(--shadow-xs);
         }
         .hardware-track {
             background-color: #f4ede4;
@@ -463,7 +440,7 @@
         }
         .sidebar-drawer.open { transform: translateX(0); }
         .sidebar-header {
-            background: linear-gradient(135deg, var(--primary), #4338ca 70%, #3730a3);
+            background: linear-gradient(135deg, var(--primary), #4338ca);
             color: #fff;
             padding: 28px 20px 20px;
             flex-shrink: 0;
@@ -601,15 +578,11 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: var(--shadow-primary);
+            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.45);
             cursor: pointer;
             z-index: 50;
-            transition: transform 0.1s ease, box-shadow 0.15s ease;
         }
-        .fab-btn:active { background: #4f46e5; transform: scale(0.95); }
-        @media (hover: hover) {
-            .fab-btn:hover { box-shadow: 0 10px 24px rgba(99, 102, 241, 0.38); transform: translateY(-1px); }
-        }
+        .fab-btn:active { background: #4f46e5; }
 
         /* Floating "back to top" button (v66) — global, sits above the "+" FAB on the right edge
            so the two never overlap. Hidden by default; JS toggles it visible once the page has
@@ -724,7 +697,6 @@
             border-radius: 12px;
             padding: 10px 12px;
             text-align: center;
-            box-shadow: var(--shadow-xs);
         }
         .currency-total-chip .cur-code {
             font-size: 0.7rem;
@@ -745,7 +717,6 @@
             display: flex; align-items: center; justify-content: space-between; gap: 10px;
             background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
             padding: 12px 14px; cursor: pointer; transition: opacity 0.15s;
-            box-shadow: var(--shadow-xs);
         }
         .member-networth-row:active { opacity: 0.75; }
         .member-networth-row .member-row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -804,7 +775,6 @@
         .member-page-networth-card {
             background: var(--card-bg); border-radius: 16px; border: 1.5px solid var(--border-color);
             padding: 18px; text-align: center; margin-bottom: 16px; cursor: pointer;
-            box-shadow: var(--shadow-sm);
         }
         .member-page-networth-card.no-toggle { cursor: default; }
         .member-page-networth-card h1 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; }
@@ -841,7 +811,6 @@
             border: 1.5px solid var(--border-color);
             border-radius: 16px;
             overflow: hidden;
-            box-shadow: var(--shadow-sm);
         }
 
         .ledger-item {
@@ -870,7 +839,6 @@
             border-radius: 16px;
             padding: 16px;
             margin-bottom: 16px;
-            box-shadow: var(--shadow-sm);
         }
         .statement-row {
             display: flex;
@@ -900,22 +868,18 @@
             background: var(--card-bg);
             width: 100%;
             max-width: 450px;
-            border-radius: 18px;
+            border-radius: 16px;
             padding: 20px;
             max-height: 85vh;
             overflow-y: auto;
             -webkit-overflow-scrolling: touch; /* Butter-smooth scrolling on iOS/Android */
-            box-shadow: var(--shadow-md);
         }
         .form-row { margin-bottom: 12px; }
         .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
         label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: #f8fafc; height: 44px; }
-        .submit-btn { background: var(--primary); background-image: linear-gradient(180deg, color-mix(in srgb, var(--primary) 90%, white), var(--primary)); color: white; border: none; padding: 14px; border-radius: 12px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3); transition: transform 0.1s ease, box-shadow 0.15s ease; }
-        .submit-btn:active { opacity: 0.9; transform: scale(0.99); box-shadow: 0 1px 4px rgba(99, 102, 241, 0.3); }
-        @media (hover: hover) {
-            .submit-btn:hover { box-shadow: 0 5px 16px rgba(99, 102, 241, 0.35); }
-        }
+        .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
+        .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
         .calc-btn { flex-shrink:0; width: 44px; height: 44px; border-radius: 8px; border: 1.5px solid var(--border-color); background: #f8fafc; font-size: 1.1rem; cursor: pointer; display:flex; align-items:center; justify-content:center; padding:0; box-sizing:border-box; }
         .calc-btn:active { background: #eef2ff; }
         .split-row { border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:12px; background:var(--card-bg); }
@@ -1085,20 +1049,6 @@
         }
         .export-hint-text.hidden { display: none; }
         #accountsPageFilterHint.hidden { display: none; }
-
-        /* v143 visual refresh: desktop/tablet-only hover polish for the main tappable rows and
-           chrome buttons. Scoped to `(hover: hover)` so touch devices (which report `hover:
-           none`) are completely unaffected — mobile keeps exactly its existing :active
-           feedback, only pointer-driven devices get this extra affordance. Purely additive
-           background/shadow tweaks; no layout properties touched, so nothing shifts. */
-        @media (hover: hover) {
-            .back-btn:hover, .hamburger-btn:hover { background: #f1f5f9; }
-            .ledger-item:hover, .account-list-row:hover, .statement-row:hover,
-            .category-row-item:hover, .config-item:hover { background: #f8fafc; }
-            .sidebar-item:hover:not(.active), .sidebar-member-item:hover:not(.active),
-            .sidebar-account-type-item:hover:not(.active) { background: #f1f5f9; }
-            .currency-pill:hover { background: #e2e8f0; }
-        }
 
         /* ===== Print (printCurrentApp() in ledger.js drives this) =====
            Goal: printing/"Save as PDF" from ANY page in the app — dashboard, ledger, every
