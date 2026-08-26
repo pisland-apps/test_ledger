@@ -71,11 +71,21 @@
             --text-main: #0f172a;
             --text-muted: #64748b;
             --primary: #6366f1;
+            --primary-dark: #4f46e5;
             --income-color: #10b981;
             --expense-color: #ef4444;
             --transfer-color: #3b82f6;
             --salary-color: #d97706;
             --border-color: #e2e8f0;
+            /* v143 visual refresh: shared elevation tokens so every card/surface uses a
+               consistent, subtle depth instead of relying on borders alone. Kept deliberately
+               soft (low opacity, small blur) so they read as gentle lift rather than heavy
+               drop-shadows, and are still fully stripped by the existing "* { box-shadow: none
+               !important }" print rule further down, so printed/PDF output is unaffected. */
+            --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.05);
+            --shadow-sm: 0 2px 8px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.05);
+            --shadow-md: 0 6px 20px rgba(15, 23, 42, 0.08), 0 2px 6px rgba(15, 23, 42, 0.05);
+            --shadow-primary: 0 8px 20px rgba(99, 102, 241, 0.28);
         }
 
         * {
@@ -111,9 +121,10 @@
         header {
             background: var(--card-bg);
             padding: 16px;
-            border-radius: 16px;
+            border-radius: 18px;
             border: 1px solid var(--border-color);
             margin-bottom: 20px;
+            box-shadow: var(--shadow-sm);
         }
 
         .net-worth-container {
@@ -193,7 +204,7 @@
 
         .action-btn {
             border: none;
-            border-radius: 12px;
+            border-radius: 14px;
             padding: 16px 4px; /* Touch friendly height */
             font-size: 0.78rem;
             font-weight: 700;
@@ -203,19 +214,28 @@
             flex-direction: column;
             align-items: center;
             gap: 4px;
-            transition: transform 0.1s ease;
+            transition: transform 0.1s ease, box-shadow 0.15s ease;
+            box-shadow: 0 3px 8px rgba(15, 23, 42, 0.12);
         }
-        .action-btn:active { transform: scale(0.96); }
-        .btn-income { background-color: var(--income-color); }
-        .btn-expense { background-color: var(--expense-color); }
-        .btn-transfer { background-color: var(--transfer-color); }
-        .btn-salary { background-color: var(--salary-color); }
+        .action-btn:active { transform: scale(0.96); box-shadow: 0 1px 3px rgba(15, 23, 42, 0.12); }
+        /* v143: subtle top-to-bottom gradient (same base hue, ~8% lighter/darker at the
+           edges) instead of a flat fill — purely cosmetic, background-color kept as a
+           fallback/first-paint color underneath so nothing regresses if gradients are
+           unsupported. */
+        .btn-income { background-color: var(--income-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--income-color) 88%, white), var(--income-color)); }
+        .btn-expense { background-color: var(--expense-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--expense-color) 88%, white), var(--expense-color)); }
+        .btn-transfer { background-color: var(--transfer-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--transfer-color) 88%, white), var(--transfer-color)); }
+        .btn-salary { background-color: var(--salary-color); background-image: linear-gradient(180deg, color-mix(in srgb, var(--salary-color) 88%, white), var(--salary-color)); }
+        @media (hover: hover) {
+            .action-btn:hover { box-shadow: 0 5px 14px rgba(15, 23, 42, 0.18); transform: translateY(-1px); }
+        }
 
         .report-card {
             background: var(--card-bg);
             border-radius: 16px;
             border: 1.5px solid var(--border-color);
             padding: 16px;
+            box-shadow: var(--shadow-sm);
         }
 
         /* --- Daily NAV Update page (Card/Table/History views) --- */
@@ -248,6 +268,7 @@
             border: 1.5px solid var(--border-color);
             border-radius: 14px;
             padding: 14px;
+            box-shadow: var(--shadow-xs);
         }
         .navfund-card-name { font-weight: 800; font-size: 0.85rem; margin-bottom: 2px; }
         .navfund-card-current { font-size: 0.72rem; color: var(--text-muted); font-weight: 600; margin-bottom: 8px; }
@@ -262,12 +283,12 @@
 
         .stat-box {
             padding: 14px;
-            border-radius: 10px;
+            border-radius: 12px;
             text-align: center;
             cursor: pointer;
-            transition: opacity 0.15s;
+            transition: opacity 0.15s, transform 0.1s ease;
         }
-        .stat-box:active { opacity: 0.8; }
+        .stat-box:active { opacity: 0.8; transform: scale(0.98); }
         .stat-box.income { background: #f0fdf4; border: 1px solid #bbf7d0; }
         .stat-box.expense { background: #fef2f2; border: 1px solid #fecaca; }
 
@@ -325,6 +346,7 @@
             border: 1.5px solid var(--border-color);
             border-radius: 16px;
             overflow: hidden;
+            box-shadow: var(--shadow-sm);
         }
 
         .account-list-row {
@@ -348,6 +370,7 @@
             font-size: 0.78rem;
             color: #555555;
             line-height: 1.6;
+            box-shadow: var(--shadow-xs);
         }
         .hardware-track {
             background-color: #f4ede4;
@@ -440,7 +463,7 @@
         }
         .sidebar-drawer.open { transform: translateX(0); }
         .sidebar-header {
-            background: linear-gradient(135deg, var(--primary), #4338ca);
+            background: linear-gradient(135deg, var(--primary), #4338ca 70%, #3730a3);
             color: #fff;
             padding: 28px 20px 20px;
             flex-shrink: 0;
@@ -578,11 +601,15 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.45);
+            box-shadow: var(--shadow-primary);
             cursor: pointer;
             z-index: 50;
+            transition: transform 0.1s ease, box-shadow 0.15s ease;
         }
-        .fab-btn:active { background: #4f46e5; }
+        .fab-btn:active { background: #4f46e5; transform: scale(0.95); }
+        @media (hover: hover) {
+            .fab-btn:hover { box-shadow: 0 10px 24px rgba(99, 102, 241, 0.38); transform: translateY(-1px); }
+        }
 
         /* Floating "back to top" button (v66) — global, sits above the "+" FAB on the right edge
            so the two never overlap. Hidden by default; JS toggles it visible once the page has
@@ -697,6 +724,7 @@
             border-radius: 12px;
             padding: 10px 12px;
             text-align: center;
+            box-shadow: var(--shadow-xs);
         }
         .currency-total-chip .cur-code {
             font-size: 0.7rem;
@@ -717,6 +745,7 @@
             display: flex; align-items: center; justify-content: space-between; gap: 10px;
             background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
             padding: 12px 14px; cursor: pointer; transition: opacity 0.15s;
+            box-shadow: var(--shadow-xs);
         }
         .member-networth-row:active { opacity: 0.75; }
         .member-networth-row .member-row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -775,6 +804,7 @@
         .member-page-networth-card {
             background: var(--card-bg); border-radius: 16px; border: 1.5px solid var(--border-color);
             padding: 18px; text-align: center; margin-bottom: 16px; cursor: pointer;
+            box-shadow: var(--shadow-sm);
         }
         .member-page-networth-card.no-toggle { cursor: default; }
         .member-page-networth-card h1 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.02em; }
@@ -811,6 +841,7 @@
             border: 1.5px solid var(--border-color);
             border-radius: 16px;
             overflow: hidden;
+            box-shadow: var(--shadow-sm);
         }
 
         .ledger-item {
@@ -839,6 +870,7 @@
             border-radius: 16px;
             padding: 16px;
             margin-bottom: 16px;
+            box-shadow: var(--shadow-sm);
         }
         .statement-row {
             display: flex;
@@ -868,18 +900,22 @@
             background: var(--card-bg);
             width: 100%;
             max-width: 450px;
-            border-radius: 16px;
+            border-radius: 18px;
             padding: 20px;
             max-height: 85vh;
             overflow-y: auto;
             -webkit-overflow-scrolling: touch; /* Butter-smooth scrolling on iOS/Android */
+            box-shadow: var(--shadow-md);
         }
         .form-row { margin-bottom: 12px; }
         .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
         label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: #f8fafc; height: 44px; }
-        .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
-        .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
+        .submit-btn { background: var(--primary); background-image: linear-gradient(180deg, color-mix(in srgb, var(--primary) 90%, white), var(--primary)); color: white; border: none; padding: 14px; border-radius: 12px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; box-shadow: 0 3px 10px rgba(99, 102, 241, 0.3); transition: transform 0.1s ease, box-shadow 0.15s ease; }
+        .submit-btn:active { opacity: 0.9; transform: scale(0.99); box-shadow: 0 1px 4px rgba(99, 102, 241, 0.3); }
+        @media (hover: hover) {
+            .submit-btn:hover { box-shadow: 0 5px 16px rgba(99, 102, 241, 0.35); }
+        }
         .calc-btn { flex-shrink:0; width: 44px; height: 44px; border-radius: 8px; border: 1.5px solid var(--border-color); background: #f8fafc; font-size: 1.1rem; cursor: pointer; display:flex; align-items:center; justify-content:center; padding:0; box-sizing:border-box; }
         .calc-btn:active { background: #eef2ff; }
         .split-row { border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:12px; background:var(--card-bg); }
@@ -1050,6 +1086,20 @@
         .export-hint-text.hidden { display: none; }
         #accountsPageFilterHint.hidden { display: none; }
 
+        /* v143 visual refresh: desktop/tablet-only hover polish for the main tappable rows and
+           chrome buttons. Scoped to `(hover: hover)` so touch devices (which report `hover:
+           none`) are completely unaffected — mobile keeps exactly its existing :active
+           feedback, only pointer-driven devices get this extra affordance. Purely additive
+           background/shadow tweaks; no layout properties touched, so nothing shifts. */
+        @media (hover: hover) {
+            .back-btn:hover, .hamburger-btn:hover { background: #f1f5f9; }
+            .ledger-item:hover, .account-list-row:hover, .statement-row:hover,
+            .category-row-item:hover, .config-item:hover { background: #f8fafc; }
+            .sidebar-item:hover:not(.active), .sidebar-member-item:hover:not(.active),
+            .sidebar-account-type-item:hover:not(.active) { background: #f1f5f9; }
+            .currency-pill:hover { background: #e2e8f0; }
+        }
+
         /* ===== Print (printCurrentApp() in ledger.js drives this) =====
            Goal: printing/"Save as PDF" from ANY page in the app — dashboard, ledger, every
            report, settings, member pages, etc. — produces a clean document containing just that
@@ -1188,6 +1238,9 @@
             <button class="sidebar-item" data-click="sidebarGo" data-target="owner-networth-report">
                 <span class="sidebar-item-icon">🏛️</span> Financial Assets vs Real Estate
             </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="currency-report">
+                <span class="sidebar-item-icon">🌐</span> Net Worth by Currency
+            </button>
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Members</div>
@@ -1209,8 +1262,8 @@
                 <h2>Set an App Passcode</h2>
                 <p class="lock-sub">Your data will be encrypted on this device with a key derived from this passcode (PBKDF2 + AES-GCM). There is no password recovery — if you forget it, your data cannot be decrypted.</p>
                 <div id="lockError"></div>
-                <input type="password" id="setupPasscodeInput" placeholder="Create passcode (min 4 characters)" autocomplete="new-password" inputmode="text">
-                <input type="password" id="setupPasscodeConfirmInput" placeholder="Confirm passcode" autocomplete="new-password" inputmode="text">
+                <input type="password" id="setupPasscodeInput" placeholder="Create passcode (min 4 characters)" autocomplete="off" inputmode="text">
+                <input type="password" id="setupPasscodeConfirmInput" placeholder="Confirm passcode" autocomplete="off" inputmode="text">
                 <button type="button" class="lock-submit-btn" data-click="handleSetupPasscodeSubmit">Create &amp; Continue</button>
             </div>
 
@@ -1221,7 +1274,7 @@
                 <p class="lock-sub">This ledger is locked. Enter your passcode to decrypt and continue.</p>
                 <button type="button" class="lock-submit-btn" id="biometricUnlockBtn" style="display:none; background:#0f172a; margin-bottom:12px;">🫆 Unlock with Biometrics</button>
                 <div id="lockError2"></div>
-                <input type="password" id="unlockPasscodeInput" placeholder="Passcode" autocomplete="current-password" inputmode="text">
+                <input type="password" id="unlockPasscodeInput" placeholder="Passcode" autocomplete="off" inputmode="text">
                 <div class="numpad-grid" id="unlockNumpad">
                     <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="1">1</button>
                     <button type="button" class="numpad-btn" data-click="numpadDigit" data-digit="2">2</button>
@@ -1551,6 +1604,9 @@
                 <span class="toggle-slider"></span>
             </label>
         </div>
+        <div class="util-row">
+            <button class="btn-util" data-click="openChangePasscodeModal">🔑 Change Passcode</button>
+        </div>
 
         <div class="section-header">
             <span class="section-title">Export &amp; Import</span>
@@ -1862,6 +1918,39 @@
         </p>
     </div>
 
+    <!-- ================= PAGE: NET WORTH BY CURRENCY REPORT (v132) ================= -->
+    <!-- Same table shape as the Owner report above, pivoted the other way: one row per currency
+         actually held (native amounts, no conversion, except the "≈ Base Currency" column and
+         grand total which convert for comparison), split Financial Assets / Real Estate the same
+         way the owner report splits by group. Answers "how much do I have in MYR vs SGD",
+         independent of which member owns it (unless the Member filter narrows it down). -->
+    <div id="page-currency-report" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Net Worth by Currency</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">What you hold in each currency, native amounts</p>
+            </div>
+        </div>
+
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
+            <label>Member</label>
+            <select id="currencyReportMemberFilter" class="form-input" data-change="renderCurrencyReportPage">
+                <option value="all">All Members (everyone, incl. joint)</option>
+            </select>
+        </div>
+
+        <div class="report-card" id="currencyReportTableWrap" style="overflow-x:auto;"></div>
+
+        <p style="font-size:0.68rem; color:var(--text-muted); margin-top:10px;">
+            Amounts in each currency row are native (unconverted) — the ≈ column and Grand Total
+            convert to <span id="currencyReportBaseCurrLabel">base currency</span> just for
+            comparison. Financial Assets / Real Estate splits the same way as the "Financial
+            Assets vs Real Estate" report. A property marked "Excluded from Net Worth" is left
+            out entirely, same as everywhere else in the app.
+        </p>
+    </div>
+
     <!-- ================= PAGE: DATA SECURITY HUB (replaces sidebar "Data & Security" section) ================= -->
     <div id="page-datasecurity" class="page hidden">
         <div class="nav-header">
@@ -1890,6 +1979,10 @@
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="lockAppNow">
                 <span>🔒 <strong>Lock App Now</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="openResetAppDataModal">
+                <span style="color:var(--expense-color);">🗑️ <strong>Reset App Data</strong></span>
                 <span style="color:var(--text-muted);">›</span>
             </div>
         </div>
@@ -2056,6 +2149,16 @@
                     <input type="text" id="newAccName" placeholder="e.g. DBS Bank, Cash Wallet" required>
                 </div>
 
+                <!-- Account No. / Ref (v130): purely informational, optional — shown in small
+                     text under the account name wherever it's listed (see accountExtraInfoLine
+                     in ledger.js), same treatment as Real Estate's Property Type. Any account
+                     type/group can have one; not cleared on re-grouping since it isn't tied to a
+                     specific group the way propertyType/redraw are. -->
+                <div class="form-row">
+                    <label>Account No. / Ref <span style="text-transform:none; font-weight:600; color:var(--text-muted);">(optional)</span></label>
+                    <input type="text" id="newAccRef" placeholder="e.g. 038-68-02838-0">
+                </div>
+
                 <div class="form-row">
                     <label>Group</label>
                     <select id="newAccGroup" class="form-input" data-change="handleAccGroupChange">
@@ -2117,6 +2220,28 @@
                     <input type="date" id="newAccHoldingStartDate">
                 </div>
 
+                <!-- Real Estate (v131): Tenure — Freehold or Leasehold. Leasehold additionally
+                     shows Lease Term (years, e.g. 99) and Lease Expiry date; Years Remaining is
+                     computed live from Lease Expiry (not stored) the same way "Held" is computed
+                     from Holding Period Start Date above, so it never goes stale. Shown only when
+                     Group = "Real Estate". -->
+                <div class="form-row" id="newAccTenureRow" style="display:none;">
+                    <label>Tenure</label>
+                    <select id="newAccTenure" class="form-input" data-change="toggleLeaseFields">
+                        <option value="">(Not set)</option>
+                        <option value="Freehold">Freehold</option>
+                        <option value="Leasehold">Leasehold</option>
+                    </select>
+                </div>
+                <div class="form-row" id="newAccLeaseTermRow" style="display:none;">
+                    <label>Lease Term (years) <span style="text-transform:none; font-weight:600; color:var(--text-muted);">(e.g. 60, 99, 999)</span></label>
+                    <input type="number" id="newAccLeaseTermYears" class="form-input" min="1" step="1" inputmode="numeric" placeholder="e.g. 99">
+                </div>
+                <div class="form-row" id="newAccLeaseExpiryRow" style="display:none;">
+                    <label>Lease Expiry</label>
+                    <input type="date" id="newAccLeaseExpiryDate">
+                </div>
+
                 <!-- Bank Loan (v66): loans with a redraw / bank-withdrawal facility can have the
                      currently available redraw amount keyed in manually from the latest bank
                      statement — shown only when Group = "Bank Loan" AND the facility checkbox
@@ -2153,7 +2278,7 @@
                 <!-- Multi-Currency: seed one or more opening currency balances at creation time.
                      Each row becomes an "Opening Balance" transaction once the account is created. -->
                 <div id="multiOpeningWrap" style="display:none;">
-                    <label style="font-size:0.8rem; font-weight:700; color:var(--text-main); display:block; margin-bottom:6px;">Opening Balances (optional)</label>
+                    <label id="multiOpeningWrapLabel" style="font-size:0.8rem; font-weight:700; color:var(--text-main); display:block; margin-bottom:6px;">Opening Balances (optional)</label>
                     <div id="multiOpeningRows"></div>
                     <button type="button" data-click="addMultiCurrencyRow" class="submit-btn" style="margin-top:2px; margin-bottom:14px; background:#e0f2fe; color:#0369a1;">+ Add Currency</button>
                 </div>
@@ -2774,6 +2899,33 @@
                 <input type="number" id="salaryGross" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
             </div>
 
+            <div class="form-row-inline">
+                <div>
+                    <label>🏠 Housing Allowance</label>
+                    <input type="number" id="salaryHousingAllowance" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                </div>
+                <div>
+                    <label>📱 Handphone Claim</label>
+                    <input type="number" id="salaryHandphoneClaim" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                </div>
+            </div>
+
+            <div class="form-row-inline">
+                <div>
+                    <label>✈️ Overseas Allowance</label>
+                    <input type="number" id="salaryOverseasAllowance" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                </div>
+                <div>
+                    <label>🕒 Backpay</label>
+                    <input type="number" id="salaryBackpay" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                </div>
+            </div>
+
+            <div class="form-row" id="salaryBackpayNoteRow" style="display:none;">
+                <label>Backpay Note (optional)</label>
+                <input type="text" id="salaryBackpayNote" placeholder="e.g. Nov 2025 – Jan 2026 salary revision">
+            </div>
+
             <div class="form-row-inline" id="salaryContribRow" style="display:none;">
                 <div>
                     <label id="salaryEELabel">EPF Employee (EE)</label>
@@ -2789,6 +2941,22 @@
                 <div style="display:flex; justify-content:space-between; padding-bottom:8px; margin-bottom:8px; border-bottom:1px dashed var(--border-color);">
                     <span style="color:var(--text-muted);">Gross Salary</span>
                     <strong id="salaryPreviewGross">0.00</strong>
+                </div>
+                <div id="salaryPreviewHousingRow" style="display:none; justify-content:space-between; align-items:center; margin-bottom:4px; padding-left:12px;">
+                    <span style="font-size:0.78rem; color:var(--text-muted);">🏠 Housing Allowance</span>
+                    <span id="salaryPreviewHousing" style="font-size:0.85rem;">0.00</span>
+                </div>
+                <div id="salaryPreviewHandphoneRow" style="display:none; justify-content:space-between; align-items:center; margin-bottom:4px; padding-left:12px;">
+                    <span style="font-size:0.78rem; color:var(--text-muted);">📱 Handphone Claim</span>
+                    <span id="salaryPreviewHandphone" style="font-size:0.85rem;">0.00</span>
+                </div>
+                <div id="salaryPreviewOverseasRow" style="display:none; justify-content:space-between; align-items:center; margin-bottom:4px; padding-left:12px;">
+                    <span style="font-size:0.78rem; color:var(--text-muted);">✈️ Overseas Allowance</span>
+                    <span id="salaryPreviewOverseas" style="font-size:0.85rem;">0.00</span>
+                </div>
+                <div id="salaryPreviewBackpayRow" style="display:none; justify-content:space-between; align-items:center; margin-bottom:6px; padding-left:12px;">
+                    <span style="font-size:0.78rem; color:var(--text-muted);">🕒 Backpay</span>
+                    <span id="salaryPreviewBackpay" style="font-size:0.85rem;">0.00</span>
                 </div>
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                     <span style="font-size:0.85rem;"><span style="color:#3b82f6;">●</span> → Bank Account</span>
@@ -2927,11 +3095,67 @@
         <div class="modal-sheet" style="max-width: 340px;">
             <p style="font-size:0.9rem; line-height:1.5; margin-bottom:12px; font-weight:700;">This backup is encrypted. Enter its passcode to restore it.</p>
             <div id="backupPasscodeError" style="color:var(--expense-color); font-size:0.8rem; font-weight:700; margin-bottom:8px; min-height:1em;"></div>
-            <input type="password" id="backupPasscodeInput" class="form-input" placeholder="Backup passcode" style="width:100%; margin-bottom:14px;">
+            <input type="password" id="backupPasscodeInput" class="form-input" autocomplete="off" placeholder="Backup passcode" style="width:100%; margin-bottom:14px;">
             <div style="display:flex; gap:10px;">
                 <button type="button" id="backupPasscodeCancelBtn" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:0;">Cancel</button>
                 <button type="button" id="backupPasscodeOkBtn" class="submit-btn" style="background:var(--primary); margin-top:0;">Decrypt</button>
             </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Change Passcode (v134) — re-derives the app's encryption key from a new passcode
+         and re-encrypts every stored record under it. Current passcode is re-verified against
+         the stored verifier (not just trusted from the in-memory session) before anything is
+         touched, since the app being unlocked doesn't by itself prove the person holding the
+         device knows the passcode. -->
+    <div class="modal" id="changePasscodeModal">
+        <div class="modal-sheet" style="max-width: 360px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;">Change Passcode</h3>
+                <button data-click="closeModal" data-modal="changePasscodeModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:14px;">Your data is re-encrypted with the new passcode. This can take a moment on a large ledger — don't close the app while it's running.</p>
+            <div id="changePasscodeError" style="color:var(--expense-color); font-size:0.8rem; font-weight:700; margin-bottom:8px; min-height:1em;"></div>
+            <div class="form-row">
+                <label>Current Passcode</label>
+                <input type="password" id="changePasscodeCurrentInput" class="form-input" autocomplete="off" placeholder="Current passcode">
+            </div>
+            <div class="form-row">
+                <label>New Passcode</label>
+                <input type="password" id="changePasscodeNewInput" class="form-input" autocomplete="off" placeholder="New passcode (min 4 characters)">
+            </div>
+            <div class="form-row">
+                <label>Confirm New Passcode</label>
+                <input type="password" id="changePasscodeConfirmInput" class="form-input" autocomplete="off" placeholder="Confirm new passcode">
+            </div>
+            <button type="button" id="changePasscodeSubmitBtn" data-click="handleChangePasscodeSubmit" class="submit-btn" style="background: var(--transfer-color);">Change Passcode</button>
+        </div>
+    </div>
+
+    <!-- MODAL: Reset App Data (v135) — reachable from Setting (in addition to the lock screen's
+         own "Forgot passcode? Reset app data" link, which stays double-confirm-only since someone
+         who's genuinely forgotten their passcode can't type it). This entry point is reachable
+         while already unlocked, so it requires typing the current passcode AND re-typing it to
+         confirm — a much stronger accidental-tap guard than two OK/Cancel dialogs, since a typo
+         or a slipped tap can't accidentally erase everything. A final confirm dialog still runs
+         after the passcode check passes, matching the lock screen's own two-step convention. -->
+    <div class="modal" id="resetAppDataModal">
+        <div class="modal-sheet" style="max-width: 360px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800; color:var(--expense-color);">⚠️ Reset App Data</h3>
+                <button data-click="closeModal" data-modal="resetAppDataModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <p style="font-size:0.8rem; color:var(--text-muted); margin-bottom:14px;">This permanently erases ALL data in this app on this device — accounts, transactions, categories, everything. There is no recovery. Enter your passcode twice to confirm.</p>
+            <div id="resetAppDataError" style="color:var(--expense-color); font-size:0.8rem; font-weight:700; margin-bottom:8px; min-height:1em;"></div>
+            <div class="form-row">
+                <label>Passcode</label>
+                <input type="password" id="resetAppDataPasscodeInput" class="form-input" autocomplete="off" placeholder="Enter your passcode">
+            </div>
+            <div class="form-row">
+                <label>Confirm Passcode</label>
+                <input type="password" id="resetAppDataConfirmInput" class="form-input" autocomplete="off" placeholder="Re-enter your passcode">
+            </div>
+            <button type="button" id="resetAppDataSubmitBtn" data-click="handleResetAppDataSubmit" class="submit-btn" style="background:var(--expense-color);">🗑️ Erase Everything</button>
         </div>
     </div>
 

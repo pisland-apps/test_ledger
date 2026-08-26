@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v129";
-        const APP_VERSION_DATE = "2026-08-25";
+        const APP_VERSION = "v143";
+        const APP_VERSION_DATE = "2026-08-26";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -134,6 +134,39 @@
             return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
                 "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
             })[ch]);
+        }
+
+        // Deterministic color per currency code (v136) — so the same currency always looks the
+        // same wherever a currency badge/chip appears (Accounts list, Member page account list,
+        // Member page currency-held chips, the Net Worth by Currency report), instead of every
+        // currency sharing one plain gray badge. A handful of currencies get hand-picked colors;
+        // any other code (added later, e.g. a new account in a currency not in this list) falls
+        // back to a hash-picked slot from the same palette, so it still gets a stable, readable
+        // color rather than reverting to gray.
+        const CURRENCY_BADGE_COLORS = {
+            MYR: { bg: "#dbeafe", fg: "#1e40af" },
+            SGD: { bg: "#fee2e2", fg: "#b91c1c" },
+            USD: { bg: "#dcfce7", fg: "#166534" },
+            EUR: { bg: "#e0e7ff", fg: "#3730a3" },
+            GBP: { bg: "#ede9fe", fg: "#6d28d9" },
+            JPY: { bg: "#fae8ff", fg: "#86198f" },
+            AUD: { bg: "#ffedd5", fg: "#9a3412" },
+            HKD: { bg: "#ccfbf1", fg: "#0f766e" },
+            CNY: { bg: "#fef3c7", fg: "#92400e" },
+            THB: { bg: "#ecfccb", fg: "#3f6212" },
+            IDR: { bg: "#cffafe", fg: "#155e75" },
+            INR: { bg: "#ffe4e6", fg: "#9f1239" },
+        };
+        const CURRENCY_BADGE_FALLBACK_PALETTE = Object.values(CURRENCY_BADGE_COLORS);
+        function currencyBadgeColor(code) {
+            if (CURRENCY_BADGE_COLORS[code]) return CURRENCY_BADGE_COLORS[code];
+            let hash = 0;
+            for (let i = 0; i < code.length; i++) hash = (hash * 31 + code.charCodeAt(i)) >>> 0;
+            return CURRENCY_BADGE_FALLBACK_PALETTE[hash % CURRENCY_BADGE_FALLBACK_PALETTE.length];
+        }
+        function currencyBadgeHTML(code) {
+            const { bg, fg } = currencyBadgeColor(code);
+            return `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:${bg}; color:${fg}; font-weight:bold;">${escapeHtml(code)}</span>`;
         }
 
         // v80: formats a Date object as a "YYYY-MM-DD" calendar-date string using its LOCAL
@@ -410,6 +443,142 @@
             location.reload();
         }
 
+        // Re-encrypts every record in every store under a new AES-GCM key — the bulk-data half of
+        // Change Passcode. Every store is fully read (decrypted under whichever key is currently
+        // in `appKey`, i.e. the OLD one) before `appKey` is swapped to the new one, then every
+        // record is written back (encryptRecord() inside writeDB() picks up the new global
+        // `appKey` automatically). Reading everything up front, then swapping once, then writing
+        // everything — never interleaved — avoids a partial state where some stores are already
+        // readable only with the new key while others still need the old one.
+        async function reencryptAllStoresWithKey(newKey) {
+            const snapshots = {};
+            for (const storeName of Object.values(STORES)) {
+                snapshots[storeName] = await readAllDB(storeName);
+            }
+            appKey = newKey;
+            for (const storeName of Object.values(STORES)) {
+                for (const rec of snapshots[storeName]) {
+                    await writeDB(storeName, rec);
+                }
+            }
+        }
+
+        function openChangePasscodeModal() {
+            document.getElementById("changePasscodeCurrentInput").value = "";
+            document.getElementById("changePasscodeNewInput").value = "";
+            document.getElementById("changePasscodeConfirmInput").value = "";
+            document.getElementById("changePasscodeError").textContent = "";
+            openModal("changePasscodeModal");
+        }
+
+        async function handleChangePasscodeSubmit() {
+            const curVal = document.getElementById("changePasscodeCurrentInput").value;
+            const newVal = document.getElementById("changePasscodeNewInput").value;
+            const confirmVal = document.getElementById("changePasscodeConfirmInput").value;
+            const errEl = document.getElementById("changePasscodeError");
+            const submitBtn = document.getElementById("changePasscodeSubmitBtn");
+            errEl.textContent = "";
+
+            if (!curVal) { errEl.textContent = "Enter your current passcode."; return; }
+            if (!newVal || newVal.length < 4) { errEl.textContent = "New passcode must be at least 4 characters."; return; }
+            if (newVal !== confirmVal) { errEl.textContent = "New passcodes do not match."; return; }
+            if (newVal === curVal) { errEl.textContent = "New passcode must be different from the current one."; return; }
+
+            const cfg = getLockConfig();
+            if (!cfg) { errEl.textContent = "No passcode is set up yet."; return; }
+
+            // Verify the CURRENT passcode against the stored verifier — never trust the
+            // in-memory `currentPasscode` session variable alone here. The app being unlocked
+            // only proves someone unlocked it at some point this session, not that whoever is
+            // tapping "Change Passcode" right now actually knows the passcode (e.g. it was left
+            // unlocked and picked up by someone else).
+            try {
+                const curKey = await deriveKeyFromPasscode(curVal, cfg.salt, cfg.iterations);
+                const check = await aesDecryptString(curKey, cfg.verifierIv, cfg.verifierData);
+                if (check !== VERIFIER_PLAINTEXT) throw new Error("mismatch");
+            } catch (err) {
+                errEl.textContent = "Current passcode is incorrect.";
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = "Re-encrypting your data…";
+            try {
+                const newSalt = crypto.getRandomValues(new Uint8Array(16));
+                const newSaltB64 = bufToB64(newSalt);
+                const newKey = await deriveKeyFromPasscode(newVal, newSaltB64, PBKDF2_ITERATIONS);
+
+                await reencryptAllStoresWithKey(newKey);
+
+                const verifier = await aesEncryptString(newKey, VERIFIER_PLAINTEXT);
+                saveLockConfig({ salt: newSaltB64, iterations: PBKDF2_ITERATIONS, verifierIv: verifier.iv, verifierData: verifier.data });
+                currentPasscode = newVal;
+
+                // Biometric unlock wraps the OLD passcode text with a PRF-derived key (see
+                // enableBiometricUnlock above) — that wrapped value is now stale, since unlocking
+                // with it would try the old passcode against the new lock config and fail the
+                // verifier check. Rather than leave a broken enrollment that silently fails on
+                // next use, drop it and tell the user to re-enable it if they want it back — same
+                // "fail clean, re-enroll" approach this app already uses for stale biometric
+                // records (see attemptBiometricUnlock's v1-record handling).
+                const hadBiometric = !!(await getBiometricRecord());
+                if (hadBiometric) await disableBiometricUnlock().catch(() => {});
+
+                closeModal("changePasscodeModal");
+                alert(hadBiometric
+                    ? "Passcode changed. Biometric quick unlock was turned off — you can re-enable it from Backup & Restore."
+                    : "Passcode changed successfully.");
+            } catch (err) {
+                console.error("[ledger] change passcode failed", err);
+                errEl.textContent = "Something went wrong changing your passcode. Please try again.";
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = "Change Passcode";
+            }
+        }
+
+        function openResetAppDataModal() {
+            document.getElementById("resetAppDataPasscodeInput").value = "";
+            document.getElementById("resetAppDataConfirmInput").value = "";
+            document.getElementById("resetAppDataError").textContent = "";
+            openModal("resetAppDataModal");
+        }
+
+        // Reset App Data, reached from Setting (already-unlocked context) — deliberately stricter
+        // than the lock screen's own "Forgot passcode? Reset app data" link: that one is for
+        // someone who genuinely can't remember their passcode, so it can only ask two OK/Cancel
+        // questions. Here the passcode is known (the app is unlocked), so requiring it to be
+        // typed AND re-typed is a real, typo-proof accidental-tap guard rather than a dialog that
+        // can be reflexively clicked through. A final confirm dialog still runs after the
+        // passcode check passes, matching the lock screen's own two-step convention.
+        async function handleResetAppDataSubmit() {
+            const p1 = document.getElementById("resetAppDataPasscodeInput").value;
+            const p2 = document.getElementById("resetAppDataConfirmInput").value;
+            const errEl = document.getElementById("resetAppDataError");
+            errEl.textContent = "";
+
+            if (!p1) { errEl.textContent = "Enter your passcode."; return; }
+            if (p1 !== p2) { errEl.textContent = "Passcodes do not match."; return; }
+
+            const cfg = getLockConfig();
+            if (!cfg) { errEl.textContent = "No passcode is set up."; return; }
+
+            try {
+                const key = await deriveKeyFromPasscode(p1, cfg.salt, cfg.iterations);
+                const check = await aesDecryptString(key, cfg.verifierIv, cfg.verifierData);
+                if (check !== VERIFIER_PLAINTEXT) throw new Error("mismatch");
+            } catch (err) {
+                errEl.textContent = "Incorrect passcode.";
+                return;
+            }
+
+            const finalConfirm = await customConfirm("This will permanently erase ALL data in this app on this device — accounts, transactions, categories, everything. This cannot be undone. Continue?");
+            if (!finalConfirm) return;
+
+            closeModal("resetAppDataModal");
+            performFullAppDataReset();
+        }
+
         /* ================= IDLE AUTO-LOCK ================= */
         // Locks the app automatically after a period of no user activity — selectable via the
         // ⏱️ dropdown in the header (Never/1/5/15/30 min, default 15). The setting itself isn't
@@ -465,15 +634,23 @@
             }, { passive: true });
         });
 
+        // Actually erases everything — shared by the lock screen's "Forgot passcode? Reset app
+        // data" link (handleForgotPasscode, below) and the Setting page's "Reset App Data" flow
+        // (handleResetAppDataSubmit, further down). Each caller does its own confirmation UI
+        // first; by the time this runs, the decision is final.
+        function performFullAppDataReset() {
+            localStorage.removeItem(LOCK_CONFIG_KEY);
+            try { indexedDB.deleteDatabase(DB_NAME); } catch (err) {}
+            try { indexedDB.deleteDatabase(SECURITY_DB_NAME); } catch (err) {}
+            location.reload();
+        }
+
         async function handleForgotPasscode() {
             const step1 = await customConfirm("There is no passcode recovery. Resetting will permanently erase ALL data stored in this app on this device (accounts, transactions, categories). Continue?");
             if (!step1) return;
             const step2 = await customConfirm("Are you absolutely sure? This cannot be undone.");
             if (!step2) return;
-            localStorage.removeItem(LOCK_CONFIG_KEY);
-            try { indexedDB.deleteDatabase(DB_NAME); } catch (err) {}
-            try { indexedDB.deleteDatabase(SECURITY_DB_NAME); } catch (err) {}
-            location.reload();
+            performFullAppDataReset();
         }
 
         /* ================= BIOMETRIC QUICK UNLOCK (WebAuthn platform authenticator, PRF) =================
@@ -809,6 +986,16 @@
         // currently populated for — set by openAccountPicker(), read by selectAccountPickerOption()
         // when the user taps a row.
         let accountPickerTargetSelectId = null;
+        // v141: type-ahead state for the Account picker modal — restores the letter-key "jump to
+        // next option starting with R" behaviour a native <select> gives for free on desktop/PC,
+        // which the picker's plain list of <button> rows doesn't get automatically (see the
+        // ACCOUNT PICKER TYPE-AHEAD listener below). accountPickerTypeaheadChar is the single
+        // character currently being cycled through matches for; accountPickerTypeaheadIndex is the
+        // index (within the full match list for that character) most recently focused, so the next
+        // press of the same key advances to the next match instead of restarting from the first.
+        let accountPickerTypeaheadChar = "";
+        let accountPickerTypeaheadIndex = -1;
+        let accountPickerTypeaheadTimer = null;
         // Calculator/numpad popup — which input field "Use This Value" writes back into.
         let calcPadTargetId = null;
         let calcPadExpr = "";
@@ -874,6 +1061,10 @@
         // are Main Categories (top-level, same as every pre-v101 entry).
         const DEFAULT_CATEGORIES = [
             { name: "Salary", type: "income", icon: "💼" },
+            { name: "Housing Allowance", type: "income", icon: "🏠", parent: "Salary" },
+            { name: "Handphone Claim", type: "income", icon: "📱", parent: "Salary" },
+            { name: "Overseas Allowance", type: "income", icon: "✈️", parent: "Salary" },
+            { name: "Backpay", type: "income", icon: "🕒", parent: "Salary" },
             { name: "Investments", type: "income", icon: "📈" },
             { name: "Freelance", type: "income", icon: "💻" },
             { name: "Dividend ASNB", type: "income", icon: "📈" },
@@ -1108,6 +1299,7 @@
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
             const portfolioReportPage = document.getElementById("page-portfolio-report");
             const ownerNetWorthReportPage = document.getElementById("page-owner-networth-report");
+            const currencyReportPage = document.getElementById("page-currency-report");
             const navUpdatePage = document.getElementById("page-navupdate");
             const dataSecurityPage = document.getElementById("page-datasecurity");
             const membersPage = document.getElementById("page-members");
@@ -1136,6 +1328,7 @@
                 !incomeBreakdownPage.classList.contains("hidden") ||
                 !portfolioReportPage.classList.contains("hidden") ||
                 !ownerNetWorthReportPage.classList.contains("hidden") ||
+                !currencyReportPage.classList.contains("hidden") ||
                 !navUpdatePage.classList.contains("hidden") ||
                 !dataSecurityPage.classList.contains("hidden")
             ) {
@@ -1540,7 +1733,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -1572,6 +1765,7 @@
                 case "page-savings": return "Savings Statement";
                 case "page-portfolio-report": return "Unit Trust Portfolio";
                 case "page-owner-networth-report": return "Financial Assets vs Real Estate";
+                case "page-currency-report": return "Net Worth by Currency";
                 case "page-datasecurity": return "Settings";
                 case "page-navupdate": return "Daily NAV Update";
                 case "page-members": return "Manage Members";
@@ -1607,6 +1801,9 @@
                     break;
                 case "page-portfolio-report":
                     parts = [selectedText("portfolioMemberFilter")];
+                    break;
+                case "page-currency-report":
+                    parts = [selectedText("currencyReportMemberFilter")];
                     break;
                 default:
                     return null;
@@ -1979,6 +2176,7 @@
             const incomeHidden = document.getElementById("page-income-breakdown").classList.contains("hidden");
             const portfolioReportHidden = document.getElementById("page-portfolio-report").classList.contains("hidden");
             const ownerNetWorthReportHidden = document.getElementById("page-owner-networth-report").classList.contains("hidden");
+            const currencyReportHidden = document.getElementById("page-currency-report").classList.contains("hidden");
             const navUpdateHidden = document.getElementById("page-navupdate").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
@@ -1991,6 +2189,7 @@
             else if (!incomeHidden) target = "income-breakdown";
             else if (!portfolioReportHidden) target = "portfolio-report";
             else if (!ownerNetWorthReportHidden) target = "owner-networth-report";
+            else if (!currencyReportHidden) target = "currency-report";
             else if (!navUpdateHidden) target = "navupdate";
             else if (!ledgerHidden) {
                 const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
@@ -2021,6 +2220,7 @@
             else if (target === "income-breakdown") navigateToIncomeBreakdownPage();
             else if (target === "portfolio-report") navigateToPortfolioReportPage();
             else if (target === "owner-networth-report") navigateToOwnerNetWorthReportPage();
+            else if (target === "currency-report") navigateToCurrencyReportPage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -2328,12 +2528,22 @@
             } else if (type === "multi") {
                 multiBtn.style.background = "var(--transfer-color)"; multiBtn.style.color = "white";
                 hint.textContent = "Holds separate currency balances under one account name — e.g. \"Bank A\" with its own SGD and MYR balances side by side, never mixed together.";
-                // Opening balances only make sense when creating a brand-new account — for an
-                // existing account, use the normal Income/Transfer entry to add funds instead.
-                if (!isEditing) {
-                    multiWrap.style.display = "block";
-                    if (document.getElementById("multiOpeningRows").children.length === 0) addMultiCurrencyRow();
-                }
+                // v137: this block used to be hidden entirely once editing (an existing account
+                // had no way to add a brand-new currency leg from this form at all) on the theory
+                // that adding funds to an existing account should go through a normal Income/
+                // Transfer entry instead — true, but not obvious, and the create-flow's "+ Add
+                // Currency" affordance is the more natural place to reach for it. Now shown for
+                // both: any filled row becomes the exact same "Opening Balance" transfer this
+                // form already creates for a brand-new account (src blank, dest this account) —
+                // for an existing account, that's simply funds you're bringing into tracking now,
+                // dated today, same reasoning as when the account was first created. Editing
+                // starts with zero rows (no auto-added empty one) since there's nothing to
+                // pre-fill, and the label is reworded so it doesn't read as a required setup step.
+                multiWrap.style.display = "block";
+                document.getElementById("multiOpeningWrapLabel").textContent = isEditing
+                    ? "Add Another Currency (optional)"
+                    : "Opening Balances (optional)";
+                if (!isEditing && document.getElementById("multiOpeningRows").children.length === 0) addMultiCurrencyRow();
             } else if (type === "fd") {
                 fdBtn.style.background = "var(--transfer-color)"; fdBtn.style.color = "white";
                 hint.textContent = "Just choose the type and name — currency, principal, tenure, rate, and maturity date are captured per placement below (or later, whenever you transfer funds in).";
@@ -2460,7 +2670,7 @@
         // populateLinkedAccountSelect below) and the Redraw Facility checkbox whenever the Group
         // is switched to/from "Bank Loan", and the Real Estate "Include in Net Worth"/Type/Holding
         // Period fields whenever it's switched to/from "Real Estate".
-        async function handleAccGroupChange(preselectSubgroup, preselectLinkedAccountId, preselectIncludeInNetWorth, preselectPropertyType, preselectHoldingStartDate, preselectHasRedraw, preselectRedrawAmount, preselectRedrawAsOfDate) {
+        async function handleAccGroupChange(preselectSubgroup, preselectLinkedAccountId, preselectIncludeInNetWorth, preselectPropertyType, preselectHoldingStartDate, preselectHasRedraw, preselectRedrawAmount, preselectRedrawAsOfDate, preselectTenureType, preselectLeaseTermYears, preselectLeaseExpiryDate) {
             const group = document.getElementById("newAccGroup").value;
             const list = subgroupsForGroup(group);
             const row = document.getElementById("newAccSubgroupRow");
@@ -2498,6 +2708,7 @@
             const netWorthRow = document.getElementById("newAccNetWorthRow");
             const propertyTypeRow = document.getElementById("newAccPropertyTypeRow");
             const holdingStartRow = document.getElementById("newAccHoldingStartRow");
+            const tenureRow = document.getElementById("newAccTenureRow");
             if (group === "Real Estate") {
                 netWorthRow.style.display = "block";
                 document.getElementById("newAccIncludeNetWorth").value = preselectIncludeInNetWorth === "no" ? "no" : "yes";
@@ -2505,11 +2716,29 @@
                 document.getElementById("newAccPropertyType").value = preselectPropertyType || "";
                 holdingStartRow.style.display = "block";
                 document.getElementById("newAccHoldingStartDate").value = preselectHoldingStartDate || "";
+                tenureRow.style.display = "block";
+                document.getElementById("newAccTenure").value = preselectTenureType || "";
+                document.getElementById("newAccLeaseTermYears").value = preselectLeaseTermYears || "";
+                document.getElementById("newAccLeaseExpiryDate").value = preselectLeaseExpiryDate || "";
+                toggleLeaseFields();
             } else {
                 netWorthRow.style.display = "none";
                 propertyTypeRow.style.display = "none";
                 holdingStartRow.style.display = "none";
+                tenureRow.style.display = "none";
+                document.getElementById("newAccLeaseTermRow").style.display = "none";
+                document.getElementById("newAccLeaseExpiryRow").style.display = "none";
             }
+        }
+
+        // Wired to the Tenure select's onchange, and also called after pre-filling it when
+        // opening the form to edit an existing property (mirrors toggleRedrawFacilityFields
+        // below) — shows Lease Term/Lease Expiry only when Tenure = "Leasehold"; a Freehold
+        // property has no expiry, so those fields (and any values in them) don't apply.
+        function toggleLeaseFields() {
+            const isLeasehold = document.getElementById("newAccTenure").value === "Leasehold";
+            document.getElementById("newAccLeaseTermRow").style.display = isLeasehold ? "block" : "none";
+            document.getElementById("newAccLeaseExpiryRow").style.display = isLeasehold ? "block" : "none";
         }
 
         // Wired to the "This loan has a Redraw / Bank Withdrawal facility" checkbox — shows/hides
@@ -2540,6 +2769,7 @@
             const isEditing = document.getElementById("editAccountId").value !== "";
             document.getElementById("editAccountId").value = "";
             document.getElementById("newAccName").value = "";
+            document.getElementById("newAccRef").value = "";
             document.getElementById("newAccGroup").value = DEFAULT_ACCOUNT_GROUP;
             handleAccGroupChange();
             document.getElementById("newAccBal").value = "0";
@@ -2571,6 +2801,7 @@
             const isNewAccount = document.getElementById("editAccountId").value === "";
             const id = document.getElementById("editAccountId").value || "acc_" + Date.now();
             const name = document.getElementById("newAccName").value.trim();
+            const accountRef = document.getElementById("newAccRef").value.trim();
             const type = document.getElementById("newAccType").value;
 
             if(!name) { alert("Please enter an account name."); return; }
@@ -2578,6 +2809,11 @@
             const group = document.getElementById("newAccGroup").value || DEFAULT_ACCOUNT_GROUP;
             const record = {
                 id, name, type, group,
+                // Account No. / Ref (v130): purely informational free-text, independent of
+                // group/type — unlike propertyType/hasRedrawFacility below, this is NOT cleared
+                // when the account is re-grouped, since a bank account number doesn't stop being
+                // true just because the account got moved to a different Group/Sub-Group.
+                accountRef: accountRef,
                 subgroup: document.getElementById("newAccSubgroup").value || "",
                 linkedAccountId: (group === "Bank Loan" ? (document.getElementById("newAccLinkedAccount").value || null) : null),
                 includeInNetWorth: (group === "Real Estate" ? (document.getElementById("newAccIncludeNetWorth").value !== "no") : true),
@@ -2586,6 +2822,13 @@
                 // under Real Estate so a re-grouped account doesn't carry stale values silently.
                 propertyType: (group === "Real Estate" ? (document.getElementById("newAccPropertyType").value || "") : ""),
                 holdingStartDate: (group === "Real Estate" ? (document.getElementById("newAccHoldingStartDate").value || "") : ""),
+                // Real Estate (v131): Tenure (Freehold/Leasehold) + Lease Term/Expiry — same
+                // clear-on-regroup treatment as propertyType/holdingStartDate above. Lease
+                // Term/Expiry are additionally cleared whenever Tenure isn't "Leasehold" (even
+                // while still Real Estate), same pattern as Bank Loan's redraw fields below.
+                tenureType: (group === "Real Estate" ? (document.getElementById("newAccTenure").value || "") : ""),
+                leaseTermYears: (group === "Real Estate" && document.getElementById("newAccTenure").value === "Leasehold") ? (parseInt(document.getElementById("newAccLeaseTermYears").value, 10) || 0) : 0,
+                leaseExpiryDate: (group === "Real Estate" && document.getElementById("newAccTenure").value === "Leasehold") ? (document.getElementById("newAccLeaseExpiryDate").value || "") : "",
                 // Bank Loan (v66): manual Redraw / Bank Withdrawal facility amount — same
                 // clear-on-regroup treatment, and also cleared if the facility checkbox itself is
                 // unticked even while still a Bank Loan.
@@ -2623,7 +2866,14 @@
             let openingTransactions = [];
             const todayStr = todayLocalStr();
 
-            if (isNewAccount && type === "multi") {
+            // v137: was `isNewAccount && type === "multi"` — the rows are now shown (and can be
+            // filled) for an existing multi-currency account too (see setAccountTypeUI above), so
+            // this must process them regardless of isNewAccount. Each becomes an ordinary
+            // "Opening Balance" transfer into the account, exactly like manually creating one via
+            // Income/Transfer entry — dated today for an existing account rather than the
+            // account's original creation date, since that's genuinely when these funds are being
+            // brought into tracking.
+            if (type === "multi") {
                 const rows = Array.from(document.getElementById("multiOpeningRows").children);
                 for (const row of rows) {
                     const amount = parseFloat(row.querySelector(".multi-row-amount").value);
@@ -2699,7 +2949,7 @@
                     }
                 }
                 if (failedCount.n > 0) {
-                    alert(`Account created, but ${failedCount.n} opening balance/placement entr${failedCount.n === 1 ? 'y' : 'ies'} could not be saved. You can add them manually via Income entries.`);
+                    alert(`Account ${isNewAccount ? "created" : "saved"}, but ${failedCount.n} opening balance/placement entr${failedCount.n === 1 ? 'y' : 'ies'} could not be saved. You can add them manually via Income entries.`);
                 }
             }
 
@@ -2887,7 +3137,7 @@
                             ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:bold;">Unit Trust</span>`
                             : a.type === "creditcard"
                                 ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fce7f3; color:#9d174d; font-weight:bold;">Credit Card</span>`
-                                : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
+                                : currencyBadgeHTML(a.currency);
 
                 const baseVal = accountBaseValue(a, nativeBalances);
 
@@ -3095,6 +3345,7 @@
 
             document.getElementById("editAccountId").value = account.id;
             document.getElementById("newAccName").value = account.name;
+            document.getElementById("newAccRef").value = account.accountRef || "";
             document.getElementById("newAccGroup").value = account.group || DEFAULT_ACCOUNT_GROUP;
             await handleAccGroupChange(
                 account.subgroup || "",
@@ -3104,7 +3355,10 @@
                 account.holdingStartDate || "",
                 !!account.hasRedrawFacility,
                 account.redrawAmount || "",
-                account.redrawAsOfDate || ""
+                account.redrawAsOfDate || "",
+                account.tenureType || "",
+                account.leaseTermYears || "",
+                account.leaseExpiryDate || ""
             );
 
             setAccountTypeUI(account.type || "normal");
@@ -4087,6 +4341,40 @@
             return years > 0 ? `${years}y ${months}m` : `${months}m`;
         }
 
+        // Real Estate (v131): "how long until the lease runs out" computed from Lease Expiry to
+        // today — e.g. "62y 3m remaining", or "Expired" for a past date. Mirrors
+        // formatHoldingPeriod above but counts down instead of up. Returns "" for an unset/invalid
+        // date so callers can skip the line entirely.
+        function formatYearsRemaining(expiryDateStr) {
+            if (!expiryDateStr) return "";
+            const expiry = new Date(expiryDateStr + "T00:00:00");
+            if (isNaN(expiry.getTime())) return "";
+            const now = new Date();
+            if (expiry <= now) return "Expired";
+            let years = expiry.getFullYear() - now.getFullYear();
+            let months = expiry.getMonth() - now.getMonth();
+            if (expiry.getDate() < now.getDate()) months--;
+            if (months < 0) { years--; months += 12; }
+            return years > 0 ? `${years}y ${months}m remaining` : `${months}m remaining`;
+        }
+
+        // Real Estate (v131): Tenure line — "**-year Leasehold · Expiry <date> · <n>y <n>m
+        // remaining" or plain "Freehold". Factored out of accountExtraInfoLine so it can be
+        // appended after the Type/Holding Period line (a property may have either set without
+        // the other) instead of the two being mutually exclusive.
+        function realEstateTenureLine(a) {
+            const bits = [];
+            if (a.tenureType === "Leasehold") {
+                bits.push(a.leaseTermYears ? `${a.leaseTermYears}-year Leasehold` : "Leasehold");
+                if (a.leaseExpiryDate) bits.push(`Expiry ${formatNavHistoryDate(a.leaseExpiryDate)}`);
+                const remaining = formatYearsRemaining(a.leaseExpiryDate);
+                if (remaining) bits.push(remaining);
+            } else {
+                bits.push("Freehold");
+            }
+            return `<br><span style="font-size:0.7rem; color:#9a3412; font-weight:600;">📜 ${bits.join(" · ")}</span>`;
+        }
+
         // Real Estate (v66): Property Type + Holding Period, or Bank Loan (v66): manual Redraw
         // Facility amount — one short HTML line (or "" if nothing to show) meant to sit right
         // under an account's name wherever it's listed. Shared by the Accounts page, a member's
@@ -4094,6 +4382,11 @@
         // in sync automatically instead of drifting out of step with separately-written markup.
         function accountExtraInfoLine(a, nativeBalances) {
             const group = a.group || DEFAULT_ACCOUNT_GROUP;
+            // Account No. / Ref (v130): plain informational text, independent of group/type, so
+            // it's built separately here and prepended ahead of whichever type-specific line (if
+            // any) applies below, rather than living inside one of those mutually-exclusive
+            // branches.
+            const refLine = a.accountRef ? `<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.accountRef)}</span>` : "";
             if (a.type === "creditcard" && (a.creditLimit || a.statementDay || a.paymentDueDay)) {
                 const bits = [];
                 if (a.creditLimit) bits.push(`Limit ${formatBalanceHTML(a.creditLimit, a.currency || baseCurrency)}`);
@@ -4110,20 +4403,24 @@
                     const available = Math.max(0, a.creditLimit - ccAmountDueForAvail);
                     bits.push(`Available ${formatBalanceHTML(available, a.currency || baseCurrency)}`);
                 }
-                return bits.length ? `<br><span style="font-size:0.7rem; color:#9d174d; font-weight:600;">💳 ${bits.join(" · ")}</span>` : "";
+                return refLine + (bits.length ? `<br><span style="font-size:0.7rem; color:#9d174d; font-weight:600;">💳 ${bits.join(" · ")}</span>` : "");
             }
             if (group === "Real Estate" && (a.propertyType || a.holdingStartDate)) {
                 const bits = [];
                 if (a.propertyType) bits.push(escapeHtml(a.propertyType));
                 const held = formatHoldingPeriod(a.holdingStartDate);
                 if (held) bits.push(`Held ${held}`);
-                return bits.length ? `<br><span style="font-size:0.7rem; color:#166534; font-weight:600;">🏷️ ${bits.join(" · ")}</span>` : "";
+                const typeLine = bits.length ? `<br><span style="font-size:0.7rem; color:#166534; font-weight:600;">🏷️ ${bits.join(" · ")}</span>` : "";
+                return refLine + typeLine + realEstateTenureLine(a);
+            }
+            if (group === "Real Estate" && a.tenureType) {
+                return refLine + realEstateTenureLine(a);
             }
             if (group === "Bank Loan" && a.hasRedrawFacility) {
                 const dateStr = a.redrawAsOfDate ? ` (as of ${formatNavHistoryDate(a.redrawAsOfDate)})` : "";
-                return `<br><span style="font-size:0.7rem; color:#0369a1; font-weight:600;">💰 Redraw Available: ${formatBalanceHTML(a.redrawAmount || 0, a.currency || baseCurrency)}${dateStr}</span>`;
+                return refLine + `<br><span style="font-size:0.7rem; color:#0369a1; font-weight:600;">💰 Redraw Available: ${formatBalanceHTML(a.redrawAmount || 0, a.currency || baseCurrency)}${dateStr}</span>`;
             }
-            return "";
+            return refLine;
         }
 
         let navUpdateView = "card"; // "card" | "table" | "history" — which of the 3 views is shown
@@ -4674,6 +4971,38 @@
             return { financial: total - realEstate, realEstate, total };
         }
 
+        // Splits a subset of accounts into { byCurrency: { CODE: { financial, realEstate } },
+        // totalBase } for the "Net Worth by Currency" report (v132) — the currency-pivoted
+        // sibling of summarizeOwnerAssetSplit just above. Each currency's financial/realEstate
+        // figures are native (unconverted) amounts; totalBase is the one converted figure, used
+        // only for the Grand Total row and % of Net Worth column. Same includeInNetWorth opt-out
+        // and Real Estate group-based split as summarizeOwnerAssetSplit, so a currency row here
+        // always reconciles against that report's Real Estate total for the same account subset.
+        function summarizeCurrencySplit(accountsSubset, nativeBalances) {
+            const byCurrency = {};
+            let totalBase = 0;
+            const bump = (curr, amt, isRealEstate) => {
+                if (!byCurrency[curr]) byCurrency[curr] = { financial: 0, realEstate: 0 };
+                if (isRealEstate) byCurrency[curr].realEstate += amt;
+                else byCurrency[curr].financial += amt;
+            };
+            accountsSubset.forEach(a => {
+                if (a.includeInNetWorth === false) return;
+                const isRealEstate = (a.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate";
+                if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
+                    Object.entries(nativeBalances[a.id] || {}).forEach(([curr, amt]) => {
+                        totalBase += convertCurrency(amt, curr, baseCurrency);
+                        bump(curr, amt, isRealEstate);
+                    });
+                } else {
+                    const amt = nativeBalances[a.id] || 0;
+                    totalBase += convertCurrency(amt, a.currency, baseCurrency);
+                    bump(a.currency, amt, isRealEstate);
+                }
+            });
+            return { byCurrency, totalBase };
+        }
+
         // Sums a subset of accounts into { total (in baseCurrency), currencyTotals { CODE: nativeAmt } }
         function summarizeAccountsNetWorth(accountsSubset, nativeBalances) {
             let total = 0;
@@ -4819,7 +5148,7 @@
                 .sort((a, b) => b[1] - a[1])
                 .map(([curr, amt]) => `
                     <div class="currency-total-chip">
-                        <div class="cur-code">${escapeHtml(curr)}</div>
+                        <div class="cur-code" style="color:${currencyBadgeColor(curr).fg};">${escapeHtml(curr)}</div>
                         <div class="cur-amt">${formatBalanceHTML(amt, curr)}</div>
                     </div>
                 `).join("");
@@ -4834,7 +5163,7 @@
                             ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fef3c7; color:#92400e; font-weight:bold;">Unit Trust</span>`
                             : a.type === "creditcard"
                                 ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fce7f3; color:#9d174d; font-weight:bold;">Credit Card</span>`
-                                : `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#e2e8f0; color:var(--text-muted); font-weight:bold;">${escapeHtml(a.currency)}</span>`;
+                                : currencyBadgeHTML(a.currency);
 
                 let balSummary;
                 if (a.type === "multi") {
@@ -6840,6 +7169,14 @@
         // description (editable), scheme defaulted to "none", and both account dropdowns
         // listing every account (sorted group-then-name, owner shown per accountOptionLabel) —
         // same convention as the ordinary Income/Expense/Transfer form's own account pickers.
+        // v138 added four fixed, always-visible optional allowance fields (Housing Allowance,
+        // Handphone Claim, Overseas Allowance, Backpay) — each folds into the "Gross Salary"
+        // total shown in the preview but never passes through the EE/ER split (see
+        // recalcSalaryPreview()/handleSaveSalaryRecord()); each non-zero amount is saved as its
+        // own Income leg straight to the Bank Account under its own category (seeded as
+        // Subcategories of "Salary" in DEFAULT_CATEGORIES). v140 added an optional "Backpay
+        // Note" free-text field (shown once Backpay > 0) saved into the Backpay leg's own
+        // `notes` field only — the other three allowance legs still save notes: null.
         async function openSalaryEntryForm() {
             const accounts = await readAllDB(STORES.ACCOUNTS);
             if (accounts.length === 0) { alert("Add an account first!"); return; }
@@ -6858,6 +7195,12 @@
             document.getElementById("salaryGross").value = "";
             document.getElementById("salaryEEAmount").value = "";
             document.getElementById("salaryERAmount").value = "";
+            document.getElementById("salaryHousingAllowance").value = "";
+            document.getElementById("salaryHandphoneClaim").value = "";
+            document.getElementById("salaryOverseasAllowance").value = "";
+            document.getElementById("salaryBackpay").value = "";
+            document.getElementById("salaryBackpayNote").value = "";
+            document.getElementById("salaryBackpayNoteRow").style.display = "none";
 
             const currSelect = document.getElementById("salaryCurrency");
             currSelect.innerHTML = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
@@ -6877,7 +7220,7 @@
                 document.getElementById("salaryBankAccount").value = defaultReceiveAccount;
                 syncAccountPickerButtonText("salaryBankAccount");
             }
-            handleSalarySchemeChange();
+            await handleSalarySchemeChange();
             recalcSalaryPreview();
             openModal("salaryModal");
         }
@@ -6911,10 +7254,12 @@
         // account list (including joint accounts) stays reachable either way: Bank Account
         // defaults to their own solely-owned Bank/Cash account if one exists (but ONLY when no
         // Default Receive Account is configured — see below); EPF/CPF Account defaults to any
-        // account under the Investment group's KWSP or CPF sub-group they're an owner of (solo
-        // OR joint, since a household's EPF/CPF pot is sometimes filed jointly). Left alone (no
-        // default change) when no match is found — "All Members" or a member with no matching
-        // account never overwrites whatever the user already picked by hand.
+        // account under the Investment group's KWSP or CPF sub-group they're an owner of, matching
+        // whichever subgroup the currently-selected Scheme calls for (see
+        // updateContribAccountDefault() below) — solo OR joint, since a household's EPF/CPF pot is
+        // sometimes filed jointly. Left alone (no default change) when no match is found — "All
+        // Members" or a member with no matching account never overwrites whatever the user already
+        // picked by hand.
         async function handleSalaryMemberChange() {
             const memberId = document.getElementById("salaryMemberSelect").value;
             if (memberId === "all") return;
@@ -6937,9 +7282,26 @@
                 }
             }
 
+            updateContribAccountDefault(accounts, memberId);
+        }
+
+        // Shared by handleSalaryMemberChange() (member just picked) and handleSalarySchemeChange()
+        // (scheme just picked/changed) — whichever fires later "wins" the default, matching how a
+        // user actually fills the form in either order. Matches the EPF/CPF Account dropdown to an
+        // Investment-group account under the subgroup the CURRENT Scheme calls for specifically
+        // (KWSP for "epf", CPF for "cpf") rather than either subgroup — previously this matched
+        // "KWSP or CPF" regardless of Scheme, so a member with both a KWSP and a CPF account could
+        // land on the wrong one depending on which happened to come first in account order (e.g.
+        // Scheme = CPF (Singapore) but the KWSP (MYR) account stayed selected). No-ops when Scheme
+        // is "none" (no subgroup to match) or Member is still "All Members" (memberId undefined).
+        function updateContribAccountDefault(accounts, memberId) {
+            if (!memberId || memberId === "all") return;
+            const scheme = document.getElementById("salaryScheme").value;
+            const wantSubgroup = scheme === "epf" ? "KWSP" : scheme === "cpf" ? "CPF" : null;
+            if (!wantSubgroup) return;
             const contribAcc = accounts.find(a =>
                 Array.isArray(a.memberIds) && a.memberIds.includes(memberId) &&
-                (a.group || DEFAULT_ACCOUNT_GROUP) === "Investment" && (a.subgroup === "KWSP" || a.subgroup === "CPF")
+                (a.group || DEFAULT_ACCOUNT_GROUP) === "Investment" && a.subgroup === wantSubgroup
             );
             if (contribAcc) {
                 document.getElementById("salaryContribAccount").value = contribAcc.id;
@@ -6953,7 +7315,7 @@
         // Also auto-sets the Currency selector to each scheme's natural currency (MYR for EPF,
         // SGD for CPF) — a plain "Salary" (no scheme) leaves whatever currency was already
         // chosen alone, since there's no single natural currency to default it to.
-        function handleSalarySchemeChange() {
+        async function handleSalarySchemeChange() {
             const scheme = document.getElementById("salaryScheme").value;
             const isEpf = scheme === "epf";
             const isCpf = scheme === "cpf";
@@ -6974,6 +7336,12 @@
             const schemeCurrency = isEpf ? "MYR" : isCpf ? "SGD" : null;
             if (schemeCurrency && fxRates[schemeCurrency] !== undefined) currSelect.value = schemeCurrency;
 
+            if (hasScheme) {
+                const memberId = document.getElementById("salaryMemberSelect").value;
+                const accounts = await readAllDB(STORES.ACCOUNTS);
+                updateContribAccountDefault(accounts, memberId);
+            }
+
             recalcSalaryPreview();
         }
 
@@ -6982,26 +7350,51 @@
         }
 
         // Live preview box (mirrors the reference screenshot's "Gross → Bank + EPF" breakdown):
-        // Bank leg = Gross − EE (EE never appears twice — it's deducted from gross, not on top
-        // of it); the ER leg is purely additive, shown only when > 0, and never subtracted from
-        // the Bank leg since the employer's contribution never touches the employee's pay. Every
-        // figure is formatted in the currently selected Currency (RM for MYR, S$ for SGD, etc.)
-        // so the preview reads the same as whatever currency the saved legs will actually use.
+        // Bank leg = (base Gross − EE) + allowances — EE never appears twice (deducted from
+        // gross, not on top of it), and allowances are added straight into the Bank leg without
+        // ever passing through the EE/ER split (Housing/Handphone/Overseas/Backpay aren't
+        // statutory-deductible). The "Gross Salary" total line shown up top is base + all four
+        // allowances combined, so the preview reads as one true gross-pay figure even though only
+        // the base portion actually goes through the EPF/CPF split below it. The ER leg is purely
+        // additive, shown only when > 0, and never subtracted from the Bank leg since the
+        // employer's contribution never touches the employee's pay. Every figure is formatted in
+        // the currently selected Currency (RM for MYR, S$ for SGD, etc.) so the preview reads the
+        // same as whatever currency the saved legs will actually use.
         function recalcSalaryPreview() {
             const scheme = document.getElementById("salaryScheme").value;
             const hasScheme = scheme === "epf" || scheme === "cpf";
             const currency = document.getElementById("salaryCurrency").value;
-            const gross = parseFloat(document.getElementById("salaryGross").value) || 0;
+            const baseGross = parseFloat(document.getElementById("salaryGross").value) || 0;
             const ee = hasScheme ? (parseFloat(document.getElementById("salaryEEAmount").value) || 0) : 0;
             const er = hasScheme ? (parseFloat(document.getElementById("salaryERAmount").value) || 0) : 0;
-            const net = gross - ee;
+            const housing = parseFloat(document.getElementById("salaryHousingAllowance").value) || 0;
+            const handphone = parseFloat(document.getElementById("salaryHandphoneClaim").value) || 0;
+            const overseas = parseFloat(document.getElementById("salaryOverseasAllowance").value) || 0;
+            const backpay = parseFloat(document.getElementById("salaryBackpay").value) || 0;
+            const allowanceTotal = housing + handphone + overseas + backpay;
+            const totalGross = baseGross + allowanceTotal;
+            const net = (baseGross - ee) + allowanceTotal;
 
-            document.getElementById("salaryPreviewGross").textContent = formatCurrency(gross, currency);
+            document.getElementById("salaryPreviewGross").textContent = formatCurrency(totalGross, currency);
             document.getElementById("salaryPreviewNet").textContent = formatCurrency(net, currency);
             document.getElementById("salaryPreviewEERow").style.display = (hasScheme && ee > 0) ? "flex" : "none";
             document.getElementById("salaryPreviewERRow").style.display = (hasScheme && er > 0) ? "flex" : "none";
             document.getElementById("salaryPreviewEE").textContent = formatCurrency(ee, currency);
             document.getElementById("salaryPreviewER").textContent = formatCurrency(er, currency);
+
+            document.getElementById("salaryPreviewHousingRow").style.display = housing > 0 ? "flex" : "none";
+            document.getElementById("salaryPreviewHandphoneRow").style.display = handphone > 0 ? "flex" : "none";
+            document.getElementById("salaryPreviewOverseasRow").style.display = overseas > 0 ? "flex" : "none";
+            document.getElementById("salaryPreviewBackpayRow").style.display = backpay > 0 ? "flex" : "none";
+            document.getElementById("salaryPreviewHousing").textContent = formatCurrency(housing, currency);
+            document.getElementById("salaryPreviewHandphone").textContent = formatCurrency(handphone, currency);
+            document.getElementById("salaryPreviewOverseas").textContent = formatCurrency(overseas, currency);
+            document.getElementById("salaryPreviewBackpay").textContent = formatCurrency(backpay, currency);
+
+            // Backpay Note only makes sense once there's a Backpay amount to attach it to —
+            // hidden (not cleared) when Backpay drops back to 0, so re-entering an amount
+            // restores whatever note was already typed.
+            document.getElementById("salaryBackpayNoteRow").style.display = backpay > 0 ? "block" : "none";
         }
 
         // Saves 1–3 ordinary Income transactions (Bank leg always; EE/ER legs only when a
@@ -7028,6 +7421,11 @@
             const gross = parseFloat(document.getElementById("salaryGross").value);
             const ee = hasScheme ? (parseFloat(document.getElementById("salaryEEAmount").value) || 0) : 0;
             const er = hasScheme ? (parseFloat(document.getElementById("salaryERAmount").value) || 0) : 0;
+            const housing = parseFloat(document.getElementById("salaryHousingAllowance").value) || 0;
+            const handphone = parseFloat(document.getElementById("salaryHandphoneClaim").value) || 0;
+            const overseas = parseFloat(document.getElementById("salaryOverseasAllowance").value) || 0;
+            const backpay = parseFloat(document.getElementById("salaryBackpay").value) || 0;
+            const backpayNote = document.getElementById("salaryBackpayNote").value.trim() || null;
 
             if (!date) { alert("Please select a date."); return; }
             if (!desc) { alert("Please enter a description."); return; }
@@ -7037,7 +7435,12 @@
             if (hasScheme && !contribAccountId) { alert("Please select an EPF/CPF Account, or switch Scheme to \"None\"."); return; }
             if (ee < 0 || er < 0) { alert("EE/ER amounts can't be negative."); return; }
             if (ee > gross) { alert("EE contribution can't be greater than Gross Salary."); return; }
+            if (housing < 0 || handphone < 0 || overseas < 0 || backpay < 0) { alert("Allowance amounts can't be negative."); return; }
 
+            // Housing/Handphone/Overseas/Backpay are additive allowances that never pass through
+            // the EE/ER split (see recalcSalaryPreview()) — each is its own Income leg, in its
+            // own category, straight to the Bank Account. The base salary's Net leg (Gross − EE)
+            // is unaffected by their presence.
             const netAmount = gross - ee;
             const salaryGroupId = "salary_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
 
@@ -7064,6 +7467,19 @@
                         amount: er, src: contribAccountId,
                         cat: scheme === "epf" ? "EPF Contrib.(ER)" : "CPF Contrib.(ER)"
                     }));
+                }
+                const allowanceLegs = [
+                    { amount: housing, cat: "Housing Allowance", notes: null },
+                    { amount: handphone, cat: "Handphone Claim", notes: null },
+                    { amount: overseas, cat: "Overseas Allowance", notes: null },
+                    { amount: backpay, cat: "Backpay", notes: backpayNote }
+                ];
+                for (const leg of allowanceLegs) {
+                    if (leg.amount > 0) {
+                        await writeDB(STORES.TRANSACTIONS, Object.assign({}, baseRecord, {
+                            amount: leg.amount, src: bankAccountId, cat: leg.cat, notes: leg.notes
+                        }));
+                    }
                 }
             } catch (err) {
                 alert("Could not save salary record: " + (err && err.message ? err.message : err));
@@ -7325,6 +7741,11 @@
             const select = document.getElementById(selectId);
             if (!select) return;
             accountPickerTargetSelectId = selectId;
+            // Fresh type-ahead state each time the picker opens, so leftover "R" cycling position
+            // from a previous picker session (e.g. a different account field) doesn't carry over.
+            accountPickerTypeaheadChar = "";
+            accountPickerTypeaheadIndex = -1;
+            clearTimeout(accountPickerTypeaheadTimer);
             document.getElementById("accountPickerTitle").textContent = el.dataset.title || "Select Account";
             const currentVal = select.value;
             document.getElementById("accountPickerList").innerHTML = Array.from(select.options).map(opt => `
@@ -7333,11 +7754,20 @@
                     ${opt.value === currentVal ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
                 </button>
             `).join("");
-            document.getElementById("accountPickerModal").classList.add("active");
+            // Uses the shared openModal() (see "NATIVE ROUTING CORE" above) so this picker pushes
+            // its own history entry and joins modalStack like every other modal. Previously this
+            // just toggled the "active" class directly, with no history entry of its own — so the
+            // hardware/gesture back button had nothing belonging to this picker to pop and fell
+            // through to whatever history entry was next (often none), exiting the app instead of
+            // just closing the picker.
+            openModal("accountPickerModal");
         }
 
         function closeAccountPicker() {
-            document.getElementById("accountPickerModal").classList.remove("active");
+            // See openAccountPicker() above — closing goes through the shared closeModal(), which
+            // triggers history.back() and lets the popstate handler remove "active" in lockstep,
+            // matching how every other modal opens/closes.
+            closeModal("accountPickerModal");
         }
 
         function selectAccountPickerOption(el) {
@@ -7367,6 +7797,49 @@
             const opt = select.options[select.selectedIndex];
             btnText.textContent = opt ? opt.textContent : "Select account";
         }
+
+        // v141: PC keyboard type-ahead for the Account picker — a native <select> lets you press
+        // "R" to jump to the first option starting with R, press "R" again to jump to the next one,
+        // and so on. Swapping the native dropdown for a plain list of <button> rows (see the
+        // ACCOUNT PICKER comment above openAccountPicker()) dropped that for-free browser behaviour
+        // along with the oversized-font problem it was meant to fix, so it's reimplemented here:
+        // one document-level keydown listener (same registration pattern as the passcode Enter
+        // listener near the top of the file), gated on the picker actually being open, that finds
+        // every row whose label starts with the pressed letter and focus()es the next one in that
+        // subset each time the same letter is pressed again, resetting after a pause or a different
+        // letter — matching the native select's own type-ahead timeout behaviour.
+        document.addEventListener("keydown", (e) => {
+            const modal = document.getElementById("accountPickerModal");
+            if (!modal || !modal.classList.contains("active")) return;
+            // Single printable character only, no modifier combos — so Ctrl+R / Cmd+R (reload)
+            // and similar browser/OS shortcuts keep working normally while the picker is open.
+            if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+            const buttons = Array.from(document.querySelectorAll("#accountPickerList .option-menu-btn"));
+            if (buttons.length === 0) return;
+            const char = e.key.toLowerCase();
+            const matches = buttons.filter((btn) => {
+                const label = btn.querySelector("span");
+                return label && label.textContent.trim().toLowerCase().startsWith(char);
+            });
+            if (matches.length === 0) return;
+            e.preventDefault();
+            clearTimeout(accountPickerTypeaheadTimer);
+            if (char === accountPickerTypeaheadChar) {
+                accountPickerTypeaheadIndex = (accountPickerTypeaheadIndex + 1) % matches.length;
+            } else {
+                accountPickerTypeaheadChar = char;
+                accountPickerTypeaheadIndex = 0;
+            }
+            // Native selects reset the typed search after a short pause of no typing — same idea
+            // here, so pressing "R" again a while later restarts from the first R instead of
+            // continuing to advance.
+            accountPickerTypeaheadTimer = setTimeout(() => {
+                accountPickerTypeaheadChar = "";
+                accountPickerTypeaheadIndex = -1;
+            }, 800);
+            matches[accountPickerTypeaheadIndex].focus();
+            matches[accountPickerTypeaheadIndex].scrollIntoView({ block: "nearest" });
+        });
 
         // Dismisses just the Options submenu, back to Quick View underneath — not a history
         // navigation (see the comment on openTxOptionsMenu() above for why Options doesn't have
@@ -9077,6 +9550,93 @@
             renderOwnerNetWorthReportPage();
         }
 
+        // --- NET WORTH BY CURRENCY REPORT (v132) ---
+        // Currency-pivoted sibling of the Owner report above: one row per currency actually held
+        // (native, unconverted Financial Assets / Real Estate / Total), a ≈ Base Currency column
+        // and % of Net Worth for comparison, plus a Grand Total row. Optional Member filter
+        // (same "all" / "joint" / one member convention as Spending/Income Breakdown and the
+        // Unit Trust Portfolio report) narrows the account subset before summing.
+        async function renderCurrencyReportPage() {
+            const { accounts, nativeBalances } = await computeAccountBalances();
+            populateBreakdownMemberFilter("currencyReportMemberFilter");
+            const filterMember = document.getElementById("currencyReportMemberFilter").value;
+            document.getElementById("currencyReportBaseCurrLabel").textContent = baseCurrency;
+
+            const subset = filterMember !== "all"
+                ? (() => { const ids = accountIdsForMemberFilter(accounts, filterMember); return accounts.filter(a => ids.has(a.id)); })()
+                : accounts;
+
+            const { byCurrency, totalBase: grandTotal } = summarizeCurrencySplit(subset, nativeBalances);
+            const pctOf = (base) => grandTotal !== 0 ? ((base / grandTotal) * 100).toFixed(1) + "%" : "—";
+
+            const wrap = document.getElementById("currencyReportTableWrap");
+            const codes = Object.keys(byCurrency);
+            if (codes.length === 0) {
+                wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem; text-align:center; padding:24px 0;">No accounts to report on yet.</p>`;
+                return;
+            }
+
+            // Sorted by base-currency-equivalent value, largest holding first — same convention
+            // as the member currency-chip breakdown (renderMemberPage) rather than alphabetical,
+            // so the currency you actually hold the most of leads the table.
+            const sortedCodes = codes
+                .map(code => {
+                    const { financial, realEstate } = byCurrency[code];
+                    const base = convertCurrency(financial + realEstate, code, baseCurrency);
+                    return { code, financial, realEstate, base };
+                })
+                .sort((a, b) => b.base - a.base);
+
+            let rows = "";
+            let gFinancialBase = 0, gRealEstateBase = 0;
+            sortedCodes.forEach(({ code, financial, realEstate, base }) => {
+                gFinancialBase += convertCurrency(financial, code, baseCurrency);
+                gRealEstateBase += convertCurrency(realEstate, code, baseCurrency);
+                rows += `
+                    <tr>
+                        <td style="padding:8px 10px;">${currencyBadgeHTML(code)}</td>
+                        <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(financial, code)}</td>
+                        <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(realEstate, code)}</td>
+                        <td style="padding:8px 10px; text-align:right;"><strong>${formatBalanceHTML(financial + realEstate, code)}</strong></td>
+                        <td style="padding:8px 10px; text-align:right; color:var(--text-muted);">≈ ${formatBalanceHTML(base, baseCurrency)}</td>
+                        <td style="padding:8px 10px; text-align:right;">${pctOf(base)}</td>
+                    </tr>`;
+            });
+
+            wrap.innerHTML = `
+                <table style="width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
+                    <thead>
+                        <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase;">
+                            <th style="padding:6px 10px;">Currency</th>
+                            <th style="padding:6px 10px; text-align:right;">Financial Assets</th>
+                            <th style="padding:6px 10px; text-align:right;">Real Estate</th>
+                            <th style="padding:6px 10px; text-align:right;">Total</th>
+                            <th style="padding:6px 10px; text-align:right;">≈ ${escapeHtml(baseCurrency)}</th>
+                            <th style="padding:6px 10px; text-align:right;">% of Net Worth</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                    <tfoot>
+                        <tr style="border-top:2px solid var(--border-color); font-weight:800;">
+                            <td style="padding:8px 10px;">Grand Total</td>
+                            <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(gFinancialBase, baseCurrency)}</td>
+                            <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(gRealEstateBase, baseCurrency)}</td>
+                            <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(grandTotal, baseCurrency)}</td>
+                            <td style="padding:8px 10px; text-align:right;">—</td>
+                            <td style="padding:8px 10px; text-align:right;">100.0%</td>
+                        </tr>
+                    </tfoot>
+                </table>`;
+        }
+
+        function navigateToCurrencyReportPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-currency-report");
+            window.scrollTo(0, 0);
+            pushVirtualState("currency-report");
+            renderCurrencyReportPage();
+        }
+
         function navigateToAutoLockPage() {
             workspaceScrollY = window.scrollY;
             showPage("page-autolock");
@@ -9436,6 +9996,10 @@
             handleSetupPasscodeSubmit: () => handleSetupPasscodeSubmit(),
             handleUnlockSubmit: () => handleUnlockSubmit(),
             handleForgotPasscode: () => handleForgotPasscode(),
+            openChangePasscodeModal: () => openChangePasscodeModal(),
+            handleChangePasscodeSubmit: () => handleChangePasscodeSubmit(),
+            openResetAppDataModal: () => openResetAppDataModal(),
+            handleResetAppDataSubmit: () => handleResetAppDataSubmit(),
             openCurrencyConfig: () => openCurrencyConfig(),
             lockAppNow: () => lockAppNow(),
             navigateToSavingsPage: () => navigateToSavingsPage(),
@@ -9581,6 +10145,7 @@
             renderSpendingBreakdownPage: () => renderSpendingBreakdownPage(),
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             renderPortfolioReportPage: () => renderPortfolioReportPage(),
+            renderCurrencyReportPage: () => renderCurrencyReportPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
             handlePinnedAccountCountChange: () => handlePinnedAccountCountChange(),
@@ -9588,6 +10153,7 @@
             ledgerYearSelectChange: () => ledgerYearSelectChange(),
             handleAccGroupChange: () => handleAccGroupChange(),
             toggleRedrawFacilityFields: () => toggleRedrawFacilityFields(),
+            toggleLeaseFields: () => toggleLeaseFields(),
             handleFundTxTypeChange: () => handleFundTxTypeChange(),
             handleFundTxFundChange: () => handleFundTxFundChange(),
             onCategoryFormTypeChange: () => populateCategoryParentSelect(),

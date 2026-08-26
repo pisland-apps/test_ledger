@@ -2049,3 +2049,38 @@ keeps a dropdown entry to display against).
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v114.
+
+## v143: visual polish pass (cards, buttons, hover states) — CSS only
+
+Pure `index.html` `<style>` changes, no markup/JS logic touched (`ledger.js`
+edited only to bump `APP_VERSION`/`APP_VERSION_DATE`, no logic changes):
+
+- **New shared elevation tokens** in `:root` — `--shadow-xs` / `--shadow-sm`
+  / `--shadow-md` / `--shadow-primary` — soft, low-opacity box-shadows
+  applied to every card-like surface (header, report/statement/navfund
+  cards, ledger & account list containers, member/net-worth rows, modal
+  sheets, currency chips) so they read with a bit of depth instead of
+  relying on a flat border alone.
+- **Action buttons** (Income/Expense/Transfer/Salary) and the primary
+  **submit button** now use a subtle same-hue top-to-bottom gradient
+  (`color-mix()` against the existing CSS variable, so it tracks
+  `--income-color` etc. automatically) plus a soft colored shadow, with a
+  slightly stronger shadow/lift on `:active` and, on pointer devices, on
+  `:hover`.
+- **Hover states added for desktop/tablet only**, scoped entirely behind
+  `@media (hover: hover)` — ledger/account/statement rows, sidebar items,
+  back/hamburger buttons, the currency pill. Touch devices are unaffected;
+  existing `:active` feedback there is unchanged.
+- Bumped border-radius very slightly on a few surfaces (header,
+  action-btn, modal-sheet) for a marginally softer look; no size/spacing
+  changes, so nothing reflows.
+- **No color values changed** — `--primary`, `--income-color`,
+  `--expense-color`, `--transfer-color`, `--salary-color` are all
+  untouched, since the same hex values are also hardcoded in `ledger.js`
+  (member color picker, category icons, breakdown chart palette, the
+  calculator-icon SVG) and are outside the scope of a CSS-only pass.
+- Verified brace-balanced CSS (240 open / 240 close) and `node --check
+  ledger.js` still passes (only the version-string line changed there).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v143.
