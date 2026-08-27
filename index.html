@@ -218,6 +218,77 @@
             padding: 16px;
         }
 
+        /* --- Financial Report Card, two-tile layout (v147) --- */
+        .report-cards-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+        .report-card-mini {
+            background: var(--card-bg);
+            border-radius: 16px;
+            border: 1.5px solid var(--border-color);
+            padding: 12px;
+            min-width: 0; /* allow grid children to shrink below content width */
+        }
+        .report-card-mini-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 10px;
+        }
+        .report-card-mini-title {
+            font-weight: 800;
+            font-size: 0.82rem;
+            color: var(--text-main);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .period-select {
+            flex: 0 0 auto;
+            width: auto;
+            height: auto;
+            padding: 4px 6px;
+            font-size: 0.62rem;
+            font-weight: 700;
+        }
+        .report-card-mini-body {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .report-card-mini-donut { flex-shrink: 0; }
+        .report-card-mini-stats {
+            flex: 1;
+            min-width: 0;
+        }
+        .report-card-mini-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 6px;
+            padding: 3px 0;
+            cursor: pointer;
+        }
+        .report-card-mini-row:active { opacity: 0.7; }
+        .report-card-mini-label { font-size: 0.68rem; font-weight: 700; white-space: nowrap; }
+        .report-card-mini-value {
+            font-size: 0.78rem;
+            font-weight: 800;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .report-card-mini-total {
+            border-top: 1.5px solid var(--border-color);
+            margin-top: 4px;
+            padding-top: 6px;
+        }
+        .report-card-mini-total .report-card-mini-label { color: var(--text-muted); }
+        .report-card-mini-total .report-card-mini-value { font-size: 0.85rem; }
+
         /* --- Daily NAV Update page (Card/Table/History views) --- */
         .nav-view-toggle {
             display: flex;
@@ -1303,33 +1374,52 @@
         <div class="section-header">
             <span class="section-title">Financial Report Card</span>
         </div>
-        <div class="report-card">
-            <div class="report-summary-grid">
-                <div class="stat-box income" data-click="navigateToDirectTypePage" data-type="income">
-                    <span class="stat-title" style="color: #166534;">Total Income</span>
-                    <div class="stat-amount" id="reportIncome" style="color: #15803d;">0.00</div>
+        <div class="report-cards-grid">
+            <div class="report-card-mini">
+                <div class="report-card-mini-header">
+                    <span class="report-card-mini-title" id="reportCardTitle1">This Year</span>
+                    <select id="reportCardPeriodSelect1" class="period-select" data-change="changeReportCardPeriod1"></select>
                 </div>
-                <div class="stat-box expense" data-click="navigateToDirectTypePage" data-type="expense">
-                    <span class="stat-title" style="color: #991b1b;">Total Expenses</span>
-                    <div class="stat-amount" id="reportExpense" style="color: #b91c1c;">0.00</div>
+                <div class="report-card-mini-body">
+                    <div id="reportCardDonut1" class="report-card-mini-donut"></div>
+                    <div class="report-card-mini-stats">
+                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="income">
+                            <span class="report-card-mini-label" style="color:#15803d;">Income</span>
+                            <span class="report-card-mini-value" id="reportCardIncome1" style="color:#15803d;">0.00</span>
+                        </div>
+                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="expense">
+                            <span class="report-card-mini-label" style="color:#b91c1c;">Expense</span>
+                            <span class="report-card-mini-value" id="reportCardExpense1" style="color:#b91c1c;">0.00</span>
+                        </div>
+                        <div class="report-card-mini-row report-card-mini-total" data-click="navigateToSavingsPage">
+                            <span class="report-card-mini-label">Total</span>
+                            <span class="report-card-mini-value" id="reportCardTotal1">0.00</span>
+                        </div>
+                    </div>
                 </div>
             </div>
-            <!-- Clickable Net Savings to route to SPA financial balance sheet page -->
-            <div id="savingsBanner" class="net-savings-banner" data-click="navigateToSavingsPage">
-                Net Savings: <span id="reportSavings">0.00</span> 📊
-            </div>
-
-            <div class="filters">
-                <select id="filterMonth" data-change="resetLedgerPageAndRender">
-                    <option value="all">All Months</option>
-                    <option value="0">January</option><option value="1">February</option><option value="2">March</option>
-                    <option value="3">April</option><option value="4">May</option><option value="5">June</option>
-                    <option value="6">July</option><option value="7">August</option><option value="8">September</option>
-                    <option value="9">October</option><option value="10">November</option><option value="11">December</option>
-                </select>
-                <select id="filterYear" data-change="resetLedgerPageAndRender">
-                    <option value="all">All Years</option>
-                </select>
+            <div class="report-card-mini">
+                <div class="report-card-mini-header">
+                    <span class="report-card-mini-title" id="reportCardTitle2">This Month</span>
+                    <select id="reportCardPeriodSelect2" class="period-select" data-change="changeReportCardPeriod2"></select>
+                </div>
+                <div class="report-card-mini-body">
+                    <div id="reportCardDonut2" class="report-card-mini-donut"></div>
+                    <div class="report-card-mini-stats">
+                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="income">
+                            <span class="report-card-mini-label" style="color:#15803d;">Income</span>
+                            <span class="report-card-mini-value" id="reportCardIncome2" style="color:#15803d;">0.00</span>
+                        </div>
+                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="expense">
+                            <span class="report-card-mini-label" style="color:#b91c1c;">Expense</span>
+                            <span class="report-card-mini-value" id="reportCardExpense2" style="color:#b91c1c;">0.00</span>
+                        </div>
+                        <div class="report-card-mini-row report-card-mini-total" data-click="navigateToSavingsPage">
+                            <span class="report-card-mini-label">Total</span>
+                            <span class="report-card-mini-value" id="reportCardTotal2">0.00</span>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -1483,14 +1573,20 @@
             <span class="section-title">Default Payment Account</span>
         </div>
         <div class="form-row" id="defaultPaymentAccountRow" style="margin-bottom:18px;">
-            <select id="defaultPaymentAccountSelect" class="form-input" data-change="saveDefaultPaymentAccount"></select>
+            <button type="button" id="defaultPaymentAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultPaymentAccountSelect" data-title="Default Payment Account">
+                <span id="defaultPaymentAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+            </button>
+            <select id="defaultPaymentAccountSelect" style="display:none;" data-change="saveDefaultPaymentAccount"></select>
         </div>
 
         <div class="section-header" id="defaultReceiveAccountSection">
             <span class="section-title">Default Receive Account</span>
         </div>
         <div class="form-row" id="defaultReceiveAccountRow" style="margin-bottom:18px;">
-            <select id="defaultReceiveAccountSelect" class="form-input" data-change="saveDefaultReceiveAccount"></select>
+            <button type="button" id="defaultReceiveAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultReceiveAccountSelect" data-title="Default Receive Account">
+                <span id="defaultReceiveAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+            </button>
+            <select id="defaultReceiveAccountSelect" style="display:none;" data-change="saveDefaultReceiveAccount"></select>
         </div>
 
         <div class="section-header">
@@ -1520,11 +1616,17 @@
         <div class="form-row-inline" style="margin-bottom:18px;">
             <div>
                 <label>Default Income Category</label>
-                <select id="defaultIncomeCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
+                <button type="button" id="defaultIncomeCategorySelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultIncomeCategorySelect" data-title="Default Income Category">
+                    <span id="defaultIncomeCategorySelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="defaultIncomeCategorySelect" style="display:none;" data-change="saveDefaultCategories"></select>
             </div>
             <div>
                 <label>Default Expense Category</label>
-                <select id="defaultExpenseCategorySelect" class="form-input" data-change="saveDefaultCategories"></select>
+                <button type="button" id="defaultExpenseCategorySelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultExpenseCategorySelect" data-title="Default Expense Category">
+                    <span id="defaultExpenseCategorySelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="defaultExpenseCategorySelect" style="display:none;" data-change="saveDefaultCategories"></select>
             </div>
         </div>
 

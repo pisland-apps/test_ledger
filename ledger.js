@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v144";
-        const APP_VERSION_DATE = "2026-08-26";
+        const APP_VERSION = "v147";
+        const APP_VERSION_DATE = "2026-08-27";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -1053,6 +1053,14 @@
         let defaultPaymentAccount = "";
         let defaultReceiveAccount = "";
 
+        // v147: independent period selection for each of the two Financial Report Card tiles on
+        // the dashboard (see renderReportCards()) — one of "thisYear"/"lastYear"/"thisMonth"/
+        // "lastMonth". Stored in the SETTINGS store like the defaults above, so the choice
+        // survives a reload/reinstall. Defaults mirror the reference design: left card on This
+        // Year, right card on This Month.
+        let reportCardPeriod1 = "thisYear";
+        let reportCardPeriod2 = "thisMonth";
+
         // Built-in starter categories (auto-provisioned if missing; user can still
         // rename/remove via the Categories manager same as any custom category).
         // v101: entries may carry an optional `parent: "Main Category Name"` field to seed
@@ -1204,32 +1212,44 @@
             const typeCats = dynamicCategories.filter(c => c.type === type);
             const mains = typeCats.filter(c => !c.parentId).sort((a, b) => a.name.localeCompare(b.name));
 
-            let html = "";
+            // v145: each entry (a Main Category block, or a leftover flat name) is built as
+            // {name, html} and ALL entries are sorted together by name at the end, instead of
+            // emitting every Main Category block first and appending leftover/fallback names
+            // afterward in their own separate sorted run. The old two-pass approach produced two
+            // back-to-back alphabetical sequences in the rendered <select> (e.g. ...Unknown, Vehicle
+            // Expenses, then restarting at Commute, Dining Out...) which read as broken sorting even
+            // though each pass was individually sorted. A Main Category's sort position uses its own
+            // name even when it renders as an <optgroup> (so "Vehicle Expenses" sorts under V).
             const covered = new Set();
+            const entries = [];
 
             mains.forEach(main => {
                 if (!allNames.has(main.name)) return;
                 const subs = typeCats.filter(c => c.parentId === main.id && allNames.has(c.name)).sort((a, b) => a.name.localeCompare(b.name));
                 covered.add(main.name);
                 subs.forEach(s => covered.add(s.name));
+                let html;
                 if (subs.length) {
-                    html += `<optgroup label="${main.icon} ${escapeHtml(main.name)}">`;
+                    html = `<optgroup label="${main.icon} ${escapeHtml(main.name)}">`;
                     html += `<option value="${escapeHtml(main.name)}">${main.icon} ${escapeHtml(main.name)} (General)</option>`;
                     subs.forEach(s => { html += `<option value="${escapeHtml(s.name)}">${s.icon} ${escapeHtml(s.name)}</option>`; });
                     html += `</optgroup>`;
                 } else {
-                    html += `<option value="${escapeHtml(main.name)}">${main.icon} ${escapeHtml(main.name)}</option>`;
+                    html = `<option value="${escapeHtml(main.name)}">${main.icon} ${escapeHtml(main.name)}</option>`;
                 }
+                entries.push({ name: main.name, html });
             });
 
             // Anything left over — legacy/fallback names with no matching category record, or a
             // Subcategory whose parent record is missing from `allNames` for some reason — still
-            // gets shown, as a flat top-level option, rather than silently disappearing.
-            [...allNames].filter(n => !covered.has(n)).sort((a, b) => a.localeCompare(b)).forEach(n => {
-                html += `<option value="${escapeHtml(n)}">${getCategoryIcon(n, type)} ${escapeHtml(n)}</option>`;
+            // gets shown, as a flat top-level option, rather than silently disappearing. Now merged
+            // into the same sorted `entries` array rather than tacked on after.
+            [...allNames].filter(n => !covered.has(n)).forEach(n => {
+                entries.push({ name: n, html: `<option value="${escapeHtml(n)}">${getCategoryIcon(n, type)} ${escapeHtml(n)}</option>` });
             });
 
-            return html;
+            entries.sort((a, b) => a.name.localeCompare(b.name));
+            return entries.map(e => e.html).join("");
         }
 
         // v91: Split Expenses groups (see collectTxSplitRows()/saveTransactionSubmit() around the
@@ -2031,6 +2051,118 @@
             renderApp();
         }
 
+        // --- FINANCIAL REPORT CARD (v147) ---
+        // Two independently-filterable summary tiles on the dashboard (reference: a competing
+        // budget app's "This year / August 2026" side-by-side cards). Replaces the old single
+        // card driven by the filterMonth/filterYear selects — each tile now picks its own period
+        // from REPORT_CARD_PERIODS and computes its own Income/Expense/Total directly from the
+        // full `txs` list, completely decoupled from the other tile and from the ledger page
+        // (which, per the v74 fix, always shows full history on every drill-in regardless of any
+        // period selected here — clicking Income/Expense/Total below intentionally does NOT try
+        // to carry the tile's period into the destination page, matching that existing behaviour).
+        const REPORT_CARD_PERIODS = {
+            thisYear: "This Year",
+            lastYear: "Last Year",
+            thisMonth: "This Month",
+            lastMonth: "Last Month",
+        };
+
+        // Returns the [startMs, endMsExclusive) window for a period key, plus the label shown as
+        // the tile's title — a generic "This Year"/"Last Year" for the two year options (matching
+        // the reference image), or the actual "<Month> <Year>" for the two month options (e.g.
+        // "August 2026") since which specific month "This Month"/"Last Month" means isn't obvious
+        // from the option label alone.
+        function getReportCardPeriodRange(periodKey) {
+            const now = new Date();
+            const y = now.getFullYear(), m = now.getMonth();
+            if (periodKey === "lastYear") {
+                return { start: new Date(y - 1, 0, 1).getTime(), end: new Date(y, 0, 1).getTime(), label: "Last Year" };
+            }
+            if (periodKey === "thisMonth" || periodKey === "lastMonth") {
+                const offset = periodKey === "lastMonth" ? -1 : 0;
+                const start = new Date(y, m + offset, 1);
+                const end = new Date(y, m + offset + 1, 1);
+                const label = start.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+                return { start: start.getTime(), end: end.getTime(), label };
+            }
+            // "thisYear" (also the fallback for any unrecognised/legacy stored value)
+            return { start: new Date(y, 0, 1).getTime(), end: new Date(y + 1, 0, 1).getTime(), label: "This Year" };
+        }
+
+        // Sums Income/Expense (in base currency) for every transaction dated within [start, end),
+        // mirroring the exclusion + refund-as-negative-expense rules the old dashboard banner and
+        // Net Savings Statement both already use (see excludeFromSavings, isRefund).
+        function computeReportCardTotals(txs, accounts, periodKey) {
+            const { start, end, label } = getReportCardPeriodRange(periodKey);
+            const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
+            let income = 0, expense = 0;
+            txs.forEach(t => {
+                const tMs = new Date(t.date + "T00:00:00").getTime();
+                if (tMs < start || tMs >= end) return;
+                if (excludedCatNames.has(t.cat)) return;
+                const tBase = convertTxAmountToBase(t, accounts);
+                if (t.type === "income" && t.isRefund) expense -= tBase;
+                else if (t.type === "income") income += tBase;
+                else if (t.type === "expense") expense += tBase;
+            });
+            return { income, expense, label };
+        }
+
+        function populateReportCardPeriodSelect(selectId, currentValue) {
+            const select = document.getElementById(selectId);
+            select.innerHTML = Object.entries(REPORT_CARD_PERIODS).map(([k, v]) => `<option value="${k}">${v}</option>`).join("");
+            select.value = currentValue;
+        }
+
+        // Compact 2-slice (Income vs Expense) donut, no legend — the tile's own Income/Expense/
+        // Total rows already carry the numbers, so this is purely the "at a glance" proportion
+        // shown in the reference image. Uses the same stroke-dasharray technique as
+        // buildBreakdownDonutSVG (see its comment) but simplified to exactly 2 fixed-color slices.
+        function buildIncomeExpenseDonutSVG(income, expense) {
+            const size = 84, r = 32, cx = size / 2, cy = size / 2, circumference = 2 * Math.PI * r;
+            const total = income + expense;
+            if (total <= 0) {
+                return `<svg viewBox="0 0 ${size} ${size}" style="width:74px; height:74px; flex-shrink:0;"><circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="14"></circle></svg>`;
+            }
+            const incFrac = income / total;
+            const incDash = incFrac * circumference;
+            const expDash = circumference - incDash;
+            return `
+                <svg viewBox="0 0 ${size} ${size}" style="width:74px; height:74px; flex-shrink:0;">
+                    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#ef4444" stroke-width="14" stroke-dasharray="${circumference.toFixed(2)} 0" transform="rotate(-90 ${cx} ${cy})"></circle>
+                    ${incDash > 0 ? `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="#22c55e" stroke-width="14" stroke-dasharray="${incDash.toFixed(2)} ${expDash.toFixed(2)}" stroke-dashoffset="0" transform="rotate(-90 ${cx} ${cy})"></circle>` : ""}
+                </svg>
+            `;
+        }
+
+        function renderReportCardTile(cardNum, periodKey, txs, accounts) {
+            const { income, expense, label } = computeReportCardTotals(txs, accounts, periodKey);
+            const total = income - expense;
+            document.getElementById(`reportCardTitle${cardNum}`).textContent = label;
+            document.getElementById(`reportCardDonut${cardNum}`).innerHTML = buildIncomeExpenseDonutSVG(income, expense);
+            document.getElementById(`reportCardIncome${cardNum}`).textContent = formatCurrency(income, baseCurrency);
+            document.getElementById(`reportCardExpense${cardNum}`).textContent = `-${formatCurrency(expense, baseCurrency)}`;
+            const totalEl = document.getElementById(`reportCardTotal${cardNum}`);
+            totalEl.textContent = formatCurrency(total, baseCurrency);
+            totalEl.style.color = total >= 0 ? "#15803d" : "#b91c1c";
+        }
+
+        function renderReportCards(txs, accounts) {
+            populateReportCardPeriodSelect("reportCardPeriodSelect1", reportCardPeriod1);
+            populateReportCardPeriodSelect("reportCardPeriodSelect2", reportCardPeriod2);
+            renderReportCardTile(1, reportCardPeriod1, txs, accounts);
+            renderReportCardTile(2, reportCardPeriod2, txs, accounts);
+        }
+
+        async function changeReportCardPeriod(cardNum, value) {
+            if (cardNum === 1) reportCardPeriod1 = value; else reportCardPeriod2 = value;
+            await writeDB(STORES.SETTINGS, { key: `reportCardPeriod${cardNum}`, value });
+            // Only these two tiles need to change — a full renderApp() would also re-fetch
+            // balances and re-render everything else on the dashboard for nothing.
+            const { accounts, txs } = await computeAccountBalances();
+            renderReportCardTile(cardNum, cardNum === 1 ? reportCardPeriod1 : reportCardPeriod2, txs, accounts);
+        }
+
         async function navigateToWorkspace() {
             showPage("page-workspace");
             await renderApp();
@@ -2430,6 +2562,7 @@
             const select = document.getElementById("defaultPaymentAccountSelect");
             select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))} (${escapeHtml(a.currency || a.type)})</option>`).join("");
             select.value = accounts.some(a => a.id === defaultPaymentAccount) ? defaultPaymentAccount : "";
+            syncAccountPickerButtonText("defaultPaymentAccountSelect");
         }
 
         async function saveDefaultPaymentAccount() {
@@ -2448,6 +2581,7 @@
             const select = document.getElementById("defaultReceiveAccountSelect");
             select.innerHTML = `<option value="">(None)</option>` + accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))} (${escapeHtml(a.currency || a.type)})</option>`).join("");
             select.value = accounts.some(a => a.id === defaultReceiveAccount) ? defaultReceiveAccount : "";
+            syncAccountPickerButtonText("defaultReceiveAccountSelect");
         }
 
         async function saveDefaultReceiveAccount() {
@@ -5325,6 +5459,8 @@
 
             incSelect.value = incomeNames.includes(defaultIncomeCategory) ? defaultIncomeCategory : "";
             expSelect.value = expenseNames.includes(defaultExpenseCategory) ? defaultExpenseCategory : "";
+            syncAccountPickerButtonText("defaultIncomeCategorySelect");
+            syncAccountPickerButtonText("defaultExpenseCategorySelect");
         }
 
         async function saveDefaultCategories() {
@@ -8029,34 +8165,11 @@
             });
         }
 
-        // Populates the Year filter with only years that actually have a transaction, plus the
-        // current year (so it's always available to default to). Preserves the user's current
-        // selection across re-renders; only defaults to the current year on first load.
-        let yearFilterInitialized = false;
-        function populateYearFilterOptions(txs) {
-            const select = document.getElementById("filterYear");
-            const prevValue = select.value;
-            const currentYear = new Date().getFullYear();
+        // (v147: the old filterMonth/filterYear-driven year filter was removed along with the
+        // Financial Report Card redesign — see renderReportCards()/populateReportCardPeriodOptions
+        // below — since every card's own period select (This Year/Last Year/This Month/Last
+        // Month) now computes its own totals directly from `txs` instead.)
 
-            const years = new Set([currentYear]);
-            txs.forEach(t => {
-                const y = new Date(t.date).getFullYear();
-                if (!isNaN(y)) years.add(y);
-            });
-
-            const sortedYears = [...years].sort((a, b) => b - a);
-            select.innerHTML = `<option value="all">All Years</option>` +
-                sortedYears.map(y => `<option value="${y}">${y}</option>`).join("");
-
-            if (!yearFilterInitialized) {
-                select.value = String(currentYear);
-                yearFilterInitialized = true;
-            } else if (prevValue === "all" || sortedYears.map(String).includes(prevValue)) {
-                select.value = prevValue;
-            } else {
-                select.value = "all";
-            }
-        }
 
         // Shared by renderApp() (dashboard/header) and renderAccountsPage() (Accounts page list)
         // so both always show the same live, transaction-derived balances rather than each
@@ -8170,9 +8283,6 @@
         // --- CONSOLIDATED RENDER ENGINE ---
         async function renderApp() {
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
-            populateYearFilterOptions(txs);
-            const filterM = document.getElementById("filterMonth").value;
-            const filterY = document.getElementById("filterYear").value;
 
             document.getElementById("currentBasePill").textContent = baseCurrency;
 
@@ -8455,22 +8565,6 @@
                 document.getElementById("ledgerTargetEditBtn").style.display = "inline-block";
             }
 
-            let incBaseTotal = 0, expBaseTotal = 0;
-            let catSummary = { income: {}, expense: {} };
-            // v73: categories flagged "Exclude from Net Savings Report" (Manage Categories) are
-            // left out of the dashboard's own Income/Expense/Savings banner totals too, so it
-            // matches the dedicated Net Savings Statement page rather than quietly disagreeing
-            // with it. catSummary below is intentionally left untouched — nothing on this page
-            // renders it, so there's nothing for the exclusion to affect there.
-            const excludedCatNamesForBanner = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
-            
-            // Prime fallback and custom categories
-            const currentIncomeCategories = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), "Salary", "Investments", "Freelance", "Other Income"])];
-            const currentExpenseCategories = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), "Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"])];
-
-            currentIncomeCategories.forEach(c => catSummary.income[c] = 0);
-            currentExpenseCategories.forEach(c => catSummary.expense[c] = 0);
-
             let ledgerHTML = "";
 
             // Helper for Balance B/F & C/F (v33): the native (own-currency) balance of a single
@@ -8594,35 +8688,7 @@
             const showFullHistoryForThisView = showFullAccountHistory || activeCategoryView !== "all" || directTypeView !== "all" || isPortfolioAllView;
 
             txs.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(t => {
-                const d = new Date(t.date);
-                const withinPeriodFilter = (filterM === "all" || d.getMonth().toString() === filterM) && (filterY === "all" || d.getFullYear().toString() === filterY);
-                if (!withinPeriodFilter && !showFullHistoryForThisView) return;
-
                 const tBase = convertTxAmountToBase(t, accounts);
-
-                if (withinPeriodFilter) {
-                    if (t.type === "income" && t.isRefund) {
-                        // v88: a refund is credited back to its account like any Income record
-                        // (that part needs no special-casing — see applyToAccountBalance() above),
-                        // but per-spec it must NOT count as income, and instead reduce the expense
-                        // total of the category it refunds. refundOf/openRefundFromOptions() force
-                        // t.cat to match the original expense's category exactly, so this simply
-                        // subtracts from that category the same way an expense would add to it.
-                        if (!excludedCatNamesForBanner.has(t.cat)) expBaseTotal -= tBase;
-                        if (catSummary.expense[t.cat] !== undefined) catSummary.expense[t.cat] -= tBase;
-                        else catSummary.expense[t.cat] = -tBase;
-                    } else if (t.type === "income") {
-                        if (!excludedCatNamesForBanner.has(t.cat)) incBaseTotal += tBase; 
-                        if(catSummary.income[t.cat] !== undefined) catSummary.income[t.cat] += tBase;
-                        else catSummary.income[t.cat] = tBase;
-                    }
-                    if (t.type === "expense") { 
-                        if (!excludedCatNamesForBanner.has(t.cat)) expBaseTotal += tBase; 
-                        if(catSummary.expense[t.cat] !== undefined) catSummary.expense[t.cat] += tBase;
-                        else catSummary.expense[t.cat] = tBase;
-                    }
-                }
-
                 // Multi-Currency account view (v55): skip building any per-transaction row here
                 // — see isMultiCurrencyAccountView above, this account's own list is replaced
                 // with per-currency summary rows further down instead.
@@ -8807,11 +8873,7 @@
             ledgerHTML += balanceBfHTML;
             ledgerHTML += openingBalanceHTML;
 
-            document.getElementById("reportIncome").textContent = formatCurrency(incBaseTotal, baseCurrency);
-            document.getElementById("reportExpense").textContent = formatCurrency(expBaseTotal, baseCurrency);
-            const savings = incBaseTotal - expBaseTotal;
-            document.getElementById("reportSavings").textContent = formatCurrency(savings, baseCurrency);
-            document.getElementById("savingsBanner").style.background = savings >= 0 ? "#f0fdf4" : "#fef2f2";
+            renderReportCards(txs, accounts);
 
             // Unit Trust account's own Activity page: each fund now has its own dedicated
             // Activity page (see navigateToFundActivityPage) showing that fund's transactions,
@@ -8855,17 +8917,17 @@
             }
 
             // The Net Savings Statement page has its own independent "All Years / Year" filter
-            // (not the dashboard's month+year filter above), so it's rendered by a dedicated
-            // function rather than sharing catSummary computed with filterM/filterY.
+            // (not the dashboard's report card tiles, see renderReportCards()/getReportCardPeriodRange()
+            // above), so it's rendered by a dedicated function with its own totals.
             await renderSavingsStatement();
 
             calculateStorageMetrics();
         }
 
         // Populates the Net Savings Statement's own Year filter — independent of the dashboard's
-        // filterMonth/filterYear selects. Mirrors populateYearFilterOptions' behaviour (only years
-        // that actually have a transaction, plus the current year; preserves selection across
-        // re-renders; defaults to "All Years" on first load).
+        // report card period selects (see renderReportCards()). Only years that actually have a
+        // transaction, plus the current year; preserves selection across re-renders; defaults to
+        // "All Years" on first load.
         let savingsYearFilterInitialized = false;
         function populateSavingsYearFilterOptions(txs) {
             const select = document.getElementById("savingsYearFilter");
@@ -9749,6 +9811,12 @@
             const storedDefaultReceiveAcc = await readKeyDB("settings", "defaultReceiveAccount");
             if (storedDefaultReceiveAcc) defaultReceiveAccount = storedDefaultReceiveAcc.value || "";
 
+            const storedReportCardPeriod1 = await readKeyDB("settings", "reportCardPeriod1");
+            if (storedReportCardPeriod1) reportCardPeriod1 = storedReportCardPeriod1.value || "thisYear";
+
+            const storedReportCardPeriod2 = await readKeyDB("settings", "reportCardPeriod2");
+            if (storedReportCardPeriod2) reportCardPeriod2 = storedReportCardPeriod2.value || "thisMonth";
+
             const storedRecentTxType = await readKeyDB("settings", "recentTxTypeFilter");
             if (storedRecentTxType) recentTxTypeFilter = storedRecentTxType.value || "both";
 
@@ -10012,6 +10080,8 @@
                             switch (rec.key) {
                                 case "defaultPaymentAccount": defaultPaymentAccount = rec.value || ""; break;
                                 case "defaultReceiveAccount": defaultReceiveAccount = rec.value || ""; break;
+                                case "reportCardPeriod1": reportCardPeriod1 = rec.value || "thisYear"; break;
+                                case "reportCardPeriod2": reportCardPeriod2 = rec.value || "thisMonth"; break;
                                 case "defaultIncomeCategory": defaultIncomeCategory = rec.value || ""; break;
                                 case "defaultExpenseCategory": defaultExpenseCategory = rec.value || ""; break;
                                 case "recentTxTypeFilter": recentTxTypeFilter = rec.value || "both"; break;
@@ -10222,6 +10292,8 @@
             handleSalaryMemberChange: () => handleSalaryMemberChange(),
             handleSalarySchemeChange: () => handleSalarySchemeChange(),
             handleSalaryCurrencyChange: () => handleSalaryCurrencyChange(),
+            changeReportCardPeriod1: (el) => changeReportCardPeriod(1, el.value),
+            changeReportCardPeriod2: (el) => changeReportCardPeriod(2, el.value),
         };
 
         const INPUT_ACTIONS = {
