@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v157";
+        const APP_VERSION = "v158";
         const APP_VERSION_DATE = "2026-08-28";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -8442,6 +8442,20 @@
                 }
             });
             document.getElementById("netWorthDisplay").innerHTML = formatBalanceHTML(globalBaseNetWorth, baseCurrency);
+
+            // v157: Financial Assets vs Real Estate split row under the main figure — reuses the
+            // same summarizeOwnerAssetSplit() the "Financial Assets vs Real Estate" owner report
+            // already relies on, so this always reconciles to globalBaseNetWorth above. Hidden
+            // entirely (not just zeroed) when the user has no Real Estate account at all, so
+            // someone who's never used that group only ever sees the single Portfolio Net Worth
+            // figure, same as before this existed.
+            const hasRealEstateAccount = accounts.some(a => (a.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate");
+            document.getElementById("netWorthSplitRow").classList.toggle("hidden", !hasRealEstateAccount);
+            if (hasRealEstateAccount) {
+                const { financial, realEstate } = summarizeOwnerAssetSplit(accounts, nativeBalances);
+                document.getElementById("financialAssetsDisplay").innerHTML = formatBalanceHTML(financial, baseCurrency);
+                document.getElementById("realEstateDisplay").innerHTML = formatBalanceHTML(realEstate, baseCurrency);
+            }
 
             // "Net Worth by Member" rows (replaces the old single "Net Worth by Currency Held"
             // row, v34): one row per member (their solo-owned accounts only), one row per distinct
