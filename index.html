@@ -289,6 +289,29 @@
         .report-card-mini-total .report-card-mini-label { color: var(--text-muted); }
         .report-card-mini-total .report-card-mini-value { font-size: 0.85rem; }
 
+        /* On narrow (mobile) screens, the amount had no room next to the label
+           and got clipped ("RM79,68..."). Stack label above value and shrink
+           the donut so the full figure is always readable. */
+        @media (max-width: 480px) {
+            .report-card-mini { padding: 10px 8px; }
+            .report-card-mini-body { gap: 6px; }
+            .report-card-mini-donut svg { width: 52px !important; height: 52px !important; }
+            .report-card-mini-row {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 0;
+                padding: 4px 0;
+            }
+            .report-card-mini-label { font-size: 0.62rem; }
+            .report-card-mini-value {
+                font-size: 0.8rem;
+                white-space: nowrap;
+                overflow: visible;
+                text-overflow: unset;
+            }
+            .report-card-mini-total .report-card-mini-value { font-size: 0.86rem; }
+        }
+
         /* --- Daily NAV Update page (Card/Table/History views) --- */
         .nav-view-toggle {
             display: flex;
