@@ -76,6 +76,21 @@
             --transfer-color: #3b82f6;
             --salary-color: #d97706;
             --border-color: #e2e8f0;
+
+            /* --- v156: decorative-only design tokens (neumorphism + glass) ---
+               Scoped to chrome/controls (FAB, calculator keys, nav bar, modal/sheet
+               backgrounds) — never applied to data-bearing surfaces (ledger rows, report
+               cards, badges) so real content stays flat, high-contrast and print-safe
+               (the existing `@media print { * { box-shadow:none } }` rule already strips
+               all of this automatically when printing). */
+            --neu-light: rgba(255, 255, 255, 0.85);   /* soft highlight, light-gray surfaces */
+            --neu-dark: rgba(148, 163, 184, 0.45);    /* soft shadow, light-gray surfaces */
+            --neu-primary-light: rgba(255, 255, 255, 0.22); /* highlight on colored (--primary) surfaces */
+            --neu-primary-dark: rgba(49, 46, 129, 0.55);    /* shadow on colored (--primary) surfaces */
+            --glass-bg: rgba(255, 255, 255, 0.68);
+            --glass-bg-strong: rgba(255, 255, 255, 0.82);
+            --glass-bg-modal: rgba(255, 255, 255, 0.92); /* denser — modal-sheets hold small form text */
+            --glass-border: rgba(255, 255, 255, 0.55);
         }
 
         * {
@@ -203,9 +218,15 @@
             flex-direction: column;
             align-items: center;
             gap: 4px;
-            transition: transform 0.1s ease;
+            transition: transform 0.1s ease, box-shadow 0.1s ease;
+            /* v156: soft-UI highlight/shadow pair on top of each button's own flat color —
+               a gentle dome rather than a hard flat fill. */
+            box-shadow: -2px -2px 5px var(--neu-primary-light), 3px 4px 8px rgba(15, 23, 42, 0.18);
         }
-        .action-btn:active { transform: scale(0.96); }
+        .action-btn:active {
+            transform: scale(0.96);
+            box-shadow: inset 2px 2px 5px rgba(15, 23, 42, 0.28), inset -2px -2px 4px var(--neu-primary-light);
+        }
         .btn-income { background-color: var(--income-color); }
         .btn-expense { background-color: var(--expense-color); }
         .btn-transfer { background-color: var(--transfer-color); }
@@ -294,6 +315,9 @@
            the donut so the full figure is always readable. */
         @media (max-width: 480px) {
             .report-card-mini { padding: 10px 8px; }
+            .report-card-mini-header { flex-direction: column; align-items: stretch; gap: 4px; margin-bottom: 8px; }
+            .report-card-mini-title { white-space: normal; overflow: visible; text-overflow: unset; }
+            .period-select { width: 100%; }
             .report-card-mini-body { gap: 6px; }
             .report-card-mini-donut svg { width: 52px !important; height: 52px !important; }
             .report-card-mini-row {
@@ -465,6 +489,22 @@
             align-items: center;
             gap: 16px;
             margin-bottom: 20px;
+            /* v156: sticky frosted-glass top nav — the back button + page title bar used
+               across every sub-page. Sticks to the viewport top and lets list content (ledger
+               rows, account rows, report rows) scroll and blur underneath it, matching the
+               "modern touch" ask on non-data chrome. Purely visual — doesn't touch
+               .back-btn's own click handling or the popstate history logic. */
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            background: var(--glass-bg);
+            backdrop-filter: blur(10px) saturate(160%);
+            -webkit-backdrop-filter: blur(10px) saturate(160%);
+            border-radius: 14px;
+            padding: 10px 8px;
+            margin-left: -8px;
+            margin-right: -8px;
+            width: calc(100% + 16px);
         }
         .back-btn {
             background: var(--card-bg);
@@ -497,7 +537,15 @@
             cursor: pointer;
             flex-shrink: 0;
         }
-        .hamburger-btn:active { background: #f1f5f9; }
+        .hamburger-btn {
+            box-shadow: -2px -2px 5px var(--neu-light), 2px 2px 5px var(--neu-dark);
+            transition: box-shadow 0.1s ease, transform 0.1s ease;
+        }
+        .hamburger-btn:active {
+            background: #f1f5f9;
+            transform: scale(0.94);
+            box-shadow: inset 2px 2px 4px var(--neu-dark), inset -1px -1px 3px var(--neu-light);
+        }
         .top-bar-title {
             font-weight: 800;
             font-size: 1.05rem;
@@ -507,6 +555,11 @@
             position: fixed;
             inset: 0;
             background: rgba(15, 23, 42, 0.45);
+            /* v156: blur the dashboard content behind the dimmed overlay (iOS-style scrim)
+               instead of a flat dark tint only — purely decorative, doesn't affect any of the
+               overlay's existing click-to-close behavior. */
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
             z-index: 900;
             opacity: 0;
             pointer-events: none;
@@ -523,7 +576,13 @@
             bottom: 0;
             width: 82%;
             max-width: 320px;
-            background: var(--card-bg);
+            /* v156: frosted glass drawer instead of a flat white panel — the dimmed/blurred
+               .sidebar-overlay behind it shows through faintly, giving the drawer a floating,
+               layered feel. Opacity kept high (0.82) so menu text stays fully legible. */
+            background: var(--glass-bg-strong);
+            backdrop-filter: blur(18px) saturate(180%);
+            -webkit-backdrop-filter: blur(18px) saturate(180%);
+            border-right: 1px solid var(--glass-border);
             z-index: 901;
             transform: translateX(-100%);
             transition: transform 0.25s ease;
@@ -663,7 +722,7 @@
             width: 56px;
             height: 56px;
             border-radius: 50%;
-            background: var(--primary);
+            background: linear-gradient(145deg, #7477f2, #5457d8);
             color: #fff;
             border: none;
             font-size: 1.8rem;
@@ -672,11 +731,24 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 6px 18px rgba(99, 102, 241, 0.45);
+            /* v156: soft-UI (neumorphic) raised look — ambient glow (unchanged) + a tight
+               highlight/shadow pair that reads as a gently domed, pressable disc. */
+            box-shadow:
+                0 6px 18px rgba(99, 102, 241, 0.45),
+                -3px -3px 7px var(--neu-primary-light),
+                4px 5px 10px var(--neu-primary-dark);
             cursor: pointer;
             z-index: 50;
+            transition: box-shadow 0.12s ease, transform 0.12s ease, background 0.12s ease;
         }
-        .fab-btn:active { background: #4f46e5; }
+        .fab-btn:active {
+            background: linear-gradient(145deg, #5457d8, #7477f2);
+            transform: scale(0.95);
+            /* Pressed-in: shadow flips to inset so the disc reads as pushed into the surface. */
+            box-shadow:
+                inset 3px 3px 7px var(--neu-primary-dark),
+                inset -2px -2px 5px var(--neu-primary-light);
+        }
 
         /* Floating "back to top" button (v66) — global, sits above the "+" FAB on the right edge
            so the two never overlap. Hidden by default; JS toggles it visible once the page has
@@ -697,12 +769,22 @@
             display: none;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+            /* v156: same soft-UI language as the calculator keys — subtle since this button
+               is white-on-white, but keeps the whole floating-controls family consistent. */
+            box-shadow:
+                0 4px 14px rgba(15, 23, 42, 0.18),
+                -3px -3px 6px var(--neu-light),
+                3px 3px 6px var(--neu-dark);
             cursor: pointer;
             z-index: 49;
+            transition: box-shadow 0.12s ease, transform 0.12s ease;
         }
         .back-to-top-btn.visible { display: flex; }
-        .back-to-top-btn:active { background: #f1f5f9; }
+        .back-to-top-btn:active {
+            background: #f1f5f9;
+            transform: scale(0.94);
+            box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 5px var(--neu-light);
+        }
 
         /* Global "print this page" FAB — present on every page (workspace, ledger, all reports,
            settings, etc.) so printing/saving-to-PDF is always one tap away, rather than being a
@@ -732,11 +814,19 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18);
+            box-shadow:
+                0 4px 14px rgba(15, 23, 42, 0.18),
+                -3px -3px 6px var(--neu-light),
+                3px 3px 6px var(--neu-dark);
             cursor: pointer;
             z-index: 48;
+            transition: box-shadow 0.12s ease, transform 0.12s ease;
         }
-        .print-fab-btn:active { background: #f1f5f9; }
+        .print-fab-btn:active {
+            background: #f1f5f9;
+            transform: scale(0.94);
+            box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 5px var(--neu-light);
+        }
         #lockOverlay:not(.hidden) ~ .print-fab-btn { display: none; }
         .modal.active ~ .print-fab-btn { display: none; }
 
@@ -926,6 +1016,47 @@
         .trash-btn { background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 8px; font-size: 1.1rem; }
         .trash-btn:active { color: var(--expense-color); }
 
+        /* v150: big round category icon + colored type bar on the main Transactions list rows
+           (reference: a competing budget app's list, icon sitting beside the details instead of
+           a tiny inline glyph in the title). Scoped to .ledger-item-tx only — every other
+           .ledger-item usage (Accounts list, quick-add pickers, Quick View rows, etc.) is
+           untouched. */
+        .ledger-item-tx {
+            align-items: center;
+            gap: 12px;
+            position: relative;
+            padding-right: 22px;
+        }
+        .tx-icon-circle {
+            position: relative;
+            width: 46px;
+            height: 46px;
+            min-width: 46px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            flex-shrink: 0;
+        }
+        .tx-row-body {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+        }
+        .tx-row-body .item-left { max-width: none; flex: 1; min-width: 0; }
+        .tx-side-bar {
+            position: absolute;
+            top: 10px;
+            bottom: 10px;
+            right: 6px;
+            width: 4px;
+            border-radius: 2px;
+        }
+
         /* Statement sheets */
         .statement-card {
             background: var(--card-bg);
@@ -951,7 +1082,8 @@
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
             background: rgba(15, 23, 42, 0.4);
-            backdrop-filter: blur(4px);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
             align-items: center;
             justify-content: center;
             z-index: 1000;
@@ -959,10 +1091,18 @@
         }
         .modal.active { display: flex; }
         .modal-sheet {
-            background: var(--card-bg);
+            /* v156: frosted-glass sheet — translucent instead of flat white, so the dimmed/
+               blurred backdrop reads through very faintly around form fields. Kept at 0.92
+               opacity (well above the drawer's 0.82) since modal-sheets hold dense form/report
+               content that needs to stay crisp and readable. */
+            background: var(--glass-bg-modal);
+            backdrop-filter: blur(20px) saturate(180%);
+            -webkit-backdrop-filter: blur(20px) saturate(180%);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 20px 50px rgba(15, 23, 42, 0.28);
             width: 100%;
             max-width: 450px;
-            border-radius: 16px;
+            border-radius: 18px;
             padding: 20px;
             max-height: 85vh;
             overflow-y: auto;
@@ -971,16 +1111,77 @@
         .form-row { margin-bottom: 12px; }
         .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
         label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
+        /* Icon-beside-field rows (Account / Date / Description / Notes on the transaction form) —
+           an icon sits to the left of the field itself instead of as text inside a label above it,
+           matching the reference mobile-app layout. Text labels are dropped in favor of the icon
+           (Account/Date already show a real value) or a placeholder inside the field itself
+           (Description/Notes, which are empty until typed into). */
+        .form-row-icon { display: flex; align-items: center; gap: 10px; }
+        .form-row-icon .field-icon { flex: 0 0 22px; text-align: center; font-size: 1.05rem; line-height: 1; color: var(--text-muted); }
+        .form-row-icon input, .form-row-icon .account-picker-btn { flex: 1 1 auto !important; width: auto !important; min-width: 0; margin: 0; }
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: #f8fafc; height: 44px; }
         .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
-        .calc-btn { flex-shrink:0; width: 44px; height: 44px; border-radius: 8px; border: 1.5px solid var(--border-color); background: #f8fafc; font-size: 1.1rem; cursor: pointer; display:flex; align-items:center; justify-content:center; padding:0; box-sizing:border-box; }
-        .calc-btn:active { background: #eef2ff; }
-        .split-row { border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:12px; background:var(--card-bg); }
+        .calc-btn {
+            flex-shrink:0; width: 44px; height: 44px; border-radius: 10px; border: none;
+            background: #f8fafc; font-size: 1.1rem; cursor: pointer; display:flex;
+            align-items:center; justify-content:center; padding:0; box-sizing:border-box;
+            /* v156: soft-UI raised key on the light-gray surface — replaces the flat 1.5px
+               border with a light/dark shadow pair so it reads as slightly embossed. */
+            box-shadow: -3px -3px 6px var(--neu-light), 3px 3px 6px var(--neu-dark);
+            transition: box-shadow 0.1s ease, transform 0.1s ease;
+        }
+        .calc-btn:active {
+            background: #eef2ff;
+            transform: scale(0.95);
+            box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 4px var(--neu-light);
+        }
+        /* v150: unified Amount+Category "entry card" — used for BOTH the main entry (wraps
+           #txMainEntryCard, always visible) and every dynamically-added Split Expenses row
+           (addTxSplitRow() in ledger.js), so the main entry and its splits render as identical,
+           consistent cards instead of two different layouts (see the "make main & split rows
+           the same style" reference screenshots). Each card is Amount on top, then a Category
+           line (icon avatar + picker button, plus a Remove button on split rows only) below. */
+        .split-row { border:1.5px solid var(--border-color); border-radius:14px; padding:12px; margin-bottom:10px; background:var(--card-bg); }
         .split-row select.form-input { margin: 0; }
-        .calc-key { height: 48px; border-radius: 8px; border: none; background: #f1f5f9; font-size: 1.05rem; font-weight: 700; cursor: pointer; color: var(--text-main); }
-        .calc-key:active { opacity: 0.8; }
-        .calc-key-op { background: #e0e7ff; color: var(--primary); }
+        .split-amt-line { display:flex; gap:6px; }
+        .split-row-catline { display:flex; align-items:center; gap:8px; margin-top:10px; }
+        .split-cat-icon { flex:0 0 auto; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.05rem; background:#eef2ff; }
+        .split-row-catline button.account-picker-btn { flex:1 1 auto !important; width:auto !important; min-width:0; margin:0; }
+        .split-remove-btn { flex:0 0 auto; width:32px; height:32px; border-radius:50%; border:none; background:#fee2e2; color:var(--expense-color); font-size:1.05rem; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; line-height:1; }
+        .split-remove-btn:active { opacity:0.8; }
+        .split-total-row { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:2px 0 12px; }
+        .split-add-btn {
+            flex:0 0 auto; width:40px; height:40px; border-radius:50%; border:none;
+            background: linear-gradient(145deg, #7477f2, #5457d8); color:#fff; font-size:1.4rem;
+            font-weight:700; cursor:pointer; display:flex; align-items:center; justify-content:center;
+            padding:0; line-height:1;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.18), -2px -2px 5px var(--neu-primary-light), 2px 3px 6px var(--neu-primary-dark);
+            transition: box-shadow 0.1s ease, transform 0.1s ease;
+        }
+        .split-add-btn:active {
+            transform:scale(0.94);
+            box-shadow: inset 2px 2px 5px var(--neu-primary-dark), inset -1px -1px 3px var(--neu-primary-light);
+        }
+        .calc-key {
+            height: 48px; border-radius: 10px; border: none; background: #f1f5f9;
+            font-size: 1.05rem; font-weight: 700; cursor: pointer; color: var(--text-main);
+            /* v156: same pressable-key language as .calc-btn, tuned slightly lighter since
+               these sit edge-to-edge in a dense grid rather than standing alone. */
+            box-shadow: -2px -2px 5px var(--neu-light), 2px 2px 5px var(--neu-dark);
+            transition: box-shadow 0.1s ease, transform 0.1s ease;
+        }
+        .calc-key:active {
+            transform: scale(0.95);
+            box-shadow: inset 2px 2px 4px var(--neu-dark), inset -1px -1px 3px var(--neu-light);
+        }
+        .calc-key-op {
+            background: #e0e7ff; color: var(--primary);
+            box-shadow: -2px -2px 5px rgba(255, 255, 255, 0.7), 2px 2px 5px rgba(129, 140, 248, 0.35);
+        }
+        .calc-key-op:active {
+            box-shadow: inset 2px 2px 4px rgba(99, 102, 241, 0.35), inset -1px -1px 3px rgba(255, 255, 255, 0.6);
+        }
         .option-menu-btn { display:flex; align-items:center; padding: 14px; border-radius: 10px; border: none; background: #f1f5f9; color: var(--text-main); font-weight: 700; font-size: 0.88rem; cursor: pointer; text-align: left; width: 100%; }
         .option-menu-btn:active { opacity: 0.85; }
         /* v142: label row for a grouped picker (Category's Main Category / Subcategory
@@ -1119,11 +1320,18 @@
             display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;
         }
         .numpad-btn {
-            padding: 16px 0; border-radius: 10px; border: 1.5px solid var(--border-color);
+            padding: 16px 0; border-radius: 10px; border: none;
             background: var(--bg-color); color: var(--text-main); font-size: 1.2rem; font-weight: 700;
             cursor: pointer;
+            /* v156: matches the in-app calculator's soft-UI key styling for a consistent
+               "pressable" feel between the lock-screen PIN pad and the amount-field calculator. */
+            box-shadow: -3px -3px 6px var(--neu-light), 3px 3px 6px var(--neu-dark);
+            transition: box-shadow 0.1s ease, transform 0.1s ease;
         }
-        .numpad-btn:active { opacity: 0.7; }
+        .numpad-btn:active {
+            transform: scale(0.95);
+            box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 4px var(--neu-light);
+        }
         .numpad-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .numpad-btn-wide { font-size: 0.85rem; }
 
@@ -1406,15 +1614,15 @@
                 <div class="report-card-mini-body">
                     <div id="reportCardDonut1" class="report-card-mini-donut"></div>
                     <div class="report-card-mini-stats">
-                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="income">
+                        <div class="report-card-mini-row" data-click="reportCardClickDirectType" data-type="income" data-cardnum="1">
                             <span class="report-card-mini-label" style="color:#15803d;">Income</span>
                             <span class="report-card-mini-value" id="reportCardIncome1" style="color:#15803d;">0.00</span>
                         </div>
-                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="expense">
+                        <div class="report-card-mini-row" data-click="reportCardClickDirectType" data-type="expense" data-cardnum="1">
                             <span class="report-card-mini-label" style="color:#b91c1c;">Expense</span>
                             <span class="report-card-mini-value" id="reportCardExpense1" style="color:#b91c1c;">0.00</span>
                         </div>
-                        <div class="report-card-mini-row report-card-mini-total" data-click="navigateToSavingsPage">
+                        <div class="report-card-mini-row report-card-mini-total" data-click="reportCardClickTotal" data-cardnum="1">
                             <span class="report-card-mini-label">Total</span>
                             <span class="report-card-mini-value" id="reportCardTotal1">0.00</span>
                         </div>
@@ -1429,15 +1637,15 @@
                 <div class="report-card-mini-body">
                     <div id="reportCardDonut2" class="report-card-mini-donut"></div>
                     <div class="report-card-mini-stats">
-                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="income">
+                        <div class="report-card-mini-row" data-click="reportCardClickDirectType" data-type="income" data-cardnum="2">
                             <span class="report-card-mini-label" style="color:#15803d;">Income</span>
                             <span class="report-card-mini-value" id="reportCardIncome2" style="color:#15803d;">0.00</span>
                         </div>
-                        <div class="report-card-mini-row" data-click="navigateToDirectTypePage" data-type="expense">
+                        <div class="report-card-mini-row" data-click="reportCardClickDirectType" data-type="expense" data-cardnum="2">
                             <span class="report-card-mini-label" style="color:#b91c1c;">Expense</span>
                             <span class="report-card-mini-value" id="reportCardExpense2" style="color:#b91c1c;">0.00</span>
                         </div>
-                        <div class="report-card-mini-row report-card-mini-total" data-click="navigateToSavingsPage">
+                        <div class="report-card-mini-row report-card-mini-total" data-click="reportCardClickTotal" data-cardnum="2">
                             <span class="report-card-mini-label">Total</span>
                             <span class="report-card-mini-value" id="reportCardTotal2">0.00</span>
                         </div>
@@ -1881,6 +2089,13 @@
             <select id="savingsYearFilter" data-change="resetSavingsPageAndRender">
                 <option value="all">All Years</option>
             </select>
+        </div>
+
+        <!-- v148: shown only after reaching this page via the dashboard report card's "Total"
+             row on a month-based tile (This Month/Last Month) — see savingsFilterMonth. -->
+        <div id="savingsMonthScopeBadge" style="display:none; align-items:center; justify-content:space-between; gap:8px; background:#f5f3ff; border:1.5px solid var(--primary); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:0.78rem; font-weight:700; color:var(--primary);">
+            <span id="savingsMonthScopeBadgeText"></span>
+            <button type="button" class="trash-btn" data-click="clearSavingsMonthScope" style="padding:2px 8px; font-size:0.7rem;">Clear</button>
         </div>
 
 
@@ -2493,9 +2708,17 @@
             <div style="flex:1 1 auto; min-height:0; overflow-y:auto; padding:16px 20px;">
                 <input type="hidden" id="txId">
                 <input type="hidden" id="txType">
-                <div class="form-row">
+                <!-- v150: Amount + Category redesigned as one unified "entry card" (see the
+                     .split-row CSS comment above) — a category icon avatar sits beside the picker
+                     button, so this main entry now uses the exact same layout/markup pattern as
+                     every Split Expenses row added below it (addTxSplitRow() in ledger.js), instead
+                     of two visually different sections. Category still opens the same custom popup
+                     as Account/To Account (openAccountPicker() in ledger.js) — same reasoning as
+                     before (illegible native-<select> option text on Android), plus Main
+                     Category/Subcategory grouping. -->
+                <div class="split-row" id="txMainEntryCard">
                     <label>Amount</label>
-                    <div style="display:flex; gap:6px;">
+                    <div class="split-amt-line">
                         <input type="number" id="txAmount" step="0.01" inputmode="decimal" required data-input="recalcTxFdMaturity" style="flex:1;">
                         <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="txAmount" title="Calculator / Numpad"><svg width="36" height="36" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg" style="display:block;">
                             <rect x="3" y="3" width="30" height="30" rx="8" fill="#475569"/>
@@ -2508,47 +2731,43 @@
                             <path d="M27 28.7h7M27 32.3h7" stroke="#ffffff" stroke-width="1.7" stroke-linecap="round"/>
                         </svg></button>
                     </div>
-                </div>
-
-                <!-- v142: category now opens the same custom popup as Account/To Account (see the
-                     account-picker-btn CSS comment above and openAccountPicker() in ledger.js),
-                     instead of the native <select> popup — same reasoning (illegible Android
-                     system-size option text), plus it now groups Main Category/Subcategory the
-                     same way the modal shows the list rather than an <optgroup>'s browser-default
-                     rendering. -->
-                <div class="form-row" id="categoryRow">
-                    <label>Category</label>
-                    <button type="button" id="txCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="txCategory" data-title="Select Category">
-                        <span id="txCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
-                    </button>
+                    <div class="split-row-catline" id="categoryRow">
+                        <span class="split-cat-icon" id="txCategoryIcon">🏷️</span>
+                        <button type="button" id="txCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="txCategory" data-title="Select Category">
+                            <span id="txCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                    </div>
                     <select id="txCategory" style="display:none;"></select>
                 </div>
 
                 <!-- Split Expenses (v88) — only offered for a brand-new Income/Expense entry (not
                      Transfer, not while editing an existing record — see openTxSplitAddRow() /
                      handleTransactionSubmitMobile() for why editing is out of scope). Each added
-                     row is its own Category + Amount pair; on save every row becomes its own
-                     transaction record sharing a splitGroupId, so nothing about how existing
-                     reports/balances aggregate a normal transaction needs to change. -->
+                     row is its own Category + Amount pair, rendered as the same .split-row card as
+                     #txMainEntryCard above (see addTxSplitRow() in ledger.js) plus its own Remove
+                     button; on save every row becomes its own transaction record sharing a
+                     generated splitGroupId, so nothing about how existing reports/balances
+                     aggregate a normal transaction needs to change. v150: the old full-width
+                     "➕ Split into another category" button is now a compact round + button next
+                     to Split Total, matching the reference screenshots. -->
                 <div id="txSplitWrap" style="display:none;">
                     <div id="txSplitRows"></div>
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 12px; font-size:0.82rem; font-weight:700; color:var(--text-main);">
-                        <span>Split Total</span>
-                        <span id="txSplitTotalDisplay">—</span>
+                    <div class="split-total-row">
+                        <span style="font-size:0.82rem; font-weight:700; color:var(--text-main);">Split Total: <span id="txSplitTotalDisplay">—</span></span>
+                        <button type="button" class="split-add-btn" data-click="addTxSplitRow" title="Split into another category">+</button>
                     </div>
-                    <button type="button" class="submit-btn" style="background:#eef2ff; color:var(--primary); margin-top:0; margin-bottom:12px;" data-click="addTxSplitRow">➕ Split into another category</button>
                 </div>
 
-                <div class="form-row" id="srcAccRow">
-                    <label id="srcAccLabel">Account</label>
-                    <button type="button" id="srcAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="srcAccount" data-title="Select Account">
+                <div class="form-row form-row-icon" id="srcAccRow">
+                    <span class="field-icon" id="srcAccLabel" aria-hidden="true">🏦</span>
+                    <button type="button" id="srcAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="srcAccount" data-title="Select Account" aria-label="Account">
                         <span id="srcAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
                     </button>
                     <select id="srcAccount" style="display:none;" data-change="syncTransactionCurrency"></select>
                 </div>
-                <div class="form-row" id="destAccRow" style="display:none;">
-                    <label>To Account</label>
-                    <button type="button" id="destAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="destAccount" data-title="Select Destination Account">
+                <div class="form-row form-row-icon" id="destAccRow" style="display:none;">
+                    <span class="field-icon" aria-hidden="true">🏦</span>
+                    <button type="button" id="destAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="destAccount" data-title="Select Destination Account" aria-label="To Account">
                         <span id="destAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
                     </button>
                     <select id="destAccount" style="display:none;" data-change="syncTransactionCurrency"></select>
@@ -2607,7 +2826,7 @@
                     <p id="txManualFxAutoHint" style="font-size:0.7rem; color:var(--text-muted); margin:0;"></p>
                 </div>
 
-                <div class="form-row"><label>Date</label><input type="date" id="txDate" required></div>
+                <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📅</span><input type="date" id="txDate" required aria-label="Date"></div>
 
                 <!-- Fixed Deposit placement terms — shown only when this entry deposits funds into an FD account -->
                 <div id="txFdFieldsWrap" style="display:none; background:#faf5ff; border:1px solid #ede9fe; border-radius:10px; padding:10px; margin-bottom:10px;">
@@ -2649,8 +2868,8 @@
                     <p id="txFdMaturityPreview" style="font-size:0.72rem; color:#6d28d9; margin-top:2px;"></p>
                 </div>
 
-                <div class="form-row" id="txDescRow"><label>Description</label><input type="text" id="txDesc" required></div>
-                <div class="form-row"><label>Notes (Optional)</label><input type="text" id="txNotes"></div>
+                <div class="form-row form-row-icon" id="txDescRow"><span class="field-icon" aria-hidden="true">👤</span><input type="text" id="txDesc" required placeholder="Description" aria-label="Description"></div>
+                <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📝</span><input type="text" id="txNotes" placeholder="Notes (Optional)" aria-label="Notes (Optional)"></div>
                 <div class="form-row">
                     <div class="toggle-switch-row">
                         <span class="toggle-switch-label">Checked</span>
@@ -2949,9 +3168,9 @@
             </div>
 
             <div class="form-row-inline">
-                <div>
-                    <label>Date</label>
-                    <input type="date" id="salaryDate" required>
+                <div class="form-row-icon">
+                    <span class="field-icon" aria-hidden="true">📅</span>
+                    <input type="date" id="salaryDate" required aria-label="Date">
                 </div>
                 <div>
                     <label>Scheme</label>
@@ -2963,14 +3182,14 @@
                 </div>
             </div>
 
-            <div class="form-row">
-                <label>Description</label>
-                <input type="text" id="salaryDesc" placeholder="e.g. August 2026 Salary">
+            <div class="form-row form-row-icon">
+                <span class="field-icon" aria-hidden="true">👤</span>
+                <input type="text" id="salaryDesc" placeholder="e.g. August 2026 Salary" aria-label="Description">
             </div>
 
-            <div class="form-row">
-                <label>Bank Account</label>
-                <button type="button" id="salaryBankAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryBankAccount" data-title="Select Bank Account">
+            <div class="form-row form-row-icon">
+                <span class="field-icon" aria-hidden="true">🏦</span>
+                <button type="button" id="salaryBankAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryBankAccount" data-title="Select Bank Account" aria-label="Bank Account">
                     <span id="salaryBankAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
                 </button>
                 <select id="salaryBankAccount" style="display:none;"></select>
@@ -2989,36 +3208,36 @@
                 <select id="salaryContribAccount" style="display:none;"></select>
             </div>
 
-            <div class="form-row">
-                <label>Gross Salary</label>
-                <input type="number" id="salaryGross" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+            <div class="form-row form-row-icon">
+                <span class="field-icon" aria-hidden="true">💵</span>
+                <input type="number" id="salaryGross" step="0.01" min="0" inputmode="decimal" placeholder="Gross Salary" aria-label="Gross Salary" data-input="recalcSalaryPreview">
             </div>
 
             <div class="form-row-inline">
-                <div>
-                    <label>🏠 Housing Allowance</label>
-                    <input type="number" id="salaryHousingAllowance" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                <div class="form-row-icon">
+                    <span class="field-icon" aria-hidden="true">🏠</span>
+                    <input type="number" id="salaryHousingAllowance" step="0.01" min="0" inputmode="decimal" placeholder="0.00" aria-label="Housing Allowance" data-input="recalcSalaryPreview">
                 </div>
-                <div>
-                    <label>📱 Handphone Claim</label>
-                    <input type="number" id="salaryHandphoneClaim" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                <div class="form-row-icon">
+                    <span class="field-icon" aria-hidden="true">📱</span>
+                    <input type="number" id="salaryHandphoneClaim" step="0.01" min="0" inputmode="decimal" placeholder="0.00" aria-label="Handphone Claim" data-input="recalcSalaryPreview">
                 </div>
             </div>
 
             <div class="form-row-inline">
-                <div>
-                    <label>✈️ Overseas Allowance</label>
-                    <input type="number" id="salaryOverseasAllowance" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                <div class="form-row-icon">
+                    <span class="field-icon" aria-hidden="true">✈️</span>
+                    <input type="number" id="salaryOverseasAllowance" step="0.01" min="0" inputmode="decimal" placeholder="0.00" aria-label="Overseas Allowance" data-input="recalcSalaryPreview">
                 </div>
-                <div>
-                    <label>🕒 Backpay</label>
-                    <input type="number" id="salaryBackpay" step="0.01" min="0" inputmode="decimal" placeholder="0.00" data-input="recalcSalaryPreview">
+                <div class="form-row-icon">
+                    <span class="field-icon" aria-hidden="true">🕒</span>
+                    <input type="number" id="salaryBackpay" step="0.01" min="0" inputmode="decimal" placeholder="0.00" aria-label="Backpay" data-input="recalcSalaryPreview">
                 </div>
             </div>
 
-            <div class="form-row" id="salaryBackpayNoteRow" style="display:none;">
-                <label>Backpay Note (optional)</label>
-                <input type="text" id="salaryBackpayNote" placeholder="e.g. Nov 2025 – Jan 2026 salary revision">
+            <div class="form-row form-row-icon" id="salaryBackpayNoteRow" style="display:none;">
+                <span class="field-icon" aria-hidden="true">📝</span>
+                <input type="text" id="salaryBackpayNote" placeholder="Backpay Note (Optional) — e.g. Nov 2025 – Jan 2026 salary revision" aria-label="Backpay Note (Optional)">
             </div>
 
             <div class="form-row-inline" id="salaryContribRow" style="display:none;">

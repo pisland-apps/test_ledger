@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v148";
-        const APP_VERSION_DATE = "2026-08-27";
+        const APP_VERSION = "v156";
+        const APP_VERSION_DATE = "2026-08-28";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -167,6 +167,17 @@
         function currencyBadgeHTML(code) {
             const { bg, fg } = currencyBadgeColor(code);
             return `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:${bg}; color:${fg}; font-weight:bold;">${escapeHtml(code)}</span>`;
+        }
+
+        // v150: same deterministic hash-to-palette approach as currencyBadgeColor() above, for the
+        // big round category icon on each Transactions list row — same category always gets the
+        // same background color, without needing a new per-category color field/UI.
+        const CATEGORY_ICON_BG_PALETTE = ["#fee2e2", "#ffedd5", "#fef3c7", "#ecfccb", "#dcfce7", "#ccfbf1", "#cffafe", "#dbeafe", "#e0e7ff", "#ede9fe", "#fae8ff", "#ffe4e6"];
+        function categoryIconBgColor(name) {
+            let hash = 0;
+            const str = String(name || "");
+            for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+            return CATEGORY_ICON_BG_PALETTE[hash % CATEGORY_ICON_BG_PALETTE.length];
         }
 
         // v80: formats a Date object as a "YYYY-MM-DD" calendar-date string using its LOCAL
@@ -910,7 +921,12 @@
         // in renderApp() for why category drill-ins must never silently inherit that one.
         let categoryDrillYear = "all";
         let categoryDrillMonth = "all";
-        let directTypeView = "all"; 
+        let directTypeView = "all";
+        // v148: month scope + one-shot year override the report card's "Total" row uses to carry
+        // its selected period onto the Savings Statement — see navigateToSavingsPage() and
+        // populateSavingsYearFilterOptions().
+        let savingsFilterMonth = "all";
+        let pendingSavingsYearOverride = null;
         // Per-account "Account Activity" year navigation (v33) — which year is currently shown,
         // and the sorted list of years that actually have a transaction for that account (used to
         // skip empty years when paging with the </> controls). Reset whenever a fresh account view
@@ -2028,13 +2044,19 @@
             renderApp();
         }
 
-        function navigateToDirectTypePage(type) {
+        // v148: year/month args let a click carry the report card tile's own selected period
+        // into the Income/Expense log (see renderReportCardTile's data-click wiring below) —
+        // reuses the same categoryDrillYear/Month mechanism the category drill-ins already use,
+        // since a page can only ever be scoped by one of activeCategoryView or directTypeView at
+        // a time. Both default to "all" so every other existing caller (Spending/Income
+        // Breakdown, etc.) keeps showing full history exactly as before.
+        function navigateToDirectTypePage(type, year = "all", month = "all") {
             workspaceScrollY = window.scrollY;
             directTypeView = type;
             activeLedgerAccountView = "all";
             activeCategoryView = "all";
-            categoryDrillYear = "all";
-            categoryDrillMonth = "all";
+            categoryDrillYear = year;
+            categoryDrillMonth = month;
             ledgerBackToPage = "workspace";
             ledgerRenderLimit = LEDGER_PAGE_SIZE;
             showPage("page-ledger");
@@ -2043,12 +2065,27 @@
             renderApp();
         }
 
-        function navigateToSavingsPage() {
+        // v148: yearOverride/month let the report card's "Total" row carry its own selected
+        // period onto the Savings Statement. yearOverride defaults to null (not "all") so a plain
+        // sidebar visit — which calls this with no args — keeps the statement's own year filter
+        // exactly as the user last left it; passing a real value (or explicit "all") forces the
+        // Year select to that value instead. savingsFilterMonth defaults back to "all" on every
+        // call so the month scope never lingers into an unrelated visit.
+        function navigateToSavingsPage(yearOverride = null, month = "all") {
             workspaceScrollY = window.scrollY;
+            savingsFilterMonth = month;
+            if (yearOverride !== null) pendingSavingsYearOverride = yearOverride;
             showPage("page-savings");
             window.scrollTo(0,0);
             pushVirtualState("savings");
             renderApp();
+        }
+
+        // Clears just the report-card-driven month scope on the Savings Statement, leaving the
+        // page's own Year filter as-is — the small "Clear" link shown next to the period badge.
+        function clearSavingsMonthScope() {
+            savingsFilterMonth = "all";
+            renderSavingsStatement();
         }
 
         // --- FINANCIAL REPORT CARD (v147) ---
@@ -2106,6 +2143,36 @@
                 else if (t.type === "expense") expense += tBase;
             });
             return { income, expense, label };
+        }
+
+        // v148: converts a tile's period key into the {year, month} args navigateToDirectTypePage/
+        // navigateToSavingsPage expect (year as a full-year string or "all"; month as a 0-indexed
+        // string or "all") — so clicking Income/Expense/Total on a report card tile carries that
+        // exact tile's selected period into the log/statement it opens, instead of always showing
+        // full history regardless of what the tile was scoped to.
+        function getReportCardDrillArgs(periodKey) {
+            const { start } = getReportCardPeriodRange(periodKey);
+            const startDate = new Date(start);
+            if (periodKey === "thisMonth" || periodKey === "lastMonth") {
+                return { year: startDate.getFullYear().toString(), month: startDate.getMonth().toString() };
+            }
+            // "thisYear" / "lastYear" (and the fallback for any unrecognised value)
+            return { year: startDate.getFullYear().toString(), month: "all" };
+        }
+
+        // Data-click handlers for the report card tiles' Income/Expense/Total rows (index.html) —
+        // read which tile (cardNum) and which of its own period selects was chosen, then hand off
+        // to the real navigation functions with that period attached.
+        function reportCardClickDirectType(el) {
+            const period = el.dataset.cardnum === "1" ? reportCardPeriod1 : reportCardPeriod2;
+            const { year, month } = getReportCardDrillArgs(period);
+            navigateToDirectTypePage(el.dataset.type, year, month);
+        }
+
+        function reportCardClickTotal(el) {
+            const period = el.dataset.cardnum === "1" ? reportCardPeriod1 : reportCardPeriod2;
+            const { year, month } = getReportCardDrillArgs(period);
+            navigateToSavingsPage(year, month);
         }
 
         function populateReportCardPeriodSelect(selectId, currentValue) {
@@ -5921,8 +5988,8 @@
                 }
                 
                 document.getElementById("txCategory").value = tx.cat || "";
-                document.getElementById("destAccRow").style.display = tx.type === "transfer" ? "block" : "none";
-                document.getElementById("categoryRow").style.display = tx.type === "transfer" ? "none" : "block";
+                document.getElementById("destAccRow").style.display = tx.type === "transfer" ? "flex" : "none";
+                document.getElementById("categoryRow").style.display = tx.type === "transfer" ? "none" : "flex";
 
                 document.getElementById("txModalTitle").textContent = "Edit Ledger Entry";
                 document.getElementById("txSubmitBtn").textContent = "Save Changes";
@@ -5978,8 +6045,8 @@
                     srcSelect.value = presetSrcAccountId;
                 }
 
-                document.getElementById("destAccRow").style.display = type === "transfer" ? "block" : "none";
-                document.getElementById("categoryRow").style.display = type === "transfer" ? "none" : "block";
+                document.getElementById("destAccRow").style.display = type === "transfer" ? "flex" : "none";
+                document.getElementById("categoryRow").style.display = type === "transfer" ? "none" : "flex";
 
                 // "To Account" is a single <select> shared across every time the transaction modal
                 // is opened. It's only reset here (not on every open) because without it, a value
@@ -6083,30 +6150,40 @@
             if (type === "transfer") return;
             txSplitRowCounter++;
             const rowId = `txSplitRow_${txSplitRowCounter}`;
+            const catSelectId = `${rowId}_cat`;
             const row = document.createElement("div");
             row.className = "split-row";
             row.id = rowId;
-            // v98: restyled to match the main Amount/Category block above it (full-width Category
-            // select, then a full-width Amount field with its own calculator button) instead of the
-            // old single cramped row — see the "SPLIT STYLE MAKE SAME AS ABOVE" request. The Remove
-            // control moves up next to the Category label since there's no longer a trailing slot
-            // for it alongside Amount.
+            // v150: rebuilt to reuse the exact same markup pattern as #txMainEntryCard (Amount on
+            // top, then an icon-avatar + picker-button Category line below) instead of a
+            // differently-styled block, so every split row now looks identical to the main entry
+            // and to every other split row — see the "make main & split rows the same style"
+            // reference screenshots. Category swaps from a plain visible <select> to the same
+            // hidden-<select>-plus-picker-button pattern txCategory/srcAccount use (openAccountPicker()
+            // is generic over any select id via data-select, so this "just works" for a dynamically
+            // added row too), which is what gives it the same font size/look as the main entry
+            // instead of the OS's own oversized native dropdown. Remove is now a small round − button
+            // trailing the Category line, matching the reference's compact per-row remove control.
             row.innerHTML = `
-                <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <label style="margin-bottom:4px;">Category</label>
-                    <button type="button" data-click="removeTxSplitRow" data-row-id="${rowId}" title="Remove this split" style="background:none; border:none; color:var(--expense-color); font-weight:700; font-size:0.78rem; padding:4px 2px; cursor:pointer;">− Remove</button>
+                <label>Amount</label>
+                <div class="split-amt-line">
+                    <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" placeholder="Amount" style="flex:1;" data-input="recalcTxSplitTotal">
+                    <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">${CALC_ICON_SVG}</button>
                 </div>
-                <select class="form-input tx-split-cat">${buildSplitCategoryOptionsHTML(type)}</select>
-                <div style="margin-top:10px;">
-                    <label>Amount</label>
-                    <div style="display:flex; gap:6px;">
-                        <input type="number" class="tx-split-amt" step="0.01" inputmode="decimal" placeholder="Amount" style="flex:1;" data-input="recalcTxSplitTotal">
-                        <button type="button" class="calc-btn" data-click="openCalcPadFor" data-target="${rowId}_amt" title="Calculator / Numpad">${CALC_ICON_SVG}</button>
-                    </div>
+                <div class="split-row-catline">
+                    <span class="split-cat-icon" id="${catSelectId}Icon">🏷️</span>
+                    <button type="button" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="${catSelectId}" data-title="Select Category">
+                        <span id="${catSelectId}BtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <button type="button" class="split-remove-btn" data-click="removeTxSplitRow" data-row-id="${rowId}" title="Remove this split">−</button>
                 </div>
+                <select class="form-input tx-split-cat" id="${catSelectId}" style="display:none;">${buildSplitCategoryOptionsHTML(type)}</select>
             `;
             document.getElementById("txSplitRows").appendChild(row);
             row.querySelector(".tx-split-amt").id = `${rowId}_amt`;
+            // Initializes the new row's picker-button text + icon avatar from whatever its hidden
+            // <select> defaulted to (its first option), same as the main Category field does.
+            syncAccountPickerButtonText(catSelectId);
             recalcTxSplitTotal();
         }
 
@@ -6611,7 +6688,7 @@
             const descInput = document.getElementById("txDesc");
 
             const autoMode = fdVisible && !manualChecked;
-            descRow.style.display = autoMode ? "none" : "block";
+            descRow.style.display = autoMode ? "none" : "flex";
             descInput.required = !autoMode;
         }
 
@@ -7348,7 +7425,12 @@
             const memberSelect = document.getElementById("salaryMemberSelect");
             memberSelect.innerHTML = `<option value="all">All Members (show every account)</option>`;
             membersCache.forEach(m => { memberSelect.innerHTML += `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`; });
-            memberSelect.value = "all";
+            // v155: when the household only has one member set up, there's no real choice to make —
+            // auto-select that member instead of defaulting to "All Members", and run the same
+            // smart-default logic a manual pick would trigger (Bank Account / EPF-CPF Account
+            // nudged toward that member's own accounts). With 2+ members "All Members" remains the
+            // safer default since guessing which one just got paid isn't possible.
+            memberSelect.value = membersCache.length === 1 ? membersCache[0].id : "all";
 
             document.getElementById("salaryScheme").value = "none";
             document.getElementById("salaryGross").value = "";
@@ -7372,13 +7454,15 @@
             populateSalaryAccountSelects(accounts);
             // Bank Account defaults to Default Receive Account, if one is set and still exists —
             // same setting the ordinary Income form now also defaults to (see openTransactionForm()).
-            // Member defaults to "All Members" when the form first opens, so this is the only
-            // default in play at this point; picking a specific Member afterward may still nudge
-            // it further via handleSalaryMemberChange()'s own smart-default logic.
             if (defaultReceiveAccount && accounts.some(a => a.id === defaultReceiveAccount)) {
                 document.getElementById("salaryBankAccount").value = defaultReceiveAccount;
                 syncAccountPickerButtonText("salaryBankAccount");
             }
+            // Member defaults to "All Members" unless the household only has one member (handled
+            // above), in which case run the same smart-default logic a manual pick would trigger —
+            // nudging Bank Account / EPF-CPF Account toward that member's own accounts. Picking a
+            // different Member afterward re-runs this via handleSalaryMemberChange() either way.
+            if (memberSelect.value !== "all") await handleSalaryMemberChange();
             await handleSalarySchemeChange();
             recalcSalaryPreview();
             openModal("salaryModal");
@@ -7553,7 +7637,7 @@
             // Backpay Note only makes sense once there's a Backpay amount to attach it to —
             // hidden (not cleared) when Backpay drops back to 0, so re-entering an amount
             // restores whatever note was already typed.
-            document.getElementById("salaryBackpayNoteRow").style.display = backpay > 0 ? "block" : "none";
+            document.getElementById("salaryBackpayNoteRow").style.display = backpay > 0 ? "flex" : "none";
         }
 
         // Saves 1–3 ordinary Income transactions (Bank leg always; EE/ER legs only when a
@@ -7978,6 +8062,30 @@
             // field too — this only ever shows when a picker <select> has no options selected at
             // all (e.g. txCategory while Transfer is chosen, whose Category row is hidden anyway).
             btnText.textContent = opt ? opt.textContent : "Select...";
+            // v150: keeps a category picker's icon avatar (the small colored circle beside the
+            // button — see the .split-cat-icon CSS comment) in sync with whichever category is
+            // currently selected. Only category pickers have a "<selectId>Icon" element in the DOM
+            // (txCategory / each split row's <rowId>_cat), so this is a no-op for Account pickers.
+            const iconEl = document.getElementById(selectId + "Icon");
+            if (iconEl) {
+                const typeEl = document.getElementById("txType");
+                const type = (typeEl && typeEl.value === "income") ? "income" : "expense";
+                const catName = select.value;
+                iconEl.textContent = catName ? getCategoryIcon(catName, type) : "🏷️";
+                iconEl.style.background = catName ? getCategoryAvatarColor(catName) : "#eef2ff";
+            }
+        }
+
+        // v150: deterministic pastel background for a category's icon avatar circle, so different
+        // categories are visually distinguishable at a glance (matching the reference screenshots'
+        // colored icon circles) without needing a per-category color stored anywhere — same name
+        // always maps to the same palette color.
+        const CATEGORY_AVATAR_PALETTE = ["#fee2e2", "#ffedd5", "#fef9c3", "#dcfce7", "#d1fae5", "#cffafe", "#dbeafe", "#e0e7ff", "#ede9fe", "#fce7f3"];
+        function getCategoryAvatarColor(name) {
+            if (!name) return "#eef2ff";
+            let hash = 0;
+            for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+            return CATEGORY_AVATAR_PALETTE[hash % CATEGORY_AVATAR_PALETTE.length];
         }
 
         // v141: PC keyboard type-ahead for the Account picker — a native <select> lets you press
@@ -8550,7 +8658,15 @@
                 document.getElementById("ledgerTargetTitle").textContent = `${icon} ${activeCategoryView.toUpperCase()}${periodSuffix}`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
             } else if (directTypeView !== "all") {
-                document.getElementById("ledgerTargetTitle").textContent = `All ${directTypeView.charAt(0).toUpperCase() + directTypeView.slice(1)} Log`;
+                // v148: same period-suffix treatment as the category branch above, for the report
+                // card's Income/Expense clicks (categoryDrillYear/Month "all" when reached any
+                // other way, so this reads exactly as before for those).
+                const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+                let periodSuffix = "";
+                if (categoryDrillMonth !== "all" && categoryDrillYear !== "all") periodSuffix = ` · ${monthNames[parseInt(categoryDrillMonth)]} ${categoryDrillYear}`;
+                else if (categoryDrillYear !== "all") periodSuffix = ` · ${categoryDrillYear}`;
+                else if (categoryDrillMonth !== "all") periodSuffix = ` · ${monthNames[parseInt(categoryDrillMonth)]} (All Years)`;
+                document.getElementById("ledgerTargetTitle").textContent = `All ${directTypeView.charAt(0).toUpperCase() + directTypeView.slice(1)} Log${periodSuffix}`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
             } else if (activeLedgerAccountView === "all") {
                 document.getElementById("ledgerTargetTitle").textContent = "Portfolio General Log";
@@ -8694,6 +8810,14 @@
                 // with per-currency summary rows further down instead.
                 if (isMultiCurrencyAccountView) return;
 
+                // v148: was missing entirely — every branch below that checks a year/month filter
+                // (categoryDrillYear/Month, portfolioLedgerYear) reads `d`, but nothing declared
+                // it in this scope, so any drill-in that actually set one of those to a real value
+                // (e.g. clicking a category from a year-filtered Savings Statement) threw
+                // "d is not defined" and silently broke this render. Needed now regardless, since
+                // the report card's Income/Expense/Total clicks (below) rely on the same check.
+                const d = new Date(t.date);
+
                 let isBound = false;
                 if (activeCategoryView !== "all") {
                     // v85: categoryDrillYear/Month carry the year/month filter that was active on
@@ -8704,7 +8828,12 @@
                         && (categoryDrillYear === "all" || d.getFullYear().toString() === categoryDrillYear)
                         && (categoryDrillMonth === "all" || d.getMonth().toString() === categoryDrillMonth);
                 } else if (directTypeView !== "all") {
-                    isBound = t.type === directTypeView;
+                    // v148: categoryDrillYear/Month also carry the report card tile's period here
+                    // (see navigateToDirectTypePage) — "all" when reached any other way, so every
+                    // other existing Income/Expense drill-in still shows full history unchanged.
+                    isBound = t.type === directTypeView
+                        && (categoryDrillYear === "all" || d.getFullYear().toString() === categoryDrillYear)
+                        && (categoryDrillMonth === "all" || d.getMonth().toString() === categoryDrillMonth);
                 } else if (activeLedgerAccountView !== "all") {
                     // Year-scoped Account Activity view (v33) — only this account's transactions
                     // dated within the currently selected year (accountLedgerYear).
@@ -8762,12 +8891,11 @@
                 const iconBadge = t.type === "transfer"
                     ? "🔄"
                     : (splitInfo ? splitInfo.members.map(m => getCategoryIcon(m.cat, t.type)).join("") : getCategoryIcon(t.cat, t.type));
-                // v88: a small ✅ overlay on the category icon flags a transaction the user has
-                // already reconciled against a bank/card statement (see the Checked toggle in
-                // Quick View / the entry form) — purely a visual cue, no effect on any total.
-                const checkedIconHTML = t.checked
-                    ? `<span title="Checked" style="display:inline-block; position:relative; margin-right:2px;">${iconBadge}<span style="position:absolute; bottom:-4px; right:-6px; font-size:0.6rem; background:#15803d; color:white; border-radius:50%; width:13px; height:13px; line-height:13px; text-align:center;">✓</span></span>`
-                    : iconBadge;
+                // v88: a small ✅ overlay flags a transaction the user has already reconciled
+                // against a bank/card statement (see the Checked toggle in Quick View / the entry
+                // form) — purely a visual cue, no effect on any total. v150: moved from an inline
+                // overlay on the small text-line icon (checkedIconHTML) onto the big tx-icon-circle
+                // instead — see txCheckOverlay below.
                 const refundBadge = t.isRefund
                     ? `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">↩️ Refund</span>`
                     : '';
@@ -8839,20 +8967,35 @@
                 // above — so it's surfaced right on the row here too, not just inside Quick View.
                 const notesLine = t.notes ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted); font-style:italic;">${escapeHtml(t.notes)}</span>` : '';
 
+                // v150: the category icon now shows big, in its own colored circle beside the
+                // details (reference: a competing budget app's Transactions list) — checkedIconHTML
+                // above still holds the emoji (+ ✅ checkmark overlay when reconciled), just moved
+                // out of the title text into txIconCircleHTML below. Transfers get a neutral
+                // lavender circle since they aren't tied to any one category.
+                const txIconBg = t.type === "transfer" ? "#e0e7ff" : categoryIconBgColor(splitInfo ? splitInfo.catLabel : (t.cat || t.type));
+                const txCheckOverlay = t.checked
+                    ? `<span style="position:absolute; bottom:-2px; right:-2px; font-size:0.55rem; background:#15803d; color:white; border-radius:50%; width:14px; height:14px; line-height:14px; text-align:center; border:2px solid var(--card-bg);">✓</span>`
+                    : '';
+                const txIconCircleHTML = `<div class="tx-icon-circle" style="background:${txIconBg};"><span style="line-height:1;">${iconBadge}</span>${txCheckOverlay}</div>`;
+
                 ledgerHTML += `
-                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
-                        <div class="item-left">
-                            <span class="item-name">${checkedIconHTML} ${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]${referenceText}${maturityText}${receiptBadge}</span>
-                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
-                            ${notesLine}
-                        </div>
-                        <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight: bold;">
-                                ${displayAmountHTML}
-                                ${sub}
+                    <div class="ledger-item ledger-item-tx" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                        ${txIconCircleHTML}
+                        <div class="tx-row-body">
+                            <div class="item-left">
+                                <span class="item-name">${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}</span>
+                                <span class="item-meta">${t.date} [${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]${referenceText}${maturityText}${receiptBadge}</span>
+                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                                ${notesLine}
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="color:var(--${col}); font-weight: bold;">
+                                    ${displayAmountHTML}
+                                    ${sub}
+                                </div>
                             </div>
                         </div>
+                        <span class="tx-side-bar" style="background:var(--${col});"></span>
                     </div>
                 `;
             });
@@ -8943,6 +9086,17 @@
             const sortedYears = [...years].sort((a, b) => b - a);
             select.innerHTML = `<option value="all">All Years</option>` +
                 sortedYears.map(y => `<option value="${y}">${y}</option>`).join("");
+
+            // v148: report card "Total" click forcing a specific year takes priority over both
+            // the first-load default and the normal preserve-selection-across-renders behaviour
+            // below — one-shot, cleared immediately so it doesn't stick past this render.
+            if (pendingSavingsYearOverride !== null) {
+                const preset = pendingSavingsYearOverride;
+                pendingSavingsYearOverride = null;
+                select.value = (preset === "all" || sortedYears.map(String).includes(preset)) ? preset : "all";
+                savingsYearFilterInitialized = true;
+                return;
+            }
 
             if (!savingsYearFilterInitialized) {
                 select.value = "all";
@@ -9057,6 +9211,18 @@
             populateSavingsYearFilterOptions(txs);
             const filterY = document.getElementById("savingsYearFilter").value;
 
+            // v148: small "Filtered: <Month Year> · Clear" badge for the report card's Total
+            // click — only ever visible when savingsFilterMonth is set, i.e. reached that way.
+            const monthScopeBadge = document.getElementById("savingsMonthScopeBadge");
+            if (savingsFilterMonth !== "all") {
+                const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+                const yearLabel = filterY !== "all" ? filterY : new Date().getFullYear();
+                document.getElementById("savingsMonthScopeBadgeText").textContent = `Filtered: ${monthNames[parseInt(savingsFilterMonth)]} ${yearLabel}`;
+                monthScopeBadge.style.display = "flex";
+            } else {
+                monthScopeBadge.style.display = "none";
+            }
+
             const currentIncomeCategories = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), "Salary", "Investments", "Freelance", "Other Income"])];
             const currentExpenseCategories = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), "Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"])];
 
@@ -9076,6 +9242,10 @@
             let incBaseTotal = 0, expBaseTotal = 0;
             txs.forEach(t => {
                 if (filterY !== "all" && new Date(t.date).getFullYear().toString() !== filterY) return;
+                // v148: report card "Total" click may also carry a specific month (see
+                // navigateToSavingsPage/savingsFilterMonth) — "all" the rest of the time, so this
+                // page filters by year alone exactly as before for every other visit.
+                if (savingsFilterMonth !== "all" && new Date(t.date).getMonth().toString() !== savingsFilterMonth) return;
 
                 const tBase = convertTxAmountToBase(t, accounts);
                 if (t.type === "income" && t.isRefund) {
@@ -10135,6 +10305,9 @@
             openCurrencyConfig: () => openCurrencyConfig(),
             lockAppNow: () => lockAppNow(),
             navigateToSavingsPage: () => navigateToSavingsPage(),
+            reportCardClickDirectType: (el) => reportCardClickDirectType(el),
+            reportCardClickTotal: (el) => reportCardClickTotal(el),
+            clearSavingsMonthScope: () => clearSavingsMonthScope(),
             navigateToAccountsPage: () => navigateToAccountsPage(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
             navigateToBackupPage: () => navigateToBackupPage(),
