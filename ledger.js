@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v156";
+        const APP_VERSION = "v157";
         const APP_VERSION_DATE = "2026-08-28";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -68,7 +68,13 @@
         // one combined group) — AP and AR move in opposite directions financially, so a single
         // netted group total would be misleading; keeping them apart mirrors how Bank Loan is
         // already kept apart from Bank/Cash.
-        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate", "Bank Loan", "Account Payable", "Account Receivable"];
+        // v156: replaced Account Payable / Account Receivable with "Other Assets" / "Other
+        // Liabilities" — AP/AR are trade-specific accounting terms (money owed for goods/services
+        // bought or sold on credit) and were being misused for things like refundable deposits
+        // held/paid, which are custodial in nature, not trade debts. "Other Assets"/"Other
+        // Liabilities" are the correct general-purpose catch-alls for that. Existing accounts
+        // still saved under the old AP/AR groups are remapped by migrateAccountGroupRename().
+        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate", "Other Assets", "Bank Loan", "Other Liabilities"];
         const DEFAULT_ACCOUNT_GROUP = ACCOUNT_GROUPS[0];
 
         // Sub-groups (v39) — optional, per-Group breakdown so e.g. "Investment" can be split
@@ -5167,7 +5173,7 @@
         // Splits a subset of accounts into { financial, realEstate, total } (all in baseCurrency)
         // for the "Financial Assets vs Real Estate" owner report — Real Estate is whatever's
         // grouped under the "Real Estate" account group, Financial Assets is everything else
-        // (Bank/Cash, Credit Card, Investment, Bank Loan, Account Payable/Receivable, etc.), so
+        // (Bank/Cash, Credit Card, Investment, Bank Loan, Other Assets/Liabilities, etc.), so
         // the two always add up to exactly the same Total Net Worth this app shows everywhere
         // else. Same includeInNetWorth opt-out as summarizeAccountsNetWorth, so a property
         // excluded from Net Worth is excluded here too (from both the Real Estate and Total
@@ -5797,6 +5803,7 @@
             await migrateFdInterestIncomeRename();
             await migrateStaleDestFieldCleanup();
             await migrateStaleCategoryOnTransfersCleanup();
+            await migrateAccountGroupRename();
         }
 
         // One-time migration: "Others" (the implicit income/expense fallback category — never a
@@ -5866,6 +5873,28 @@
                 if (t.type === "transfer" && t.cat && t.cat !== "Fixed Deposit") {
                     t.cat = null;
                     await writeDB(STORES.TRANSACTIONS, t);
+                }
+            }
+        }
+
+        // One-time migration (v156): "Account Payable" and "Account Receivable" were removed
+        // from ACCOUNT_GROUPS — they're trade-specific accounting terms (money owed for goods/
+        // services bought or sold on credit), and some accounts had been filed under them for
+        // things like refundable deposits held/paid, which aren't trade debts. Any account still
+        // saved under either old group is remapped to its "Other" equivalent: Account Payable
+        // (money you owe) → Other Liabilities, Account Receivable (money owed to you) → Other
+        // Assets — same direction, just under the correct general-purpose group name. Only
+        // touches accounts with the exact legacy group value — never one the user has since
+        // changed away from it.
+        async function migrateAccountGroupRename() {
+            const accs = await readAllDB(STORES.ACCOUNTS);
+            for (const a of accs) {
+                if (a.group === "Account Payable") {
+                    a.group = "Other Liabilities";
+                    await writeDB(STORES.ACCOUNTS, a);
+                } else if (a.group === "Account Receivable") {
+                    a.group = "Other Assets";
+                    await writeDB(STORES.ACCOUNTS, a);
                 }
             }
         }
