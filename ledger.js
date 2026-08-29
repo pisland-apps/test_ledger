@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v180";
+        const APP_VERSION = "v185";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -60,6 +60,51 @@
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
+
+        // v179: page-background presets (Setting > Background Theme). The 12 original presets
+        // override --bg-color plus two cohesion touches: --neu-dark (the shadow half of the
+        // chrome-only neumorphism effect — FAB, calculator keys, nav bar — tinted to match the
+        // background's hue instead of staying a fixed slate-gray) and the browser-chrome
+        // theme-color meta tag. They deliberately leave --card-bg, --border-color, --text-*,
+        // --glass-*, and --neu-light alone (any key a preset omits falls back to THEME_DEFAULTS
+        // below, which mirror the light :root values) — see the v156 token comment above.
+        //
+        // v185: added "midnight" (暗夜描边), the first FULL dark preset — it overrides every key
+        // so switching to/from it correctly restores every touched var either way, not just the
+        // two the light presets ever needed.
+        const THEME_DEFAULTS = {
+            bg: "#f8fafc", cardBg: "#ffffff", textMain: "#0f172a", textMuted: "#64748b",
+            borderColor: "#e2e8f0", neuLight: "rgba(255,255,255,0.85)", neuDark: "rgba(148,163,184,0.45)",
+            neuPrimaryLight: "rgba(255,255,255,0.22)", neuPrimaryDark: "rgba(49,46,129,0.55)",
+            glassBg: "rgba(255,255,255,0.68)", glassBgStrong: "rgba(255,255,255,0.82)",
+            glassBgModal: "rgba(255,255,255,0.92)", glassBorder: "rgba(255,255,255,0.55)",
+            themeColor: "#4f46e5",
+        };
+        const BG_THEMES = [
+            { id: "default",    name: "Slate",       bg: "#f8fafc", neuDark: "rgba(148,163,184,0.45)", themeColor: "#4f46e5" },
+            { id: "sand",       name: "Sand",         bg: "#faf5ec", neuDark: "rgba(180,150,110,0.40)", themeColor: "#b9863f" },
+            { id: "mint",       name: "Mint",         bg: "#f1faf6", neuDark: "rgba(110,170,140,0.35)", themeColor: "#3f9d76" },
+            { id: "lavender",   name: "Lavender",     bg: "#f6f4fc", neuDark: "rgba(150,130,190,0.35)", themeColor: "#7c6bc4" },
+            { id: "sky",        name: "Sky",          bg: "#eff7fc", neuDark: "rgba(110,150,190,0.35)", themeColor: "#4a90c2" },
+            { id: "blush",      name: "Blush",        bg: "#fdf3f2", neuDark: "rgba(200,140,140,0.35)", themeColor: "#c97f7f" },
+            { id: "sage",       name: "Sage",         bg: "#f4f7f0", neuDark: "rgba(140,165,110,0.35)", themeColor: "#7a9a52" },
+            { id: "peach",      name: "Peach",        bg: "#fdf6ee", neuDark: "rgba(210,160,110,0.35)", themeColor: "#d99a54" },
+            { id: "periwinkle", name: "Periwinkle",   bg: "#f2f3fc", neuDark: "rgba(130,140,210,0.35)", themeColor: "#6a72c9" },
+            { id: "rosegold",   name: "Rose Gold",    bg: "#fdf2f5", neuDark: "rgba(200,150,165,0.35)", themeColor: "#c97a95" },
+            { id: "cloud",      name: "Cloud Gray",   bg: "#f5f5f6", neuDark: "rgba(150,150,155,0.40)", themeColor: "#6b7280" },
+            { id: "butter",     name: "Butter",       bg: "#fdfaf0", neuDark: "rgba(200,180,110,0.35)", themeColor: "#c9a63f" },
+            {
+                id: "midnight", name: "暗夜描边",
+                bg: "#0a0a0f", cardBg: "#15151d", textMain: "#e8eaf0", textMuted: "#8b93a8",
+                borderColor: "rgba(255,255,255,0.14)",
+                neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
+                neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
+                glassBg: "rgba(20,20,28,0.72)", glassBgStrong: "rgba(20,20,28,0.85)",
+                glassBgModal: "rgba(24,24,32,0.95)", glassBorder: "rgba(255,255,255,0.12)",
+                themeColor: "#0a0a0f",
+            },
+        ];
+        const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
 
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
@@ -1122,13 +1167,6 @@
         let reportCardPeriod1 = "thisYear";
         let reportCardPeriod2 = "thisMonth";
 
-        // v179: which color preset the dashboard's speed-dial FAB (4 circles + main toggle) is
-        // rendered in — "original" (v178 gradient-glass, the default/no CSS override) or one of
-        // the 4 dark-neon presets below. Stored in SETTINGS like the prefs above; applied via a
-        // `data-sd-theme` attribute on <body> that the preset CSS blocks key off of (see
-        // applySdTheme()).
-        let sdTheme = "original";
-
         // Built-in starter categories (auto-provisioned if missing; user can still
         // rename/remove via the Categories manager same as any custom category).
         // v101: entries may carry an optional `parent: "Main Category Name"` field to seed
@@ -1617,6 +1655,93 @@
             const panel = document.getElementById("recentTxSettingsPanel");
             if (!panel) return;
             panel.style.display = panel.style.display === "none" ? "flex" : "none";
+        }
+
+        // v181: Desktop "Insights" right rail (only visible at 1400px+, see the matching CSS).
+        // Three lightweight, non-configurable summaries — deliberately no settings/filters like
+        // the dashboard's other widgets, since this is meant as a quick glance while working with
+        // the main content, not a destination in itself:
+        //   1. Spending Breakdown (This Month) — a donut chart, v183, reusing the same
+        //      buildBreakdownDonutSVG() the full-page Spending Breakdown uses (see below), same
+        //      expense/refund convention as #2.
+        //   2. Top Categories This Month — same expense/refund convention as Spending Breakdown
+        //      (a refund nets back against its own category rather than being ignored outright).
+        //   3. Recent Large Transactions — the biggest income/expense entries (transfers excluded,
+        //      since they don't represent money actually gained/spent) from the last 60 days.
+        // No-ops harmlessly if the rail markup isn't present (defensive, matches the existing
+        // `if (!list) return;` pattern in renderRecentTransactionsWidget above).
+        function renderDesktopInsightsRail(accounts, txs) {
+            const catListEl = document.getElementById("insightsTopCategoriesList");
+            const largeTxListEl = document.getElementById("insightsLargeTxList");
+            const donutWrapEl = document.getElementById("insightsSpendingDonutWrap");
+            if (!catListEl || !largeTxListEl) return;
+
+            const now = new Date();
+            const curMonth = now.getMonth();
+            const curYear = now.getFullYear();
+
+            const catTotals = {};
+            txs.forEach(t => {
+                const isRefundCredit = t.type === "income" && t.isRefund;
+                if (t.type !== "expense" && !isRefundCredit) return;
+                const d = new Date(t.date);
+                if (d.getMonth() !== curMonth || d.getFullYear() !== curYear) return;
+                const base = convertTxAmountToBase(t, accounts);
+                const cat = t.cat || "Other Expenses";
+                catTotals[cat] = (catTotals[cat] || 0) + (isRefundCredit ? -base : base);
+            });
+            const topCats = Object.keys(catTotals).filter(c => catTotals[c] > 0).sort((a, b) => catTotals[b] - catTotals[a]).slice(0, 5);
+            const maxCatAmt = topCats.length ? catTotals[topCats[0]] : 0;
+
+            catListEl.innerHTML = topCats.length ? topCats.map(c => {
+                const amt = catTotals[c];
+                const pct = maxCatAmt > 0 ? Math.round((amt / maxCatAmt) * 100) : 0;
+                return `
+                    <div class="insights-row">
+                        <div class="insights-row-top">
+                            <span class="insights-row-label">${getCategoryIcon(c, "expense")} ${escapeHtml(c)}</span>
+                            <span class="insights-row-amount">${formatCurrency(amt, baseCurrency)}</span>
+                        </div>
+                        <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%;"></div></div>
+                    </div>
+                `;
+            }).join("") : `<p class="insights-empty">No expenses yet this month.</p>`;
+
+            // v183: same catTotals as the list above, but as a full donut chart — every category
+            // with a positive net spend this month gets a slice (no top-5 cap, matching how the
+            // full-page Spending Breakdown never caps its own chart either), colored/sorted the
+            // same way that page does (BREAKDOWN_CHART_COLORS cycled by descending-spend rank).
+            if (donutWrapEl) {
+                const allCatsDesc = Object.keys(catTotals).filter(c => catTotals[c] > 0).sort((a, b) => catTotals[b] - catTotals[a]);
+                const donutTotal = allCatsDesc.reduce((sum, c) => sum + catTotals[c], 0);
+                const donutEntries = allCatsDesc.map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+                donutWrapEl.innerHTML = donutEntries.length
+                    ? buildBreakdownDonutSVG(donutEntries, donutTotal)
+                    : `<p class="insights-empty">No expenses yet this month.</p>`;
+            }
+
+            const cutoffMs = now.getTime() - 60 * 86400000;
+            const largeTx = txs
+                .filter(t => (t.type === "income" || t.type === "expense") && new Date(t.date).getTime() >= cutoffMs)
+                .map(t => ({ t, base: convertTxAmountToBase(t, accounts) }))
+                .sort((a, b) => b.base - a.base)
+                .slice(0, 5);
+
+            largeTxListEl.innerHTML = largeTx.length ? largeTx.map(({ t, base }) => {
+                const col = t.type === "income" ? "income-color" : "expense-color";
+                const sgn = t.type === "income" ? "+" : "-";
+                return `
+                    <div class="insights-row insights-tx-row" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                        <div class="insights-row-top">
+                            <span class="insights-row-label">${getCategoryIcon(t.cat, t.type)} ${escapeHtml(t.desc)}</span>
+                        </div>
+                        <div class="insights-row-top" style="margin-top:2px;">
+                            <span class="insights-tx-date">${t.date}</span>
+                            <span class="insights-row-amount" style="color:var(--${col});">${sgn}${formatCurrency(base, baseCurrency)}</span>
+                        </div>
+                    </div>
+                `;
+            }).join("") : `<p class="insights-empty">No large transactions in the last 60 days.</p>`;
         }
 
         async function handleRecentTxSettingChange() {
@@ -2109,53 +2234,6 @@
             }
         }
 
-        // Speed-dial color theme picker (v179) — small toggle button on the dashboard that opens
-        // a swatch panel for switching the 4 speed-dial circles + main FAB between the v178
-        // "original" gradient-glass look and 4 dark-neon presets. Same open/close/backdrop shape
-        // as the quick-add sheet above.
-        const SD_THEMES = [
-            { id: "original", label: "原始渐变" },
-            { id: "deepspace", label: "深空霓虹" },
-            { id: "cyberglass", label: "赛博玻璃" },
-            { id: "midnight", label: "暗夜描边" },
-            { id: "smokedneon", label: "浓雾霓虹" },
-        ];
-
-        function applySdTheme() {
-            document.body.dataset.sdTheme = sdTheme === "original" ? "" : sdTheme;
-        }
-
-        function renderSdThemePanel() {
-            const panel = document.getElementById("sdThemePanel");
-            if (!panel) return;
-            panel.innerHTML = SD_THEMES.map(t => `
-                <button type="button" class="sd-theme-swatch${t.id === sdTheme ? " active" : ""}" data-click="chooseSdTheme" data-theme="${t.id}">
-                    <span class="sd-theme-swatch-preview sd-theme-preview-${t.id}"></span>
-                    <span class="sd-theme-swatch-label">${t.label}</span>
-                </button>
-            `).join("");
-        }
-
-        function toggleSdThemePanel() {
-            const panel = document.getElementById("sdThemePanel");
-            const isOpen = panel.style.display === "flex";
-            if (!isOpen) renderSdThemePanel();
-            panel.style.display = isOpen ? "none" : "flex";
-            document.getElementById("sdThemeBackdrop").style.display = isOpen ? "none" : "block";
-        }
-
-        function closeSdThemePanel() {
-            document.getElementById("sdThemePanel").style.display = "none";
-            document.getElementById("sdThemeBackdrop").style.display = "none";
-        }
-
-        async function chooseSdTheme(el) {
-            sdTheme = el.dataset.theme;
-            applySdTheme();
-            await writeDB(STORES.SETTINGS, { key: "sdTheme", value: sdTheme });
-            closeSdThemePanel();
-        }
-
         function navigateToCategoryPage(categoryName, backTarget = "workspace", year = "all", month = "all") {
             if (backTarget === "workspace") workspaceScrollY = window.scrollY;
             activeCategoryView = categoryName;
@@ -2493,6 +2571,23 @@
         function closeSidebar() {
             document.getElementById("sidebarOverlay").classList.remove("open");
             document.getElementById("sidebarDrawer").classList.remove("open");
+        }
+
+        // --- v182: INSIGHTS RAIL AS A MOBILE (<768px) RIGHT-EDGE DRAWER ---
+        // Same #desktopInsightsRail element/content as the 1400px+ rail (see
+        // renderDesktopInsightsRail) — these two functions just toggle its .open class (and the
+        // dedicated #insightsRailOverlay) so it slides in from the right on phones. Harmless to
+        // call at any width: above 767px the CSS in the matching @media block simply doesn't
+        // apply, so toggling .open there has no visual effect.
+        function openInsightsDrawer() {
+            closeSidebar(); // mutually exclusive with the left nav drawer, same as two modals
+            document.getElementById("insightsRailOverlay").classList.add("open");
+            document.getElementById("desktopInsightsRail").classList.add("open");
+        }
+
+        function closeInsightsDrawer() {
+            document.getElementById("insightsRailOverlay").classList.remove("open");
+            document.getElementById("desktopInsightsRail").classList.remove("open");
         }
 
         // Highlights the sidebar item matching whichever page is currently on screen —
@@ -5050,6 +5145,79 @@
             document.getElementById("newMemberColor").value = el.dataset.color;
             document.querySelectorAll("#memberColorSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.color === el.dataset.color));
         }
+
+        // --- v179: Background Theme (Setting page) -----------------------------------------
+        function getSavedBgThemeId() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(BG_THEME_STORAGE_KEY));
+                return (saved && saved.id) || "default";
+            } catch (e) { return "default"; }
+        }
+
+        // Applies a preset's full palette (bg/card/text/border/neu/glass + theme-color meta) to
+        // the live page, and — unless save is false — persists it so both the next app launch
+        // and the no-flash inline snippet in <head> pick it up before first paint.
+        // v185: every key now falls back to THEME_DEFAULTS and is always (re)written, so
+        // switching from a full preset like "midnight" back to a light preset that only ever
+        // specifies bg/neuDark/themeColor correctly resets every other var it had touched,
+        // instead of leaving it stuck at the previous theme's value.
+        const BG_THEME_VAR_MAP = {
+            bg: "--bg-color", cardBg: "--card-bg", textMain: "--text-main", textMuted: "--text-muted",
+            borderColor: "--border-color", neuLight: "--neu-light", neuDark: "--neu-dark",
+            neuPrimaryLight: "--neu-primary-light", neuPrimaryDark: "--neu-primary-dark",
+            glassBg: "--glass-bg", glassBgStrong: "--glass-bg-strong",
+            glassBgModal: "--glass-bg-modal", glassBorder: "--glass-border",
+        };
+        function applyBgTheme(themeId, { save = true } = {}) {
+            const theme = BG_THEMES.find(t => t.id === themeId) || BG_THEMES[0];
+            for (const key in BG_THEME_VAR_MAP) {
+                document.documentElement.style.setProperty(BG_THEME_VAR_MAP[key], theme[key] || THEME_DEFAULTS[key]);
+            }
+            const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor || THEME_DEFAULTS.themeColor);
+            if (save) {
+                try { localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
+            }
+            return theme;
+        }
+
+        function buildBgThemeSwatchGrid() {
+            const grid = document.getElementById("bgThemeSwatchGrid");
+            if (!grid) return;
+            const selectedId = getSavedBgThemeId();
+            grid.innerHTML = BG_THEMES.map(t => `
+                <span class="bg-theme-swatch-wrap">
+                    <span class="color-swatch${t.id === selectedId ? ' selected' : ''}" style="background:${t.bg};" data-click="selectBgTheme" data-theme-id="${t.id}" title="${t.name}"></span>
+                    <span class="bg-theme-swatch-label">${t.name}</span>
+                </span>
+            `).join("");
+        }
+
+        function selectBgTheme(el) {
+            applyBgTheme(el.dataset.themeId);
+            document.querySelectorAll("#bgThemeSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.themeId === el.dataset.themeId));
+        }
+
+        function toggleBgThemeSettings() {
+            const panel = document.getElementById("bgThemeSettingsPanel");
+            const isHidden = panel.style.display === "none";
+            if (isHidden) buildBgThemeSwatchGrid();
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+
+        // v184: re-applies the saved theme the moment this script parses (this runs long before
+        // bootstrap()'s async lock/DB work, since ledger.js is loaded via a plain <script src>
+        // at the end of <body>, not gated on "load" or DB init). This is a deliberate SECOND
+        // application on top of the "no-flash" snippet already in index.html's <head> — reported
+        // symptom: on an installed PWA, after fully quitting and relaunching, the saved theme was
+        // still correctly recorded (Settings > Background Theme's swatch grid showed the right
+        // one selected) but the page's actual background/chrome had silently reverted to
+        // default, only fixing itself once the swatch was tapped again (i.e. once applyBgTheme()
+        // ran again "for real"). Whatever causes the <head> snippet to occasionally not stick in
+        // that environment, this line re-runs the exact same, already-proven-correct code path a
+        // second time, later in the page's life, as a safety net. save:false so it never
+        // rewrites localStorage with the value it just read from it.
+        applyBgTheme(getSavedBgThemeId(), { save: false });
 
         function openMemberFormModal() {
             document.getElementById("editMemberId").value = "";
@@ -8578,7 +8746,6 @@
             // (mirrors closeLedgerQuickAddSheet() being called on every ledger-page render) so it
             // never stays stuck open across a navigation or a data-driven re-render.
             closeDashboardQuickAddSheet();
-            closeSdThemePanel();
 
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
 
@@ -8625,6 +8792,7 @@
             renderMemberNetWorthRows(accounts, nativeBalances);
             renderPinnedAccountsWidget(accounts, nativeBalances);
             renderRecentTransactionsWidget(accounts, txs);
+            renderDesktopInsightsRail(accounts, txs);
 
             // --- Fixed Deposit maturity reminders ---
             // FD terms now live on the individual deposit transaction (each "placement"), not the
@@ -10245,10 +10413,6 @@
             const storedReportCardPeriod2 = await readKeyDB("settings", "reportCardPeriod2");
             if (storedReportCardPeriod2) reportCardPeriod2 = storedReportCardPeriod2.value || "thisMonth";
 
-            const storedSdTheme = await readKeyDB("settings", "sdTheme");
-            if (storedSdTheme) sdTheme = storedSdTheme.value || "original";
-            applySdTheme();
-
             const storedRecentTxType = await readKeyDB("settings", "recentTxTypeFilter");
             if (storedRecentTxType) recentTxTypeFilter = storedRecentTxType.value || "both";
 
@@ -10515,7 +10679,6 @@
                                 case "defaultReceiveAccount": defaultReceiveAccount = rec.value || ""; break;
                                 case "reportCardPeriod1": reportCardPeriod1 = rec.value || "thisYear"; break;
                                 case "reportCardPeriod2": reportCardPeriod2 = rec.value || "thisMonth"; break;
-                                case "sdTheme": sdTheme = rec.value || "original"; applySdTheme(); break;
                                 case "defaultIncomeCategory": defaultIncomeCategory = rec.value || ""; break;
                                 case "defaultExpenseCategory": defaultExpenseCategory = rec.value || ""; break;
                                 case "recentTxTypeFilter": recentTxTypeFilter = rec.value || "both"; break;
@@ -10558,6 +10721,8 @@
         const CLICK_ACTIONS = {
             openSidebar: () => openSidebar(),
             closeSidebar: () => closeSidebar(),
+            openInsightsDrawer: () => openInsightsDrawer(),
+            closeInsightsDrawer: () => closeInsightsDrawer(),
             sidebarGo: (el) => sidebarGo(el),
             handleSetupPasscodeSubmit: () => handleSetupPasscodeSubmit(),
             handleUnlockSubmit: () => handleUnlockSubmit(),
@@ -10594,6 +10759,8 @@
             togglePinnedAccountsSettings: () => togglePinnedAccountsSettings(),
             toggleMemberNetWorthCollapse: () => toggleMemberNetWorthCollapse(),
             selectMemberColor: (el) => selectMemberColor(el),
+            toggleBgThemeSettings: () => toggleBgThemeSettings(),
+            selectBgTheme: (el) => selectBgTheme(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
@@ -10603,9 +10770,6 @@
             toggleDashboardQuickAddSheet: () => toggleDashboardQuickAddSheet(),
             closeDashboardQuickAddSheet: () => closeDashboardQuickAddSheet(),
             dashboardQuickAddChooseAction: (el) => dashboardQuickAddChooseAction(el),
-            toggleSdThemePanel: () => toggleSdThemePanel(),
-            closeSdThemePanel: () => closeSdThemePanel(),
-            chooseSdTheme: (el) => chooseSdTheme(el),
             openAccountFormModal: () => openAccountFormModal(),
             openCategoryFormModal: () => openCategoryFormModal(),
             editCategory: (el) => editCategory(el.dataset.id),
@@ -10809,6 +10973,90 @@
             btn.classList.toggle("visible", window.scrollY > 300);
         }
         window.addEventListener("scroll", toggleBackToTopVisibility, { passive: true });
+
+        // v181: edge-swipe to open the sidebar drawer on phones. Only below the 768px
+        // breakpoint (above that the sidebar is already permanently docked open, see the
+        // matching @media rule in index.html) and only when the swipe STARTS within ~24px of
+        // the left screen edge, matching the standard "edge swipe" gesture used by most mobile
+        // apps/OSes — this avoids hijacking an ordinary left-right scroll or swipe gesture that
+        // starts in the middle of the page content (e.g. dismissing a card, a chart pan, etc.).
+        (function setupSidebarSwipeGesture() {
+            const EDGE_ZONE_PX = 24;
+            const MIN_SWIPE_PX = 60;
+            let touchStartX = null;
+            let touchStartY = null;
+            let startedInEdgeZone = false;
+
+            document.addEventListener("touchstart", (e) => {
+                if (window.innerWidth >= 768) return; // desktop/tablet: sidebar already docked
+                if (document.getElementById("sidebarDrawer").classList.contains("open")) return;
+                const t = e.touches[0];
+                touchStartX = t.clientX;
+                touchStartY = t.clientY;
+                startedInEdgeZone = t.clientX <= EDGE_ZONE_PX;
+            }, { passive: true });
+
+            document.addEventListener("touchend", (e) => {
+                if (!startedInEdgeZone || touchStartX === null) return;
+                const t = e.changedTouches[0];
+                const dx = t.clientX - touchStartX;
+                const dy = Math.abs(t.clientY - touchStartY);
+                // Require a mostly-horizontal rightward swipe so an edge-starting vertical
+                // scroll doesn't accidentally pop the drawer open.
+                if (dx > MIN_SWIPE_PX && dy < dx) {
+                    openSidebar();
+                }
+                touchStartX = null;
+                touchStartY = null;
+                startedInEdgeZone = false;
+            }, { passive: true });
+        })();
+
+        // v182: right-edge swipe (start near the right screen edge, drag leftward) opens the
+        // insights drawer (Top Categories This Month / Recent Large Transactions — same content
+        // as the 1400px+ rail) on phones. Mirrors setupSidebarSwipeGesture() above exactly, just
+        // the opposite edge/direction, so the two can never both match the same touch.
+        //
+        // v182 follow-up: the first cut of this gestured on ANY left-to-right swipe starting
+        // outside the left-edge zone, gated by a generic "is any ancestor horizontally
+        // scrollable?" walk up the DOM. That walk was true for almost every element on the page
+        // (containers commonly end up 1-2px wider than their clientWidth from borders/rounding,
+        // with nothing actually scrollable) — so nearly every swipe got silently disqualified,
+        // matching the "1 in 10" report. Switched to the same deterministic edge-zone check the
+        // left drawer already uses reliably, instead of trying to detect scrollability at all.
+        (function setupInsightsDrawerSwipeGesture() {
+            const EDGE_ZONE_PX = 24;
+            const MIN_SWIPE_PX = 60;
+            let touchStartX = null;
+            let touchStartY = null;
+            let startedInEdgeZone = false;
+
+            document.addEventListener("touchstart", (e) => {
+                if (window.innerWidth >= 768) return; // tablet/desktop: rail is docked or hidden, not a drawer
+                if (document.getElementById("desktopInsightsRail").classList.contains("open")) return;
+                const t = e.touches[0];
+                touchStartX = t.clientX;
+                touchStartY = t.clientY;
+                startedInEdgeZone = t.clientX >= window.innerWidth - EDGE_ZONE_PX;
+            }, { passive: true });
+
+            document.addEventListener("touchend", (e) => {
+                if (!startedInEdgeZone || touchStartX === null) return;
+                const t = e.changedTouches[0];
+                const dx = t.clientX - touchStartX;
+                const dy = Math.abs(t.clientY - touchStartY);
+                // Require a mostly-horizontal leftward swipe (dx negative), same "mostly
+                // horizontal" guard as the sidebar gesture, so an edge-starting vertical scroll
+                // doesn't accidentally pop the drawer open.
+                if (dx < -MIN_SWIPE_PX && dy < -dx) {
+                    openInsightsDrawer();
+                }
+                touchStartX = null;
+                touchStartY = null;
+                startedInEdgeZone = false;
+            }, { passive: true });
+        })();
+
 
         // Register the Service Worker for offline support. Only works when served over http(s)
         // (e.g. GitHub Pages) — silently does nothing when opened as a local file:// page.
