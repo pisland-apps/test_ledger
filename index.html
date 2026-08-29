@@ -1094,6 +1094,125 @@
                 linear-gradient(135deg, rgba(67, 56, 202, 0.78) 0%, rgba(99, 102, 241, 0.62) 45%, rgba(129, 140, 248, 0.9) 100%);
         }
 
+        /* v179 dark-neon presets for the 4 speed-dial circles + main FAB — activated by
+           data-sd-theme on <body> (set from applySdTheme()/chooseSdTheme()). Each overrides the
+           same background/border/box-shadow properties the "original" rules above set; the
+           attribute+class selector here is more specific than the plain-class rules above so no
+           !important or source-order care is needed. Icon/glyph color stays white in all 4 (kept
+           off the ::before glossy highlight too) for contrast against the dark bases. */
+        body[data-sd-theme="deepspace"] .speed-dial-fab,
+        body[data-sd-theme="midnight"] .speed-dial-fab,
+        body[data-sd-theme="cyberglass"] .speed-dial-fab,
+        body[data-sd-theme="smokedneon"] .speed-dial-fab {
+            border-width: 2px;
+        }
+        body[data-sd-theme="deepspace"] .speed-dial-fab.sd-income { background: rgba(6, 22, 17, 0.55); border-color: rgba(16, 185, 129, 0.9); box-shadow: 0 0 14px rgba(16, 185, 129, 0.55), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="deepspace"] .speed-dial-fab.sd-expense { background: rgba(24, 6, 6, 0.55); border-color: rgba(239, 68, 68, 0.9); box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="deepspace"] .speed-dial-fab.sd-transfer { background: rgba(6, 14, 26, 0.55); border-color: rgba(59, 130, 246, 0.9); box-shadow: 0 0 14px rgba(59, 130, 246, 0.55), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="deepspace"] .speed-dial-fab.sd-salary { background: rgba(26, 17, 4, 0.55); border-color: rgba(217, 119, 6, 0.9); box-shadow: 0 0 14px rgba(217, 119, 6, 0.55), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="deepspace"] #dashboardQuickAddFab { background: rgba(12, 10, 26, 0.55); border: 2px solid rgba(129, 140, 248, 0.9); box-shadow: 0 0 14px rgba(129, 140, 248, 0.55), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="deepspace"] #dashboardQuickAddFab:active { background: rgba(12, 10, 26, 0.7); }
+
+        body[data-sd-theme="cyberglass"] .speed-dial-fab.sd-income { background: linear-gradient(135deg, rgba(6, 30, 22, 0.65) 0%, rgba(10, 12, 30, 0.6) 100%); border-color: rgba(52, 211, 153, 0.9); box-shadow: 0 0 20px rgba(16, 185, 129, 0.6), 0 4px 14px rgba(0, 0, 0, 0.45); }
+        body[data-sd-theme="cyberglass"] .speed-dial-fab.sd-expense { background: linear-gradient(135deg, rgba(35, 6, 12, 0.65) 0%, rgba(10, 12, 30, 0.6) 100%); border-color: rgba(248, 113, 113, 0.9); box-shadow: 0 0 20px rgba(239, 68, 68, 0.6), 0 4px 14px rgba(0, 0, 0, 0.45); }
+        body[data-sd-theme="cyberglass"] .speed-dial-fab.sd-transfer { background: linear-gradient(135deg, rgba(8, 18, 40, 0.65) 0%, rgba(10, 12, 30, 0.6) 100%); border-color: rgba(96, 165, 250, 0.9); box-shadow: 0 0 20px rgba(59, 130, 246, 0.6), 0 4px 14px rgba(0, 0, 0, 0.45); }
+        body[data-sd-theme="cyberglass"] .speed-dial-fab.sd-salary { background: linear-gradient(135deg, rgba(38, 24, 4, 0.65) 0%, rgba(10, 12, 30, 0.6) 100%); border-color: rgba(251, 191, 36, 0.9); box-shadow: 0 0 20px rgba(217, 119, 6, 0.6), 0 4px 14px rgba(0, 0, 0, 0.45); }
+        body[data-sd-theme="cyberglass"] #dashboardQuickAddFab { background: linear-gradient(135deg, rgba(20, 10, 40, 0.65) 0%, rgba(10, 12, 30, 0.6) 100%); border: 1.5px solid rgba(167, 139, 250, 0.9); box-shadow: 0 0 20px rgba(129, 140, 248, 0.6), 0 4px 14px rgba(0, 0, 0, 0.45); }
+        body[data-sd-theme="cyberglass"] #dashboardQuickAddFab:active { background: linear-gradient(135deg, rgba(10, 12, 30, 0.75) 0%, rgba(20, 10, 40, 0.7) 100%); }
+
+        body[data-sd-theme="midnight"] .speed-dial-fab {
+            backdrop-filter: blur(6px) saturate(140%);
+            -webkit-backdrop-filter: blur(6px) saturate(140%);
+            border-width: 1px;
+        }
+        body[data-sd-theme="midnight"] .speed-dial-fab.sd-income { background: rgba(6, 8, 10, 0.72); border-color: rgba(16, 185, 129, 0.85); box-shadow: 0 0 6px rgba(16, 185, 129, 0.35), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="midnight"] .speed-dial-fab.sd-expense { background: rgba(10, 6, 6, 0.72); border-color: rgba(239, 68, 68, 0.85); box-shadow: 0 0 6px rgba(239, 68, 68, 0.35), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="midnight"] .speed-dial-fab.sd-transfer { background: rgba(6, 7, 12, 0.72); border-color: rgba(59, 130, 246, 0.85); box-shadow: 0 0 6px rgba(59, 130, 246, 0.35), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="midnight"] .speed-dial-fab.sd-salary { background: rgba(11, 8, 4, 0.72); border-color: rgba(217, 119, 6, 0.85); box-shadow: 0 0 6px rgba(217, 119, 6, 0.35), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="midnight"] #dashboardQuickAddFab { background: rgba(8, 7, 12, 0.72); border: 1px solid rgba(129, 140, 248, 0.85); backdrop-filter: blur(6px) saturate(140%); -webkit-backdrop-filter: blur(6px) saturate(140%); box-shadow: 0 0 6px rgba(129, 140, 248, 0.35), 0 4px 14px rgba(0, 0, 0, 0.5); }
+        body[data-sd-theme="midnight"] #dashboardQuickAddFab:active { background: rgba(8, 7, 12, 0.9); }
+
+        body[data-sd-theme="smokedneon"] .speed-dial-fab {
+            backdrop-filter: blur(16px) saturate(160%);
+            -webkit-backdrop-filter: blur(16px) saturate(160%);
+        }
+        body[data-sd-theme="smokedneon"] .speed-dial-fab.sd-income { background: rgba(30, 40, 36, 0.45); border-color: rgba(52, 211, 153, 0.7); box-shadow: 0 0 24px rgba(16, 185, 129, 0.4), 0 4px 14px rgba(0, 0, 0, 0.35); }
+        body[data-sd-theme="smokedneon"] .speed-dial-fab.sd-expense { background: rgba(45, 32, 34, 0.45); border-color: rgba(248, 113, 113, 0.7); box-shadow: 0 0 24px rgba(239, 68, 68, 0.4), 0 4px 14px rgba(0, 0, 0, 0.35); }
+        body[data-sd-theme="smokedneon"] .speed-dial-fab.sd-transfer { background: rgba(30, 34, 45, 0.45); border-color: rgba(96, 165, 250, 0.7); box-shadow: 0 0 24px rgba(59, 130, 246, 0.4), 0 4px 14px rgba(0, 0, 0, 0.35); }
+        body[data-sd-theme="smokedneon"] .speed-dial-fab.sd-salary { background: rgba(45, 38, 28, 0.45); border-color: rgba(251, 191, 36, 0.7); box-shadow: 0 0 24px rgba(217, 119, 6, 0.4), 0 4px 14px rgba(0, 0, 0, 0.35); }
+        body[data-sd-theme="smokedneon"] #dashboardQuickAddFab { background: rgba(38, 34, 45, 0.45); border: 1.5px solid rgba(167, 139, 250, 0.7); backdrop-filter: blur(16px) saturate(160%); -webkit-backdrop-filter: blur(16px) saturate(160%); box-shadow: 0 0 24px rgba(129, 140, 248, 0.4), 0 4px 14px rgba(0, 0, 0, 0.35); }
+        body[data-sd-theme="smokedneon"] #dashboardQuickAddFab:active { background: rgba(38, 34, 45, 0.65); }
+
+        /* Speed-dial color theme picker (v179) — toggle + swatch panel on the dashboard's left
+           edge, plus the 5 preset previews it shows. The actual per-preset button restyles
+           ([data-sd-theme="..."] overrides) live further down, grouped with .speed-dial-fab. */
+        .sd-theme-toggle-btn {
+            position: fixed;
+            left: 20px;
+            bottom: 80px;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: #fff;
+            border: 1.5px solid var(--border-color);
+            font-size: 1.05rem;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow:
+                0 4px 14px rgba(15, 23, 42, 0.18),
+                -3px -3px 6px var(--neu-light),
+                3px 3px 6px var(--neu-dark);
+            cursor: pointer;
+            z-index: 50;
+            transition: transform 0.12s ease;
+        }
+        .sd-theme-toggle-btn:active { transform: scale(0.92); }
+        .sd-theme-panel {
+            position: fixed;
+            left: 20px;
+            bottom: 132px;
+            width: 210px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 8px;
+            background: #fff;
+            border-radius: 14px;
+            box-shadow: 0 8px 24px rgba(15, 23, 42, 0.22);
+            z-index: 51;
+        }
+        .sd-theme-swatch {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            background: none;
+            border: none;
+            border-radius: 8px;
+            padding: 7px 8px;
+            font-weight: 700;
+            font-size: 0.82rem;
+            font-family: inherit;
+            color: var(--text-primary, #1e293b);
+            cursor: pointer;
+            text-align: left;
+        }
+        .sd-theme-swatch:active { background: #f1f5f9; }
+        .sd-theme-swatch.active { background: #eef2ff; color: #4338ca; }
+        .sd-theme-swatch-preview {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .sd-theme-preview-original { background: linear-gradient(135deg, rgba(129, 140, 248, 0.9) 0%, rgba(99, 102, 241, 0.62) 55%, rgba(67, 56, 202, 0.78) 100%); }
+        .sd-theme-preview-deepspace { background: #0a0a14; border: 2px solid rgba(16, 185, 129, 0.9); box-shadow: 0 0 8px rgba(16, 185, 129, 0.6); }
+        .sd-theme-preview-cyberglass { background: linear-gradient(135deg, rgba(15, 15, 35, 0.95) 0%, rgba(30, 10, 40, 0.9) 100%); border: 1.5px solid rgba(59, 130, 246, 0.9); box-shadow: 0 0 10px rgba(59, 130, 246, 0.6); }
+        .sd-theme-preview-midnight { background: #08080c; border: 1px solid rgba(239, 68, 68, 0.85); }
+        .sd-theme-preview-smokedneon { background: rgba(40, 35, 50, 0.9); border: 1.5px solid rgba(217, 119, 6, 0.75); box-shadow: 0 0 12px rgba(217, 119, 6, 0.4); }
+
         /* Small icon-only button beside the account name on its Activity page */
         .icon-edit-btn {
             background: none;
@@ -1215,103 +1334,6 @@
             box-shadow: 0 0 0 1px rgba(0,0,0,0.08) inset;
         }
         .color-swatch.selected { border-color: var(--text-main); }
-
-        /* Background-theme swatches (Setting page) — these preset colors are pale pastels,
-           so (unlike the saturated member-color swatches) they need a visible resting border
-           to read as a chip against the white settings-panel card, plus room for a label. */
-        .bg-theme-swatch-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 56px; }
-        .bg-theme-swatch-wrap .color-swatch { box-shadow: 0 0 0 1.5px var(--border-color) inset; }
-        .bg-theme-swatch-wrap .color-swatch.selected { box-shadow: none; }
-        .bg-theme-swatch-label { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-align: center; line-height: 1.2; }
-
-        /* ============ v181: Desktop "Insights" right rail ============
-           Fills the empty space to the right of the centered content column that appears once
-           the viewport is wide enough that the docked sidebar (336px, see the 768px breakpoint
-           above) + the 720px content column no longer fill the screen. Only ever shown at
-           1400px+ — narrower desktop/tablet widths keep the existing layout untouched, and this
-           lives outside every .page div (like the sidebar/back-to-top button) so it stays put
-           across page navigation rather than needing to be re-added per page. Content is
-           refreshed from renderApp() whenever the dashboard data changes — see
-           renderDesktopInsightsRail(). */
-        .desktop-insights-rail {
-            display: none;
-            position: fixed;
-            top: 0;
-            right: 0;
-            bottom: 0;
-            width: 300px;
-            padding: 24px 16px;
-            overflow-y: auto;
-        }
-        @media (min-width: 1400px) {
-            .desktop-insights-rail { display: block; }
-        }
-        /* v182: on phones (<768px, same breakpoint the sidebar drawer uses) the insights rail
-           doubles as a right-edge slide-in drawer — same element/ids/render function as the
-           1400px+ rail above, just off-canvas by default and toggled via .open instead of always
-           visible. Opened by a swipe starting near the right screen edge and dragging leftward
-           (mirrors the left drawer's own edge-swipe exactly — see
-           setupInsightsDrawerSwipeGesture in ledger.js), or by tapping the dashboard's
-           "Insights" shortcut; closed via the × button or tapping the dimmed overlay
-           (#insightsRailOverlay, reusing .sidebar-overlay's styling). Left untouched at
-           768–1399px (tablet) — same as before this version, that range simply has no way to
-           reach it, matching the gap that already existed there for the rail itself. */
-        @media (max-width: 767px) {
-            .desktop-insights-rail {
-                display: flex;
-                flex-direction: column;
-                width: 82%;
-                max-width: 320px;
-                background: var(--glass-bg-strong);
-                backdrop-filter: blur(18px) saturate(180%);
-                -webkit-backdrop-filter: blur(18px) saturate(180%);
-                border-left: 1px solid var(--glass-border);
-                z-index: 901;
-                transform: translateX(100%);
-                transition: transform 0.25s ease;
-                box-shadow: -2px 0 24px rgba(15, 23, 42, 0.18);
-            }
-            .desktop-insights-rail.open { transform: translateX(0); }
-            .insights-rail-header { display: flex !important; }
-        }
-        .insights-rail-header {
-            display: none;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 16px;
-        }
-        .insights-rail-title { font-weight: 800; font-size: 1rem; letter-spacing: -0.01em; }
-        .insights-rail-close-btn {
-            background: none; border: none; font-size: 1.4rem; line-height: 1;
-            color: var(--text-muted); cursor: pointer; padding: 4px 8px;
-        }
-        .insights-card {
-            background: var(--card-bg);
-            border: 1.5px solid var(--border-color);
-            border-radius: 16px;
-            padding: 16px;
-            margin-bottom: 16px;
-        }
-        .insights-card h4 {
-            font-size: 0.72rem;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: var(--text-muted);
-            font-weight: 800;
-            margin-bottom: 12px;
-        }
-        .insights-row { margin-bottom: 12px; }
-        .insights-row:last-child { margin-bottom: 0; }
-        .insights-row-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-        .insights-row-label {
-            font-size: 0.8rem; font-weight: 700; color: var(--text-main);
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
-        .insights-row-amount { font-size: 0.8rem; font-weight: 800; color: var(--text-main); flex-shrink: 0; white-space: nowrap; }
-        .insights-tx-row { cursor: pointer; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); }
-        .insights-tx-row:last-child { border-bottom: none; padding-bottom: 0; }
-        .insights-tx-date { font-size: 0.68rem; color: var(--text-muted); font-weight: 600; }
-        .insights-empty { font-size: 0.76rem; color: var(--text-muted); text-align: center; padding: 6px 0; }
 
         /* Net worth card on a member/joint filtered page */
         .member-page-networth-card {
@@ -1859,8 +1881,7 @@
                div/span elements for actual transaction data specifically, so this blanket
                button rule can never hide real content, only controls). */
             button, input[type="file"], select, .sidebar-overlay, .sidebar-drawer, #lockOverlay,
-            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet, .speed-dial-sheet, .print-filter-row,
-            .desktop-insights-rail {
+            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet, .speed-dial-sheet, .sd-theme-panel, .print-filter-row {
                 display: none !important;
             }
             /* Report pages replace their <select> filters (hidden above) with a plain-text
@@ -1928,26 +1949,6 @@
             a[href]::after { content: none !important; }
         }
     </style>
-    <!-- v179: apply any saved background-theme choice before first paint, so the page never
-         flashes the default slate background and then jumps to the user's chosen tint. Only
-         --bg-color / --neu-dark and the browser-chrome theme-color are touched here; every
-         other design token (glass, card colors, data colors) is untouched, so the rest of the
-         v156+ glass/neumorphism styling is unaffected regardless of which background is picked. -->
-    <script>
-        (function () {
-            try {
-                var saved = JSON.parse(localStorage.getItem("ledgerBgTheme"));
-                if (saved && saved.bg) {
-                    document.documentElement.style.setProperty("--bg-color", saved.bg);
-                    if (saved.neuDark) document.documentElement.style.setProperty("--neu-dark", saved.neuDark);
-                    if (saved.themeColor) {
-                        var m = document.querySelector('meta[name="theme-color"]');
-                        if (m) m.setAttribute("content", saved.themeColor);
-                    }
-                }
-            } catch (e) {}
-        })();
-    </script>
 </head>
 <body>
 
@@ -1959,35 +1960,6 @@
          across page switches instead of needing to be re-added per page; visibility is purely
          scroll-driven (see toggleBackToTopVisibility), not tied to which page is active. -->
     <button type="button" class="back-to-top-btn" id="backToTopBtn" data-click="scrollToTop" aria-label="Back to top" title="Back to top">&uarr;</button>
-
-    <!-- v182: dimmed backdrop behind the insights rail when it's acting as a mobile drawer
-         (<768px — see the CSS comment on .desktop-insights-rail). No-op at 1400px+/tablet since
-         it's only ever toggled .open by openInsightsDrawer(), which is itself only reachable via
-         the <768px swipe gesture. Reuses .sidebar-overlay's dim+blur styling as-is. -->
-    <div class="sidebar-overlay" id="insightsRailOverlay" data-click="closeInsightsDrawer"></div>
-
-    <!-- v181: Desktop "Insights" right rail — see the matching CSS comment above for why this
-         only shows at 1400px+. Lives outside every .page div (same reasoning as the back-to-top
-         button above) and is refreshed by renderDesktopInsightsRail(), called from renderApp().
-         v182: same element also serves as the <768px slide-in drawer — see the CSS comment. -->
-    <div class="desktop-insights-rail" id="desktopInsightsRail">
-        <div class="insights-rail-header">
-            <span class="insights-rail-title">Insights</span>
-            <button type="button" class="insights-rail-close-btn" data-click="closeInsightsDrawer" aria-label="Close insights panel">&times;</button>
-        </div>
-        <div class="insights-card">
-            <h4>Spending Breakdown (This Month)</h4>
-            <div id="insightsSpendingDonutWrap"></div>
-        </div>
-        <div class="insights-card">
-            <h4>Top Categories This Month</h4>
-            <div id="insightsTopCategoriesList"></div>
-        </div>
-        <div class="insights-card">
-            <h4>Recent Large Transactions</h4>
-            <div id="insightsLargeTxList"></div>
-        </div>
-    </div>
 
     <!-- ================= SIDEBAR NAVIGATION DRAWER ================= -->
     <div class="sidebar-overlay" id="sidebarOverlay" data-click="closeSidebar"></div>
@@ -2279,6 +2251,13 @@
             </div>
         </div>
         <button class="fab-btn" id="dashboardQuickAddFab" data-click="toggleDashboardQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
+
+        <!-- Speed-dial color theme picker (v179) — small toggle on the opposite (left) edge from
+             the quick-add FAB, mirroring how the global back-to-top button stacks above fab-btn
+             on the right edge. -->
+        <div id="sdThemeBackdrop" class="quick-add-backdrop" style="display:none;" data-click="closeSdThemePanel"></div>
+        <div id="sdThemePanel" class="sd-theme-panel" style="display:none;"></div>
+        <button class="sd-theme-toggle-btn" id="sdThemeToggleBtn" data-click="toggleSdThemePanel" aria-label="Speed-dial color theme" title="Color theme">🎨</button>
     </div>
 
 
@@ -2853,14 +2832,6 @@
             </div>
         </div>
         <div class="config-list">
-            <div class="config-item" style="cursor:pointer;" data-click="toggleBgThemeSettings">
-                <span>🎨 <strong>Background Theme</strong></span>
-                <span style="color:var(--text-muted);">›</span>
-            </div>
-            <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the page background and the tint of the chrome shadows (FAB, calculator, nav bar) to match. Cards, glass panels and data colors stay the same.</p>
-                <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
-            </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
                 <span>👪 <strong>Manage Members</strong></span>
                 <span style="color:var(--text-muted);">›</span>
