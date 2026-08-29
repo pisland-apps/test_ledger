@@ -1246,6 +1246,44 @@
         @media (min-width: 1400px) {
             .desktop-insights-rail { display: block; }
         }
+        /* v182: on phones (<768px, same breakpoint the sidebar drawer uses) the insights rail
+           doubles as a right-edge slide-in drawer — same element/ids/render function as the
+           1400px+ rail above, just off-canvas by default and toggled via .open instead of always
+           visible. Opened by a left-to-right swipe that does NOT start in the sidebar's own
+           left-edge zone (see setupInsightsDrawerSwipeGesture in ledger.js), or by tapping the
+           dashboard's "Insights" shortcut; closed via the × button or tapping the dimmed overlay
+           (#insightsRailOverlay, reusing .sidebar-overlay's styling). Left untouched at
+           768–1399px (tablet) — same as before this version, that range simply has no way to
+           reach it, matching the gap that already existed there for the rail itself. */
+        @media (max-width: 767px) {
+            .desktop-insights-rail {
+                display: flex;
+                flex-direction: column;
+                width: 82%;
+                max-width: 320px;
+                background: var(--glass-bg-strong);
+                backdrop-filter: blur(18px) saturate(180%);
+                -webkit-backdrop-filter: blur(18px) saturate(180%);
+                border-left: 1px solid var(--glass-border);
+                z-index: 901;
+                transform: translateX(100%);
+                transition: transform 0.25s ease;
+                box-shadow: -2px 0 24px rgba(15, 23, 42, 0.18);
+            }
+            .desktop-insights-rail.open { transform: translateX(0); }
+            .insights-rail-header { display: flex !important; }
+        }
+        .insights-rail-header {
+            display: none;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 16px;
+        }
+        .insights-rail-title { font-weight: 800; font-size: 1rem; letter-spacing: -0.01em; }
+        .insights-rail-close-btn {
+            background: none; border: none; font-size: 1.4rem; line-height: 1;
+            color: var(--text-muted); cursor: pointer; padding: 4px 8px;
+        }
         .insights-card {
             background: var(--card-bg);
             border: 1.5px solid var(--border-color);
@@ -1921,10 +1959,21 @@
          scroll-driven (see toggleBackToTopVisibility), not tied to which page is active. -->
     <button type="button" class="back-to-top-btn" id="backToTopBtn" data-click="scrollToTop" aria-label="Back to top" title="Back to top">&uarr;</button>
 
+    <!-- v182: dimmed backdrop behind the insights rail when it's acting as a mobile drawer
+         (<768px — see the CSS comment on .desktop-insights-rail). No-op at 1400px+/tablet since
+         it's only ever toggled .open by openInsightsDrawer(), which is itself only reachable via
+         the <768px swipe gesture. Reuses .sidebar-overlay's dim+blur styling as-is. -->
+    <div class="sidebar-overlay" id="insightsRailOverlay" data-click="closeInsightsDrawer"></div>
+
     <!-- v181: Desktop "Insights" right rail — see the matching CSS comment above for why this
          only shows at 1400px+. Lives outside every .page div (same reasoning as the back-to-top
-         button above) and is refreshed by renderDesktopInsightsRail(), called from renderApp(). -->
+         button above) and is refreshed by renderDesktopInsightsRail(), called from renderApp().
+         v182: same element also serves as the <768px slide-in drawer — see the CSS comment. -->
     <div class="desktop-insights-rail" id="desktopInsightsRail">
+        <div class="insights-rail-header">
+            <span class="insights-rail-title">Insights</span>
+            <button type="button" class="insights-rail-close-btn" data-click="closeInsightsDrawer" aria-label="Close insights panel">&times;</button>
+        </div>
         <div class="insights-card">
             <h4>Top Categories This Month</h4>
             <div id="insightsTopCategoriesList"></div>
