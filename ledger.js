@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v200";
+        const APP_VERSION = "v201";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2516,8 +2516,13 @@
             document.getElementById(`reportCardIncome${cardNum}`).textContent = formatCurrency(income, baseCurrency);
             document.getElementById(`reportCardExpense${cardNum}`).textContent = `-${formatCurrency(expense, baseCurrency)}`;
             const totalEl = document.getElementById(`reportCardTotal${cardNum}`);
-            totalEl.textContent = formatCurrency(total, baseCurrency);
-            totalEl.style.color = total >= 0 ? "#15803d" : "#b91c1c";
+            // v201: use the same balance-style formatter as account/loan balances elsewhere
+            // (formatBalanceHTML) — negative renders parenthesized, e.g. (RM104.10), instead of a
+            // raw minus sign (RM-104.10). Also switched off the hardcoded #15803d/#b91c1c (missed
+            // when the rest of this card moved to var(--income-color)/var(--expense-color) — see
+            // index.html) so the Total figure's color tracks the same theme-driven pair too.
+            totalEl.innerHTML = formatBalanceHTML(total, baseCurrency);
+            totalEl.style.color = total >= 0 ? "var(--income-color)" : "";
         }
 
         function renderReportCards(txs, accounts) {
