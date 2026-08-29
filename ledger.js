@@ -10947,54 +10947,48 @@
             }, { passive: true });
         })();
 
-        // v182: left-to-right swipe to open the insights drawer (Top Categories This Month /
-        // Recent Large Transactions — same content as the 1400px+ rail) on phones. Deliberately
-        // the OPPOSITE trigger zone from setupSidebarSwipeGesture() above: that one only fires
-        // when the swipe STARTS within the left-edge zone; this one only fires when it starts
-        // OUTSIDE that zone, so the two gestures can't both match the same touch. Also bails out
-        // if the touch started on something horizontally scrollable (e.g. a wide report table
-        // with overflow-x:auto) so scrolling such a table back leftward isn't mistaken for this
-        // gesture, and if the sidebar drawer is currently open (swiping over its content
-        // shouldn't also pop open the insights drawer behind it).
+        // v182: right-edge swipe (start near the right screen edge, drag leftward) opens the
+        // insights drawer (Top Categories This Month / Recent Large Transactions — same content
+        // as the 1400px+ rail) on phones. Mirrors setupSidebarSwipeGesture() above exactly, just
+        // the opposite edge/direction, so the two can never both match the same touch.
+        //
+        // v182 follow-up: the first cut of this gestured on ANY left-to-right swipe starting
+        // outside the left-edge zone, gated by a generic "is any ancestor horizontally
+        // scrollable?" walk up the DOM. That walk was true for almost every element on the page
+        // (containers commonly end up 1-2px wider than their clientWidth from borders/rounding,
+        // with nothing actually scrollable) — so nearly every swipe got silently disqualified,
+        // matching the "1 in 10" report. Switched to the same deterministic edge-zone check the
+        // left drawer already uses reliably, instead of trying to detect scrollability at all.
         (function setupInsightsDrawerSwipeGesture() {
             const EDGE_ZONE_PX = 24;
             const MIN_SWIPE_PX = 60;
             let touchStartX = null;
             let touchStartY = null;
-            let eligible = false;
-
-            function isHorizontallyScrollable(el) {
-                let node = el;
-                while (node && node !== document.body) {
-                    if (node.scrollWidth > node.clientWidth + 1) return true;
-                    node = node.parentElement;
-                }
-                return false;
-            }
+            let startedInEdgeZone = false;
 
             document.addEventListener("touchstart", (e) => {
                 if (window.innerWidth >= 768) return; // tablet/desktop: rail is docked or hidden, not a drawer
-                if (document.getElementById("sidebarDrawer").classList.contains("open")) return;
                 if (document.getElementById("desktopInsightsRail").classList.contains("open")) return;
                 const t = e.touches[0];
                 touchStartX = t.clientX;
                 touchStartY = t.clientY;
-                eligible = t.clientX > EDGE_ZONE_PX && !isHorizontallyScrollable(e.target);
+                startedInEdgeZone = t.clientX >= window.innerWidth - EDGE_ZONE_PX;
             }, { passive: true });
 
             document.addEventListener("touchend", (e) => {
-                if (!eligible || touchStartX === null) return;
+                if (!startedInEdgeZone || touchStartX === null) return;
                 const t = e.changedTouches[0];
                 const dx = t.clientX - touchStartX;
                 const dy = Math.abs(t.clientY - touchStartY);
-                // Same "mostly horizontal" guard as the sidebar gesture, so an ordinary vertical
-                // scroll starting away from the edge doesn't pop the drawer open.
-                if (dx > MIN_SWIPE_PX && dy < dx) {
+                // Require a mostly-horizontal leftward swipe (dx negative), same "mostly
+                // horizontal" guard as the sidebar gesture, so an edge-starting vertical scroll
+                // doesn't accidentally pop the drawer open.
+                if (dx < -MIN_SWIPE_PX && dy < -dx) {
                     openInsightsDrawer();
                 }
                 touchStartX = null;
                 touchStartY = null;
-                eligible = false;
+                startedInEdgeZone = false;
             }, { passive: true });
         })();
 

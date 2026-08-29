@@ -1249,9 +1249,10 @@
         /* v182: on phones (<768px, same breakpoint the sidebar drawer uses) the insights rail
            doubles as a right-edge slide-in drawer — same element/ids/render function as the
            1400px+ rail above, just off-canvas by default and toggled via .open instead of always
-           visible. Opened by a left-to-right swipe that does NOT start in the sidebar's own
-           left-edge zone (see setupInsightsDrawerSwipeGesture in ledger.js), or by tapping the
-           dashboard's "Insights" shortcut; closed via the × button or tapping the dimmed overlay
+           visible. Opened by a swipe starting near the right screen edge and dragging leftward
+           (mirrors the left drawer's own edge-swipe exactly — see
+           setupInsightsDrawerSwipeGesture in ledger.js), or by tapping the dashboard's
+           "Insights" shortcut; closed via the × button or tapping the dimmed overlay
            (#insightsRailOverlay, reusing .sidebar-overlay's styling). Left untouched at
            768–1399px (tablet) — same as before this version, that range simply has no way to
            reach it, matching the gap that already existed there for the rail itself. */
