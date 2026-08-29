@@ -111,6 +111,16 @@
             padding-bottom: 40px;
         }
 
+        /* v163 美化方案 point 6: custom scrollbar — thin, rounded, semi-transparent, so it
+           doesn't stand out against the app's own rounded/shadowed card styling the way a
+           default OS scrollbar does. Firefox via `scrollbar-width`/`scrollbar-color`, everything
+           else via the `::-webkit-scrollbar-*` pseudo-elements. */
+        * { scrollbar-width: thin; scrollbar-color: rgba(100,116,139,0.35) transparent; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: rgba(100,116,139,0.35); border-radius: 999px; }
+        ::-webkit-scrollbar-thumb:hover { background: rgba(100,116,139,0.55); }
+
         /* SPA Page management frameworks */
         .page { display: block; }
         .page.hidden { display: none !important; }
@@ -123,12 +133,17 @@
            harmless now that this covers them too, and lower-risk than touching them. */
         .hidden { display: none !important; }
 
+        /* v166: layered-surface shadow — was flat (border only, same as the page background
+           behind it). Not a hover target itself (its content is: currency pill, save/lock
+           buttons, etc., each with their own affordance), so a static shadow only, no hover-lift
+           here. */
         header {
             background: var(--card-bg);
             padding: 16px;
             border-radius: 16px;
             border: 1px solid var(--border-color);
             margin-bottom: 20px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }
 
         .net-worth-container {
@@ -137,6 +152,17 @@
             align-items: center;
             flex-wrap: wrap;
             gap: 8px;
+        }
+
+        /* v162: single flex cluster for Base/Save/Lock — sibling of .top-bar under
+           .dashboard-header-row (see comment there). margin-left:auto is what actually pins it
+           to the right, independent of whether .top-bar is visible (mobile) or hidden (desktop,
+           ≥768px) — see the fuller history in the .dashboard-header-row comment above. */
+        .header-controls-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
         }
 
         /* v157: "Financial Assets vs Real Estate" split row, shown directly under the Portfolio
@@ -187,7 +213,9 @@
         .currency-pill {
             background: #f1f5f9;
             border: 1px solid var(--border-color);
-            padding: 12px 14px; /* Enlarged touch target for mobile */
+            padding: 9px 10px; /* v160: tightened from 12px 14px to help the top-bar's right-hand
+                                  cluster (pill + save + lock) fit on one line on narrow phones —
+                                  still a reasonable touch target. */
             border-radius: 8px;
             font-size: 0.75rem;
             font-weight: 700;
@@ -229,15 +257,23 @@
             color: var(--text-muted);
         }
 
+        /* v166: hover feedback added — deepens to a darker shade of the same primary color +
+           a faint background chip, rather than dimming its resting color to something duller.
+           This class is reused across the whole app (Settings/Categories links, section
+           collapse-toggles, etc.) as the visible "there's an action here" signal, so its
+           resting color is left alone; only the hover state changes. */
         .text-btn {
             background: none;
             border: none;
+            border-radius: 8px;
             color: var(--primary);
             font-size: 0.85rem;
             font-weight: 700;
             padding: 8px 12px; /* Touch target optimized */
             cursor: pointer;
+            transition: background-color 0.15s ease-out, color 0.15s ease-out;
         }
+        .text-btn:hover { background: #eef2ff; color: #4338ca; }
 
         .actions-bar {
             display: grid;
@@ -257,10 +293,17 @@
             flex-direction: column;
             align-items: center;
             gap: 4px;
-            transition: transform 0.1s ease, box-shadow 0.1s ease;
+            transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
             /* v156: soft-UI highlight/shadow pair on top of each button's own flat color —
                a gentle dome rather than a hard flat fill. */
             box-shadow: -2px -2px 5px var(--neu-primary-light), 3px 4px 8px rgba(15, 23, 42, 0.18);
+        }
+        /* v166: hover lift — small upward nudge + slightly deeper shadow, purely a mouse-hover
+           affordance (the existing :active bounce-back below already covers the tap/click case
+           and is untouched). */
+        .action-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: -2px -2px 5px var(--neu-primary-light), 4px 6px 12px rgba(15, 23, 42, 0.24);
         }
         .action-btn:active {
             transform: scale(0.96);
@@ -271,11 +314,15 @@
         .btn-transfer { background-color: var(--transfer-color); }
         .btn-salary { background-color: var(--salary-color); }
 
+        /* v166: layered-surface shadow (was flat/border-only) — static only, not itself a click
+           target (its clickable content is .report-card-mini-row below, which gets its own hover
+           treatment there). */
         .report-card {
             background: var(--card-bg);
             border-radius: 16px;
             border: 1.5px solid var(--border-color);
             padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }
 
         /* --- Financial Report Card, two-tile layout (v147) --- */
@@ -290,6 +337,7 @@
             border: 1.5px solid var(--border-color);
             padding: 12px;
             min-width: 0; /* allow grid children to shrink below content width */
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }
         .report-card-mini-header {
             display: flex;
@@ -329,9 +377,15 @@
             justify-content: space-between;
             align-items: baseline;
             gap: 6px;
-            padding: 3px 0;
+            padding: 3px 6px;
+            border-radius: 6px;
             cursor: pointer;
+            transition: background-color 0.15s ease-out;
         }
+        /* v166: was :active-only (opacity dim on tap) — added a proper hover surface tint so a
+           mouse user sees this row is clickable before clicking, same "surface-muted" treatment
+           as .ledger-item rows elsewhere (Accounts / Transactions). */
+        .report-card-mini-row:hover { background: #f3f4f6; }
         .report-card-mini-row:active { opacity: 0.7; }
         .report-card-mini-label { font-size: 0.68rem; font-weight: 700; white-space: nowrap; }
         .report-card-mini-value {
@@ -363,7 +417,7 @@
                 flex-direction: column;
                 align-items: flex-start;
                 gap: 0;
-                padding: 4px 0;
+                padding: 4px 6px;
             }
             .report-card-mini-label { font-size: 0.62rem; }
             .report-card-mini-value {
@@ -557,11 +611,21 @@
         .back-btn:active { background: #f1f5f9; }
 
         /* ================= SIDEBAR NAVIGATION DRAWER ================= */
+        /* v162: wraps .top-bar (hamburger+title) and .header-controls-group (Base/Save/Lock) as
+           two sibling clusters — .header-controls-group's own margin-left:auto pushes it to the
+           right, working whether .top-bar is present (mobile) or display:none (desktop, see the
+           768px media query below), so the controls stay in the top-right corner either way. */
+        .dashboard-header-row {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
         .top-bar {
             display: flex;
             align-items: center;
             gap: 12px;
-            margin-bottom: 14px;
         }
         .hamburger-btn {
             background: var(--card-bg);
@@ -631,11 +695,30 @@
             overflow-y: auto;
         }
         .sidebar-drawer.open { transform: translateX(0); }
+        /* v165 美化方案2 point 1: was a full-bleed purple gradient block that clashed against
+           the white/glass body below it ("紫头+白身" split feel). Now transparent (so it reads
+           as part of the same glass surface as the rest of the drawer) with a bottom divider,
+           and the brand color lives only on the small logo chip (.sidebar-brand-mark) instead of
+           the whole header. */
         .sidebar-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 22px 20px 18px;
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+        .sidebar-brand-mark {
+            width: 38px;
+            height: 38px;
+            border-radius: 11px;
             background: linear-gradient(135deg, var(--primary), #4338ca);
             color: #fff;
-            padding: 28px 20px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             flex-shrink: 0;
+            box-shadow: 0 3px 8px rgba(99, 102, 241, 0.35);
         }
         .sidebar-header-title {
             font-size: 1.3rem;
@@ -645,16 +728,11 @@
         .sidebar-header-sub {
             font-size: 0.75rem;
             font-weight: 600;
-            opacity: 0.85;
-            margin-top: 4px;
+            color: var(--text-muted);
+            margin-top: 2px;
         }
         .sidebar-nav { padding: 10px 0 24px; }
         .config-list-section-label {
-            font-size: 0.7rem;
-            font-weight: 800;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            color: var(--text-muted);
             padding: 14px 4px 6px;
         }
         .config-list-subgroup-label {
@@ -705,13 +783,16 @@
             padding: 2px 8px;
             margin-left: 2px;
         }
+        /* v165 美化方案2 point 5: more "breathing room" before a new section — slightly
+           smaller/wider-tracked label text, more top padding, matched with the existing
+           .sidebar-divider line already sitting just above each of these except the first. */
         .sidebar-section-label {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             font-weight: 800;
             text-transform: uppercase;
-            letter-spacing: 0.04em;
+            letter-spacing: 0.08em;
             color: var(--text-muted);
-            padding: 16px 20px 6px;
+            padding: 18px 20px 6px;
         }
         .sidebar-item {
             display: flex;
@@ -726,7 +807,13 @@
             width: 100%;
             text-align: left;
             color: var(--text-main);
+            transition: background-color 0.15s ease, color 0.15s ease;
         }
+        /* v165 美化方案2 point 6: real :hover feedback (was only a :active flash on tap/click,
+           nothing for a mouse hovering without clicking — this app also runs in a desktop
+           browser window, not just touch). :not(.active) so hovering the already-active row
+           doesn't fight with its own highlight below. */
+        .sidebar-item:hover:not(.active) { background: #f3f4f6; }
         .sidebar-item:active { background: #f1f5f9; }
         .sidebar-item.active {
             background: #eef2ff;
@@ -737,16 +824,27 @@
             content: "";
             position: absolute;
             left: 0; top: 6px; bottom: 6px;
-            width: 4px;
+            width: 3px;
             border-radius: 0 4px 4px 0;
             background: var(--primary);
         }
+        /* v165 美化方案2 point 2: swapped from system emoji (inconsistent across platforms,
+           uncontrollable color) to inline SVG line icons — 18px, stroke-width 2, stroke=
+           currentColor so each icon automatically tints to match its button's current text
+           color (muted grey at rest, primary color when active/hovered — see .sidebar-item.active
+           / :hover rules) without any extra per-state icon color rules needed. */
         .sidebar-item-icon {
-            font-size: 1.1rem;
             width: 22px;
-            text-align: center;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             flex-shrink: 0;
+            color: var(--text-muted);
         }
+        .sidebar-item-icon svg { width: 18px; height: 18px; }
+        .sidebar-item:hover .sidebar-item-icon,
+        .sidebar-item.active .sidebar-item-icon { color: inherit; }
         .sidebar-divider {
             height: 1px;
             background: var(--border-color);
@@ -788,6 +886,11 @@
                 inset 3px 3px 7px var(--neu-primary-dark),
                 inset -2px -2px 5px var(--neu-primary-light);
         }
+        /* Open state (v173, dashboard speed-dial FAB): rotating the "+" glyph 45° reads as an
+           "×" close icon with no separate icon swap needed — toggled by JS alongside showing the
+           sheet/backdrop. */
+        .fab-btn.fab-btn-open { transform: rotate(45deg); }
+        .fab-btn.fab-btn-open:active { transform: rotate(45deg) scale(0.95); }
 
         /* Floating "back to top" button (v66) — global, sits above the "+" FAB on the right edge
            so the two never overlap. Hidden by default; JS toggles it visible once the page has
@@ -895,6 +998,102 @@
             z-index: 49;
         }
 
+        /* Dashboard speed-dial FAB (v174) — icon-circle + label-pill rows, reference: a
+           competing budget app's expanding "+" FAB. Distinct from .quick-add-sheet above (which
+           keeps the Account Activity page's original wide-button style) since only the dashboard
+           got this restyle. */
+        .speed-dial-sheet {
+            position: fixed;
+            right: 20px;
+            bottom: 92px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 14px;
+            z-index: 51;
+        }
+        .speed-dial-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .speed-dial-label {
+            background: #fff;
+            color: var(--text-primary, #1e293b);
+            font-weight: 700;
+            font-size: 0.85rem;
+            padding: 8px 14px;
+            border-radius: 10px;
+            white-space: nowrap;
+            box-shadow: 0 4px 14px rgba(15, 23, 42, 0.18), -2px -2px 5px var(--neu-light), 2px 2px 5px var(--neu-dark);
+        }
+        .speed-dial-fab {
+            position: relative;
+            overflow: hidden;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            cursor: pointer;
+            /* v176: layered glass — a diagonal tri-stop gradient tint (see .sd-* rules below,
+               light-to-dark along the same hue) sits under a glossy ::before highlight, both on
+               top of the backdrop blur, so the disc reads as curved/glassy rather than a flat
+               tinted circle (v175). backdrop-filter needs -webkit- for Safari/iOS. */
+            backdrop-filter: blur(10px) saturate(180%);
+            -webkit-backdrop-filter: blur(10px) saturate(180%);
+            box-shadow:
+                0 4px 14px rgba(15, 23, 42, 0.22),
+                inset 0 1px 1px rgba(255, 255, 255, 0.5);
+            transition: transform 0.12s ease, box-shadow 0.12s ease;
+        }
+        .speed-dial-fab::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.65) 0%, rgba(255, 255, 255, 0.15) 32%, rgba(255, 255, 255, 0) 60%);
+            pointer-events: none;
+        }
+        /* Keep the icon above the ::before gloss overlay — without this, the absolutely
+           positioned pseudo-element (painted after static in-flow content within this stacking
+           context) would sit visually on top of the static <svg> icon and dim it. */
+        .speed-dial-fab svg { position: relative; z-index: 1; }
+        .speed-dial-fab:active {
+            transform: scale(0.92);
+            box-shadow: inset 2px 2px 5px rgba(15, 23, 42, 0.3), inset -2px -2px 4px rgba(255, 255, 255, 0.3);
+        }
+        .speed-dial-fab.sd-income { background: linear-gradient(135deg, rgba(52, 211, 153, 0.9) 0%, rgba(16, 185, 129, 0.62) 55%, rgba(6, 95, 70, 0.78) 100%); }
+        .speed-dial-fab.sd-expense { background: linear-gradient(135deg, rgba(248, 113, 113, 0.9) 0%, rgba(239, 68, 68, 0.62) 55%, rgba(153, 27, 27, 0.78) 100%); }
+        .speed-dial-fab.sd-transfer { background: linear-gradient(135deg, rgba(96, 165, 250, 0.9) 0%, rgba(59, 130, 246, 0.62) 55%, rgba(30, 64, 175, 0.78) 100%); }
+        .speed-dial-fab.sd-salary { background: linear-gradient(135deg, rgba(251, 191, 36, 0.9) 0%, rgba(217, 119, 6, 0.62) 55%, rgba(146, 64, 14, 0.78) 100%); }
+
+        /* Dashboard main toggle FAB, gradient-glass restyle (v177) — same layered look as the
+           4 speed-dial circles above (gradient tint + glossy highlight + backdrop blur), applied
+           via the radial+linear multi-background trick instead of a ::before overlay (simpler
+           here since the "+"/"×" glyph is plain text content, which always paints above an
+           element's own backgrounds — no z-index juggling needed, unlike the SVG-icon circles).
+           Scoped to #dashboardQuickAddFab only (ID beats .fab-btn's class rules) so every other
+           "+" FAB elsewhere in the app (Accounts/Categories/Members/etc., all sharing .fab-btn)
+           keeps its original solid purple look. */
+        #dashboardQuickAddFab {
+            background:
+                radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.65) 0%, rgba(255, 255, 255, 0.12) 32%, rgba(255, 255, 255, 0) 60%),
+                linear-gradient(135deg, rgba(129, 140, 248, 0.9) 0%, rgba(99, 102, 241, 0.62) 55%, rgba(67, 56, 202, 0.78) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            backdrop-filter: blur(10px) saturate(180%);
+            -webkit-backdrop-filter: blur(10px) saturate(180%);
+        }
+        #dashboardQuickAddFab:active {
+            background:
+                radial-gradient(circle at 30% 25%, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.1) 32%, rgba(255, 255, 255, 0) 60%),
+                linear-gradient(135deg, rgba(67, 56, 202, 0.78) 0%, rgba(99, 102, 241, 0.62) 45%, rgba(129, 140, 248, 0.9) 100%);
+        }
+
         /* Small icon-only button beside the account name on its Activity page */
         .icon-edit-btn {
             background: none;
@@ -936,10 +1135,19 @@
 
         /* Dashboard "Net Worth by Member" report rows */
         .member-networth-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px; }
+        /* v166: added layered-surface shadow (was flat/border-only) + hover lift, consistent
+           with the account-card treatment elsewhere — this row is a full click target
+           (navigates to the member's filtered view), so it gets both. */
         .member-networth-row {
             display: flex; align-items: center; justify-content: space-between; gap: 10px;
             background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
-            padding: 12px 14px; cursor: pointer; transition: opacity 0.15s;
+            padding: 12px 14px; cursor: pointer;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            transition: opacity 0.15s, box-shadow 0.15s ease-out, transform 0.15s ease-out;
+        }
+        .member-networth-row:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            transform: translateY(-1px);
         }
         .member-networth-row:active { opacity: 0.75; }
         .member-networth-row .member-row-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -968,7 +1176,9 @@
             display: flex; align-items: center; gap: 12px; padding: 10px 20px; font-weight: 700;
             font-size: 0.88rem; cursor: pointer; border: none; background: none; width: 100%;
             text-align: left; color: var(--text-main);
+            transition: background-color 0.15s ease, color 0.15s ease;
         }
+        .sidebar-member-item:hover:not(.active) { background: #f3f4f6; }
         .sidebar-member-item:active { background: #f1f5f9; }
         .sidebar-member-item.active { background: #eef2ff; color: var(--primary); }
         .sidebar-member-item .member-row-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -977,14 +1187,26 @@
         /* Sidebar "Add <type>" shortcuts under Financial Accounts — one per account
            group/sub-group, only rendered for types that already have at least one account
            (see renderSidebarAccountTypeShortcuts). Indented further than the parent button so
-           they read as a nested sub-list. */
+           they read as a nested sub-list.
+           v165 美化方案2 point 4: wrapping #sidebarAccountTypeShortcuts (below) now carries a
+           left "tree line" + its own left margin, so this item's own padding-left is reduced
+           from 40px to 16px — added together (24px margin + 16px padding) that still lands text
+           at the same ~40px depth as before, just with a visible guide line down the left edge
+           instead of bare whitespace. Font size nudged down slightly (0.82rem → 0.8rem) for a
+           touch more contrast against the 0.92rem parent item. */
         .sidebar-account-type-item {
-            display: flex; align-items: center; gap: 10px; padding: 8px 20px 8px 40px; font-weight: 600;
-            font-size: 0.82rem; cursor: pointer; border: none; background: none; width: 100%;
+            display: flex; align-items: center; gap: 10px; padding: 8px 20px 8px 16px; font-weight: 600;
+            font-size: 0.8rem; cursor: pointer; border: none; background: none; width: 100%;
             text-align: left; color: var(--text-muted);
+            transition: background-color 0.15s ease, color 0.15s ease;
         }
+        .sidebar-account-type-item:hover:not(.active) { background: #f3f4f6; }
         .sidebar-account-type-item:active { background: #f1f5f9; }
         .sidebar-account-type-item.active { background: #eef2ff; color: var(--primary); font-weight: 700; }
+        #sidebarAccountTypeShortcuts {
+            margin-left: 24px;
+            border-left: 2px solid #e0e7ff;
+        }
 
         /* Color swatch picker (member form) */
         .color-swatch-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 8px 0 4px; }
@@ -993,6 +1215,14 @@
             box-shadow: 0 0 0 1px rgba(0,0,0,0.08) inset;
         }
         .color-swatch.selected { border-color: var(--text-main); }
+
+        /* Background-theme swatches (Setting page) — these preset colors are pale pastels,
+           so (unlike the saturated member-color swatches) they need a visible resting border
+           to read as a chip against the white settings-panel card, plus room for a label. */
+        .bg-theme-swatch-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 56px; }
+        .bg-theme-swatch-wrap .color-swatch { box-shadow: 0 0 0 1.5px var(--border-color) inset; }
+        .bg-theme-swatch-wrap .color-swatch.selected { box-shadow: none; }
+        .bg-theme-swatch-label { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-align: center; line-height: 1.2; }
 
         /* Net worth card on a member/joint filtered page */
         .member-page-networth-card {
@@ -1029,11 +1259,14 @@
             .print-fab-btn { left: 356px; }
         }
 
+        /* v166: layered-surface shadow — static (this container isn't itself a click target;
+           its children .ledger-item rows below get their own hover treatment). */
         .ledger-container {
             background: var(--card-bg);
             border: 1.5px solid var(--border-color);
             border-radius: 16px;
             overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }
 
         .ledger-item {
@@ -1043,8 +1276,13 @@
             padding: 16px;
             border-bottom: 1px solid var(--border-color);
             cursor: pointer;
-            transition: background 0.1s;
+            transition: background-color 0.15s ease-out;
         }
+        /* v166: was :active-only (background flash on tap, no separate hover). This same class
+           renders both the Dashboard's pinned Accounts widget rows AND the main Transactions
+           list rows (see renderPinnedAccountsWidget / comment on .ledger-item-tx below), so one
+           fix here covers both. */
+        .ledger-item:hover { background: #f3f4f6; }
         .ledger-item:active { background: #f1f5f9; }
         .item-left { display: flex; flex-direction: column; gap: 2px; max-width: 65%; }
         .item-name { font-weight: 600; font-size: 0.9rem; }
@@ -1148,6 +1386,17 @@
             -webkit-overflow-scrolling: touch; /* Butter-smooth scrolling on iOS/Android */
         }
         .form-row { margin-bottom: 12px; }
+        /* v163 美化方案 point 4: card wrapper for the two Default Account dropdowns — see markup
+           comment in index.html (#defaultAccountsCard) for why its visibility is toggled as a
+           whole rather than relying only on its children's existing hidden-toggles. */
+        .default-accounts-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            margin-bottom: 18px;
+        }
         .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
         label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
         /* Icon-beside-field rows (Account / Date / Description / Notes on the transaction form) —
@@ -1239,15 +1488,122 @@
         button.form-input.account-picker-btn { width:100%; padding:12px; border:1.5px solid var(--border-color); border-radius:8px; font-size:0.9rem; background:#f8fafc; height:44px; color:var(--text-main); display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; font-weight:700; cursor:pointer; }
         .account-picker-chevron { opacity:0.55; flex:0 0 auto; }
         .account-picker-btn span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
-        .config-list { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-        .config-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px; background: #f8fafc; border-radius: 8px; border: 1px solid var(--border-color); }
+        .config-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+        /* v163 美化方案 point 1: real card treatment (was flat — same background as the page
+           itself, `#f8fafc`, which is exactly why rows disappeared into the background instead
+           of reading as cards). Applies app-wide (Categories, Members, etc. all use this same
+           class), not just Accounts. */
+        .config-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 14px;
+            background: var(--card-bg);
+            border-radius: 14px;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
+        }
+        .config-item:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+            transform: translateY(-1px);
+            border-color: #c7d2fe;
+        }
         /* Fund holding listed under its Unit Trust account row on the Accounts page — indented,
-           lighter background/border so it reads as a child of the account above it. */
-        .fund-subrow { margin-left: 18px; padding: 8px 12px; background: #fff; font-size: 0.8rem; }
+           lighter background/border so it reads as a child of the account above it. Deliberately
+           flatter than .config-item above (no shadow/hover-lift) — it's already visually nested
+           via margin-left, so adding its own elevation on top would look like a card floating
+           inside a card. */
+        .fund-subrow {
+            margin-left: 18px;
+            padding: 8px 12px;
+            background: #fff;
+            font-size: 0.8rem;
+            box-shadow: none;
+            border-radius: 8px;
+        }
+        .fund-subrow:hover { box-shadow: none; transform: none; border-color: var(--border-color); }
+        /* v163: account row avatar — deterministic gradient per account name, same hash→palette
+           idiom as currencyBadgeColor()/categoryIconBgColor() in ledger.js, so a given account
+           always gets the same two colors across reloads without needing a stored color field. */
+        .account-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 800;
+            font-size: 1rem;
+            color: #fff;
+        }
+        /* v163: Accounts-page row layout — avatar + name/balance/meta stacked in the middle +
+           action icons on the right. align-items:flex-start (overriding the base .config-item's
+           align-items:center via the extra .account-card class) since the middle column can run
+           to several lines (owner tags, linked-account note, excluded flag, credit card due) and
+           the avatar/actions should sit at the top of the row, not vertically centered across
+           all of that. */
+        .config-item.account-card { align-items: flex-start; gap: 12px; }
+        .account-card-body { flex: 1; min-width: 0; }
+        .account-card-toprow {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 10px;
+        }
+        .account-card-name {
+            font-weight: 700;
+            font-size: 0.95rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            min-width: 0;
+        }
+        .account-card-balance {
+            font-weight: 600;
+            font-size: 1.05rem;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .account-card-metarow { margin-top: 3px; }
+        /* v164: Account No./Ref — placed right under the name/type badge, ahead of owner tags
+           etc. in .account-card-subline below. */
+        .account-card-refline {
+            margin-top: 3px;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+        .account-card-subline { margin-top: 4px; }
+        .account-card-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+        /* v163: group header pill (was plain uppercase text) — icon + colored background, same
+           icons as the Add Account "Group" dropdown so the two stay visually consistent. */
+        .group-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 800;
+            letter-spacing: 0.01em;
+        }
         /* Collapse/expand caret (v62) on an Accounts-page row with fund/currency/FD-placement
            subrows underneath it — plain button reset, sized as a small tap target distinct from
            the row's own "›" navigation chevron beside it. */
         .subrow-toggle-btn { border: none; background: transparent; color: var(--text-muted); font-size: 0.85rem; line-height: 1; padding: 4px; cursor: pointer; }
+        /* v165 美化方案2 point 4: rotating chevron for the sidebar's "Financial Accounts"
+           expand/collapse toggle specifically (its markup now holds a static SVG chevron — see
+           index.html — instead of a swapped ▾/▸ character; only that button gets the "collapsed"
+           class, toggled in toggleSidebarAccountShortcuts()/renderSidebarAccountTypeShortcuts()).
+           The other .subrow-toggle-btn uses elsewhere (Accounts-page fund/currency subrows,
+           Portfolio detail) are untouched — they still swap glyphs via textContent and never
+           get this class. */
+        .subrow-toggle-btn .chevron-icon { transition: transform 0.2s ease; }
+        .subrow-toggle-btn.collapsed .chevron-icon { transform: rotate(-90deg); }
         .util-row { display: flex; gap: 8px; margin-top: 24px; }
         .btn-util { flex: 1; padding: 12px; font-size: 0.8rem; border-radius: 8px; background: #e2e8f0; border: none; font-weight: 600; cursor: pointer; }
 
@@ -1353,7 +1709,11 @@
             padding: 10px;
         }
         .lock-btn-header {
-            background: none; border: none; font-size: 1.2rem; cursor: pointer; padding: 6px; margin-left: 4px;
+            /* v160: dropped the 4px margin-left — .header-controls-group's own `gap` already
+               spaces these out, so the margin was adding redundant width on top of that gap,
+               part of why the cluster didn't fit on one line on narrow phones. Padding trimmed
+               6px → 5px for the same reason. */
+            background: none; border: none; font-size: 1.2rem; cursor: pointer; padding: 5px;
         }
         .numpad-grid {
             display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 12px;
@@ -1410,7 +1770,7 @@
                div/span elements for actual transaction data specifically, so this blanket
                button rule can never hide real content, only controls). */
             button, input[type="file"], select, .sidebar-overlay, .sidebar-drawer, #lockOverlay,
-            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet, .print-filter-row {
+            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet, .speed-dial-sheet, .print-filter-row {
                 display: none !important;
             }
             /* Report pages replace their <select> filters (hidden above) with a plain-text
@@ -1478,6 +1838,25 @@
             a[href]::after { content: none !important; }
         }
     </style>
+    <!-- v179: apply any saved background-theme choice before first paint, so the page never
+         flashes the default slate background and then jumps to the user's chosen tint. Only
+         --bg-color and the browser-chrome theme-color are touched here; every other design
+         token (glass, neumorphism, card colors, data colors) is untouched, so the rest of the
+         v156+ glass/neumorphism styling is unaffected regardless of which background is picked. -->
+    <script>
+        (function () {
+            try {
+                var saved = JSON.parse(localStorage.getItem("ledgerBgTheme"));
+                if (saved && saved.bg) {
+                    document.documentElement.style.setProperty("--bg-color", saved.bg);
+                    if (saved.themeColor) {
+                        var m = document.querySelector('meta[name="theme-color"]');
+                        if (m) m.setAttribute("content", saved.themeColor);
+                    }
+                }
+            } catch (e) {}
+        })();
+    </script>
 </head>
 <body>
 
@@ -1494,23 +1873,32 @@
     <div class="sidebar-overlay" id="sidebarOverlay" data-click="closeSidebar"></div>
     <div class="sidebar-drawer" id="sidebarDrawer">
         <div class="sidebar-header">
-            <div class="sidebar-header-title">💰 Ledger</div>
-            <div class="sidebar-header-sub">Multi-Currency Financial Tracker</div>
+            <!-- v165 美化方案2 point 1: brand color now lives only on this chip, not the whole
+                 header bar (reusing the "$" mark already shown in the browser tab title). -->
+            <div class="sidebar-brand-mark">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </div>
+            <div>
+                <div class="sidebar-header-title">Ledger</div>
+                <div class="sidebar-header-sub">Multi-Currency Financial Tracker</div>
+            </div>
         </div>
         <nav class="sidebar-nav">
             <div class="sidebar-section-label">Overview</div>
             <button class="sidebar-item" data-click="sidebarGo" data-target="workspace">
-                <span class="sidebar-item-icon">🏠</span> Dashboard
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1V10"/></svg></span> Dashboard
             </button>
             <div class="sidebar-item-row" style="display:flex; align-items:center;">
                 <button class="sidebar-item" style="flex:1;" data-click="navigateToAccountsPage">
-                    <span class="sidebar-item-icon">🏦</span> Financial Accounts
+                    <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="22" x2="21" y2="22"/><line x1="6" y1="18" x2="6" y2="11"/><line x1="10" y1="18" x2="10" y2="11"/><line x1="14" y1="18" x2="14" y2="11"/><line x1="18" y1="18" x2="18" y2="11"/><polygon points="12 2 21 8 3 8"/></svg></span> Financial Accounts
                 </button>
-                <button type="button" class="subrow-toggle-btn" id="sidebarAccountShortcutsToggle" data-click="toggleSidebarAccountShortcuts" aria-label="Collapse account type list" title="Collapse account type list">▾</button>
+                <button type="button" class="subrow-toggle-btn" id="sidebarAccountShortcutsToggle" data-click="toggleSidebarAccountShortcuts" aria-label="Collapse account type list" title="Collapse account type list">
+                    <svg class="chevron-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
             </div>
             <div id="sidebarAccountTypeShortcuts"></div>
             <button class="sidebar-item" data-click="navigateToNavUpdatePage">
-                <span class="sidebar-item-icon">📊</span> Daily NAV Update
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg></span> Daily NAV Update
             </button>
             <!-- v126: "Transactions" — added on request. Wired to the existing "all-ledger"
                  sidebarGo() target (navigateToLedgerPage("all") → the unfiltered "Portfolio
@@ -1519,25 +1907,25 @@
                  currently being viewed — see navigateToLedgerPage()'s activeLedgerAccountView
                  handling in ledger.js) but had no direct nav entry point until now. -->
             <button class="sidebar-item" data-click="sidebarGo" data-target="all-ledger">
-                <span class="sidebar-item-icon">📒</span> Transactions
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span> Transactions
             </button>
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
             <button class="sidebar-item" data-click="sidebarGo" data-target="spending-breakdown">
-                <span class="sidebar-item-icon">🥧</span> Spending Breakdown
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span> Spending Breakdown
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="income-breakdown">
-                <span class="sidebar-item-icon">📈</span> Income Breakdown
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg></span> Income Breakdown
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="portfolio-report">
-                <span class="sidebar-item-icon">🧺</span> Unit Trust Portfolio
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="20" height="14" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg></span> Unit Trust Portfolio
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="owner-networth-report">
-                <span class="sidebar-item-icon">🏛️</span> Financial Assets vs Real Estate
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg></span> Financial Assets vs Real Estate
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="currency-report">
-                <span class="sidebar-item-icon">🌐</span> Net Worth by Currency
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span> Net Worth by Currency
             </button>
 
             <div class="sidebar-divider"></div>
@@ -1546,7 +1934,7 @@
 
             <div class="sidebar-divider"></div>
             <button class="sidebar-item" data-click="navigateToDataSecurityPage">
-                <span class="sidebar-item-icon">⚙️</span> Setting
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span> Setting
             </button>
         </nav>
     </div>
@@ -1597,20 +1985,32 @@
     <!-- ================= PAGE 1: PORTFOLIO MAIN WORKSPACE ================= -->
     <div id="page-workspace" class="page">
         <header>
-            <div class="top-bar">
-                <button class="hamburger-btn" data-click="openSidebar" aria-label="Open menu">☰</button>
-                <span class="top-bar-title">Ledger</span>
+            <!-- v162: header-controls-group pulled back OUT of .top-bar to be its sibling under
+                 .dashboard-header-row instead. Reason: @media (min-width: 768px) further down
+                 does `.top-bar { display:none }` on desktop, since the sidebar there is
+                 permanently docked and already shows "Ledger" branding, making the hamburger +
+                 title redundant. When header-controls-group (Base/Save/Lock) was nested INSIDE
+                 .top-bar (v160), that same rule hid it too — a bug, since those controls have no
+                 desktop equivalent and should always stay visible. Keeping it as a sibling means
+                 the desktop rule only ever touches the hamburger+title, never the controls. -->
+            <div class="dashboard-header-row">
+                <div class="top-bar">
+                    <button class="hamburger-btn" data-click="openSidebar" aria-label="Open menu">☰</button>
+                    <span class="top-bar-title">Ledger</span>
+                </div>
+                <div class="header-controls-group">
+                    <button class="currency-pill" data-click="openCurrencyConfig" title="Base currency" aria-label="Base currency">
+                        <span id="currentBasePill">USD</span> ⚙
+                    </button>
+                    <button class="lock-btn-header" title="Export &amp; Import" aria-label="Export and Import" data-click="navigateToBackupPageFromDashboard">💾</button>
+                    <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
+                </div>
             </div>
             <div class="net-worth-container">
                 <div>
                     <h1 id="netWorthDisplay">0.00</h1>
                     <p style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">Portfolio Net Worth</p>
                 </div>
-                <button class="currency-pill" data-click="openCurrencyConfig">
-                    Base: <span id="currentBasePill">USD</span> ⚙
-                </button>
-                <button class="lock-btn-header" title="Export &amp; Import" aria-label="Export and Import" data-click="navigateToBackupPageFromDashboard">💾</button>
-                <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
             </div>
 
             <!-- v157: Financial Assets / Real Estate split — only shown when at least one Real
@@ -1635,25 +2035,6 @@
         <div class="member-networth-rows" id="memberNetWorthRows"></div>
 
         <div id="fdReminderContainer"></div>
-
-        <div class="section-header" style="margin-top: 0;">
-            <span class="section-title">Quick Transaction Entry</span>
-            <button class="text-btn" data-click="navigateToCategoriesPage">🏷 Categories</button>
-        </div>
-        <div class="actions-bar">
-            <button class="action-btn btn-income" data-click="openTransactionForm" data-type="income">
-                <span>🟢 Income</span>
-            </button>
-            <button class="action-btn btn-expense" data-click="openTransactionForm" data-type="expense">
-                <span>🔴 Expense</span>
-            </button>
-            <button class="action-btn btn-transfer" data-click="openTransactionForm" data-type="transfer">
-                <span>🔄 Transfer</span>
-            </button>
-            <button class="action-btn btn-salary" data-click="openSalaryEntryForm">
-                <span>💰 Salary</span>
-            </button>
-        </div>
 
         <div class="section-header">
             <span class="section-title">Financial Report Card</span>
@@ -1745,6 +2126,39 @@
             </div>
         </div>
         <div class="ledger-container" id="recentTxList"></div>
+
+        <!-- Quick-add speed-dial FAB (v173) — dashboard's "Quick Transaction Entry" moved from a
+             static 4-button row to a floating "+" that expands into the Income/Expense/Transfer/
+             Salary options, mirroring the existing Account Activity page pattern above
+             (ledgerQuickAddSheet, v34) so both use the same visual language. -->
+        <div id="dashboardQuickAddBackdrop" class="quick-add-backdrop" style="display:none;" data-click="closeDashboardQuickAddSheet"></div>
+        <div id="dashboardQuickAddSheet" class="speed-dial-sheet" style="display:none;">
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Transfer money</span>
+                <button class="speed-dial-fab sd-transfer" data-click="dashboardQuickAddChooseAction" data-action="transfer" aria-label="Transfer money" title="Transfer money">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                </button>
+            </div>
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Salary</span>
+                <button class="speed-dial-fab sd-salary" data-click="dashboardQuickAddChooseAction" data-action="salary" aria-label="Salary" title="Salary">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+                </button>
+            </div>
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Income</span>
+                <button class="speed-dial-fab sd-income" data-click="dashboardQuickAddChooseAction" data-action="income" aria-label="Income" title="Income">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+            </div>
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Expense</span>
+                <button class="speed-dial-fab sd-expense" data-click="dashboardQuickAddChooseAction" data-action="expense" aria-label="Expense" title="Expense">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+            </div>
+        </div>
+        <button class="fab-btn" id="dashboardQuickAddFab" data-click="toggleDashboardQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
     </div>
 
 
@@ -1757,6 +2171,7 @@
                     <h3 id="ledgerTargetTitle" style="font-weight:800; font-size:1.2rem;">Account Ledger</h3>
                     <button id="ledgerTargetEditBtn" class="icon-edit-btn" style="display:none;" data-click="editAccountFromLedgerHeader" title="Edit account credentials">✏️</button>
                 </div>
+                <div id="ledgerTargetOwnerTags" style="display:none; gap:8px; margin:2px 0 1px;"></div>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
             </div>
         </div>
@@ -1853,24 +2268,31 @@
             </div>
         </div>
 
-        <div class="section-header" id="defaultPaymentAccountSection" style="margin-top:0;">
-            <span class="section-title">Default Payment Account</span>
-        </div>
-        <div class="form-row" id="defaultPaymentAccountRow" style="margin-bottom:18px;">
-            <button type="button" id="defaultPaymentAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultPaymentAccountSelect" data-title="Default Payment Account">
-                <span id="defaultPaymentAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-            </button>
-            <select id="defaultPaymentAccountSelect" style="display:none;" data-change="saveDefaultPaymentAccount"></select>
-        </div>
+        <!-- v163 美化方案 point 4: both Default Account dropdowns wrapped in one card (was two
+             bare dropdowns sitting directly on the page background). Wrapper's own visibility is
+             toggled in renderAccountsPage() alongside the existing per-element toggles below, so
+             it collapses to nothing (not an empty white box) whenever a sidebar filter narrows
+             the list to one group/sub-group. -->
+        <div class="default-accounts-card" id="defaultAccountsCard">
+            <div class="section-header" id="defaultPaymentAccountSection" style="margin-top:0;">
+                <span class="section-title">Default Payment Account</span>
+            </div>
+            <div class="form-row" id="defaultPaymentAccountRow" style="margin-bottom:18px;">
+                <button type="button" id="defaultPaymentAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultPaymentAccountSelect" data-title="Default Payment Account">
+                    <span id="defaultPaymentAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="defaultPaymentAccountSelect" style="display:none;" data-change="saveDefaultPaymentAccount"></select>
+            </div>
 
-        <div class="section-header" id="defaultReceiveAccountSection">
-            <span class="section-title">Default Receive Account</span>
-        </div>
-        <div class="form-row" id="defaultReceiveAccountRow" style="margin-bottom:18px;">
-            <button type="button" id="defaultReceiveAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultReceiveAccountSelect" data-title="Default Receive Account">
-                <span id="defaultReceiveAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-            </button>
-            <select id="defaultReceiveAccountSelect" style="display:none;" data-change="saveDefaultReceiveAccount"></select>
+            <div class="section-header" id="defaultReceiveAccountSection">
+                <span class="section-title">Default Receive Account</span>
+            </div>
+            <div class="form-row" id="defaultReceiveAccountRow" style="margin-bottom:0;">
+                <button type="button" id="defaultReceiveAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultReceiveAccountSelect" data-title="Default Receive Account">
+                    <span id="defaultReceiveAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="defaultReceiveAccountSelect" style="display:none;" data-change="saveDefaultReceiveAccount"></select>
+            </div>
         </div>
 
         <div class="section-header">
@@ -1887,7 +2309,7 @@
     <!-- ================= PAGE 5: ALL CATEGORIES ================= -->
     <div id="page-categories" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">Categories</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">All income &amp; spending categories</p>
@@ -2311,8 +2733,20 @@
             </div>
         </div>
         <div class="config-list">
+            <div class="config-item" style="cursor:pointer;" data-click="toggleBgThemeSettings">
+                <span>🎨 <strong>Background Theme</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Applies only to the page background — cards, glass panels and data colors stay the same.</p>
+                <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
+            </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
                 <span>👪 <strong>Manage Members</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="navigateToCategoriesPage">
+                <span>🏷️ <strong>Manage Categories</strong></span>
                 <span style="color:var(--text-muted);">›</span>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="backup">
@@ -2514,6 +2948,7 @@
                     <select id="newAccGroup" class="form-input" data-change="handleAccGroupChange">
                         <option value="Bank/Cash">🏦 Bank/Cash</option>
                         <option value="Credit Card">💳 Credit Card</option>
+                        <option value="Multi-Currency">💱 Multi-Currency</option>
                         <option value="Investment">📈 Investment</option>
                         <option value="Real Estate">🏠 Real Estate</option>
                         <option value="Other Assets">💼 Other Assets</option>

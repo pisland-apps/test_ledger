@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v158";
-        const APP_VERSION_DATE = "2026-08-28";
+        const APP_VERSION = "v178";
+        const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -61,6 +61,21 @@
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
 
+        // v179: page-background presets (Setting > Background Theme). Deliberately narrow in
+        // scope — each preset only overrides --bg-color (and the browser-chrome theme-color
+        // meta tag to match). Cards, glass panels, borders, text and all data colors (income/
+        // expense/transfer/salary) keep their existing tokens untouched, so every v156+ glass/
+        // neumorphism style stays exactly as designed no matter which background is chosen.
+        const BG_THEMES = [
+            { id: "default", name: "Slate",    bg: "#f8fafc", themeColor: "#4f46e5" },
+            { id: "sand",    name: "Sand",      bg: "#faf5ec", themeColor: "#b9863f" },
+            { id: "mint",    name: "Mint",      bg: "#f1faf6", themeColor: "#3f9d76" },
+            { id: "lavender",name: "Lavender",  bg: "#f6f4fc", themeColor: "#7c6bc4" },
+            { id: "sky",     name: "Sky",       bg: "#eff7fc", themeColor: "#4a90c2" },
+            { id: "blush",   name: "Blush",     bg: "#fdf3f2", themeColor: "#c97f7f" },
+        ];
+        const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
+
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
         // saved before this existed default to "Bank/Cash" wherever a group is read.
@@ -74,7 +89,7 @@
         // held/paid, which are custodial in nature, not trade debts. "Other Assets"/"Other
         // Liabilities" are the correct general-purpose catch-alls for that. Existing accounts
         // still saved under the old AP/AR groups are remapped by migrateAccountGroupRename().
-        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Investment", "Real Estate", "Other Assets", "Bank Loan", "Other Liabilities"];
+        const ACCOUNT_GROUPS = ["Bank/Cash", "Credit Card", "Multi-Currency", "Investment", "Real Estate", "Other Assets", "Bank Loan", "Other Liabilities"];
         const DEFAULT_ACCOUNT_GROUP = ACCOUNT_GROUPS[0];
 
         // Sub-groups (v39) — optional, per-Group breakdown so e.g. "Investment" can be split
@@ -173,6 +188,45 @@
         function currencyBadgeHTML(code) {
             const { bg, fg } = currencyBadgeColor(code);
             return `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:${bg}; color:${fg}; font-weight:bold;">${escapeHtml(code)}</span>`;
+        }
+
+        // v163 美化方案 point 2: deterministic gradient-avatar initial for an Accounts-page row —
+        // same hash→palette idiom as currencyBadgeColor() above, so a given account name always
+        // lands on the same two colors across reloads without needing a stored color field on
+        // the account itself.
+        const ACCOUNT_AVATAR_GRADIENTS = [
+            ["#6366f1", "#8b5cf6"], ["#ec4899", "#f472b6"], ["#f59e0b", "#fb923c"],
+            ["#10b981", "#14b8a6"], ["#0ea5e9", "#38bdf8"], ["#ef4444", "#f87171"],
+            ["#8b5cf6", "#c084fc"], ["#0891b2", "#22d3ee"],
+        ];
+        function accountAvatarHTML(name) {
+            const str = String(name || "").trim();
+            let hash = 0;
+            for (let i = 0; i < str.length; i++) hash = (hash * 31 + str.charCodeAt(i)) >>> 0;
+            const [c1, c2] = ACCOUNT_AVATAR_GRADIENTS[hash % ACCOUNT_AVATAR_GRADIENTS.length];
+            const initial = escapeHtml((str.charAt(0) || "?").toUpperCase());
+            return `<div class="account-avatar" style="background:linear-gradient(135deg, ${c1}, ${c2});">${initial}</div>`;
+        }
+
+        // v163 美化方案 point 5: icon + color for an account Group's section-header pill on the
+        // Accounts page — same emoji already used in the Add/Edit Account "Group" dropdown
+        // (index.html), so the two stay visually consistent. Falls back to a neutral folder icon
+        // for any group name not in this fixed list (there currently isn't one — ACCOUNT_GROUPS
+        // above is a closed set — but this keeps the pill from rendering blank/broken if that
+        // ever changes).
+        const ACCOUNT_GROUP_BADGE = {
+            "Bank/Cash": { icon: "🏦", bg: "#e0e7ff", fg: "#4338ca" },
+            "Credit Card": { icon: "💳", bg: "#fce7f3", fg: "#9d174d" },
+            "Multi-Currency": { icon: "💱", bg: "#ccfbf1", fg: "#0f766e" },
+            "Investment": { icon: "📈", bg: "#dbeafe", fg: "#1d4ed8" },
+            "Real Estate": { icon: "🏠", bg: "#ffedd5", fg: "#9a3412" },
+            "Other Assets": { icon: "💼", bg: "#e0f2fe", fg: "#0369a1" },
+            "Bank Loan": { icon: "💸", bg: "#fee2e2", fg: "#b91c1c" },
+            "Other Liabilities": { icon: "🧾", bg: "#fef3c7", fg: "#92400e" },
+        };
+        function accountGroupBadgeHTML(group) {
+            const info = ACCOUNT_GROUP_BADGE[group] || { icon: "🗂️", bg: "#f1f5f9", fg: "#475569" };
+            return `<span class="group-pill" style="background:${info.bg}; color:${info.fg};">${info.icon} ${escapeHtml(group)}</span>`;
         }
 
         // v150: same deterministic hash-to-palette approach as currencyBadgeColor() above, for the
@@ -2035,6 +2089,34 @@
             openTransactionForm(el.dataset.type, null, presetAccountId);
         }
 
+        // Dashboard "Quick Transaction Entry" speed-dial FAB (v173) — same open/close/choose
+        // shape as the Account Activity page's quick-add sheet above, but with a 4th option
+        // (Salary, routing to openSalaryEntryForm() instead of openTransactionForm()) and no
+        // preset account, matching what the old 4-button actions-bar row used to do.
+        function toggleDashboardQuickAddSheet() {
+            const sheet = document.getElementById("dashboardQuickAddSheet");
+            const isOpen = sheet.style.display === "flex";
+            sheet.style.display = isOpen ? "none" : "flex";
+            document.getElementById("dashboardQuickAddBackdrop").style.display = isOpen ? "none" : "block";
+            document.getElementById("dashboardQuickAddFab").classList.toggle("fab-btn-open", !isOpen);
+        }
+
+        function closeDashboardQuickAddSheet() {
+            document.getElementById("dashboardQuickAddSheet").style.display = "none";
+            document.getElementById("dashboardQuickAddBackdrop").style.display = "none";
+            document.getElementById("dashboardQuickAddFab").classList.remove("fab-btn-open");
+        }
+
+        function dashboardQuickAddChooseAction(el) {
+            closeDashboardQuickAddSheet();
+            const action = el.dataset.action;
+            if (action === "salary") {
+                openSalaryEntryForm();
+            } else {
+                openTransactionForm(action);
+            }
+        }
+
         function navigateToCategoryPage(categoryName, backTarget = "workspace", year = "all", month = "all") {
             if (backTarget === "workspace") workspaceScrollY = window.scrollY;
             activeCategoryView = categoryName;
@@ -2762,6 +2844,13 @@
                     ? "Add Another Currency (optional)"
                     : "Opening Balances (optional)";
                 if (!isEditing && document.getElementById("multiOpeningRows").children.length === 0) addMultiCurrencyRow();
+                // v171: new-account creation only defaults Group to "Multi-Currency" for
+                // convenience, same precedent as Credit Card above — never overrides it while
+                // editing an existing account, in case it was deliberately grouped elsewhere.
+                if (!isEditing) {
+                    document.getElementById("newAccGroup").value = "Multi-Currency";
+                    handleAccGroupChange();
+                }
             } else if (type === "fd") {
                 fdBtn.style.background = "var(--transfer-color)"; fdBtn.style.color = "white";
                 hint.textContent = "Just choose the type and name — currency, principal, tenure, rate, and maturity date are captured per placement below (or later, whenever you transfer funds in).";
@@ -3296,6 +3385,7 @@
             // slice — the Default Payment Account selector is unrelated to any single group/
             // sub-group, so it's hidden whenever a filter narrowed the list, not just shown
             // unconditionally at the top of every Accounts view.
+            document.getElementById("defaultAccountsCard").classList.toggle("hidden", !!filter);
             document.getElementById("defaultPaymentAccountSection").classList.toggle("hidden", !!filter);
             document.getElementById("defaultPaymentAccountRow").classList.toggle("hidden", !!filter);
             document.getElementById("defaultReceiveAccountSection").classList.toggle("hidden", !!filter);
@@ -3335,7 +3425,7 @@
                 if (group !== lastGroup) {
                     flushSubgroupTotal();
                     flushGroupTotal();
-                    html += `<div class="config-list-section-label">${escapeHtml(group)}</div>`;
+                    html += `<div class="config-list-section-label">${accountGroupBadgeHTML(group)}</div>`;
                     lastGroup = group;
                     lastSubgroup = undefined;
                 }
@@ -3366,15 +3456,15 @@
                     // per-currency breakdown moves to its own subrow list below (same pattern as
                     // Unit Trust's fund subrows), each line up on its own row and clickable
                     // through to that currency's own Activity page.
-                    balSummary = `<strong>Base ${escapeHtml(baseCurrency)}: ${formatBalanceHTML(baseVal, baseCurrency)}</strong>`;
+                    balSummary = `≈ ${formatBalanceHTML(baseVal, baseCurrency)}`;
                 } else if (a.type === "fd" || a.type === "unittrust") {
                     const baskets = nativeBalances[a.id];
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
                         ? '<span style="color:var(--text-muted);">No funds yet</span>'
-                        : currencies.map(curr => `<strong>${formatBalanceHTML(baskets[curr], curr)}</strong>`).join(" + ");
+                        : currencies.map(curr => formatBalanceHTML(baskets[curr], curr)).join(" + ");
                 } else {
-                    balSummary = `<strong>${formatBalanceHTML(nativeBalances[a.id], a.currency)}</strong>`;
+                    balSummary = formatBalanceHTML(nativeBalances[a.id], a.currency);
                 }
 
                 groupTotal += baseVal;
@@ -3395,7 +3485,13 @@
                     ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
-                const extraInfoLine = accountExtraInfoLine(a, nativeBalances);
+                // v164: Account No./Ref shown right under the account name (was bundled at the
+                // bottom of the card via accountExtraInfoLine's own refLine) — includeRef:false
+                // below so it isn't rendered twice.
+                const acctRefLine = a.accountRef
+                    ? `<div class="account-card-refline">${escapeHtml(a.accountRef)}</div>`
+                    : "";
+                const extraInfoLine = accountExtraInfoLine(a, nativeBalances, false);
 
                 // Credit Card (v127): "Amount due" line + 💳 Pay button, both only shown when
                 // there's actually something owed (a card paid off in full, or never used, has
@@ -3508,11 +3604,17 @@
                     : "";
 
                 html += `
-                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
-                        <span>
-                            <strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}
-                            <br>${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}
-                        </span>
+                    <div class="config-item account-card" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
+                        ${accountAvatarHTML(a.name)}
+                        <div class="account-card-body">
+                            <div class="account-card-toprow">
+                                <span class="account-card-name">${escapeHtml(a.name)}</span>
+                                <span class="account-card-balance">${balSummary}</span>
+                            </div>
+                            <div class="account-card-metarow">${typeBadge}</div>
+                            ${acctRefLine}
+                            <div class="account-card-subline">${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}</div>
+                        </div>
                         <span style="display:flex; align-items:center; gap:6px;">
                             ${ccPayBtnHTML}
                             ${subrowToggleHTML}
@@ -4598,13 +4700,17 @@
         // under an account's name wherever it's listed. Shared by the Accounts page, a member's
         // own Accounts list, and the account's own Activity page header banner so all three stay
         // in sync automatically instead of drifting out of step with separately-written markup.
-        function accountExtraInfoLine(a, nativeBalances) {
+        // v164: `includeRef` (default true, unchanged for existing callers) lets a caller that
+        // wants to show the Account No./Ref in its own separate spot — see the Accounts-page
+        // .account-card-refline below the account name — opt out of it here, so it isn't also
+        // repeated in whatever this function returns for the rest of the row/banner.
+        function accountExtraInfoLine(a, nativeBalances, includeRef = true) {
             const group = a.group || DEFAULT_ACCOUNT_GROUP;
             // Account No. / Ref (v130): plain informational text, independent of group/type, so
             // it's built separately here and prepended ahead of whichever type-specific line (if
             // any) applies below, rather than living inside one of those mutually-exclusive
             // branches.
-            const refLine = a.accountRef ? `<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.accountRef)}</span>` : "";
+            const refLine = (includeRef && a.accountRef) ? `<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.accountRef)}</span>` : "";
             if (a.type === "creditcard" && (a.creditLimit || a.statementDay || a.paymentDueDay)) {
                 const bits = [];
                 if (a.creditLimit) bits.push(`Limit ${formatBalanceHTML(a.creditLimit, a.currency || baseCurrency)}`);
@@ -4906,6 +5012,52 @@
             document.querySelectorAll("#memberColorSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.color === el.dataset.color));
         }
 
+        // --- v179: Background Theme (Setting page) -----------------------------------------
+        function getSavedBgThemeId() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(BG_THEME_STORAGE_KEY));
+                return (saved && saved.id) || "default";
+            } catch (e) { return "default"; }
+        }
+
+        // Applies a preset's --bg-color (and matching theme-color meta tag) to the live page,
+        // and — unless save is false — persists it so both the next app launch and the
+        // no-flash inline snippet in <head> pick it up before first paint.
+        function applyBgTheme(themeId, { save = true } = {}) {
+            const theme = BG_THEMES.find(t => t.id === themeId) || BG_THEMES[0];
+            document.documentElement.style.setProperty("--bg-color", theme.bg);
+            const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor);
+            if (save) {
+                try { localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
+            }
+            return theme;
+        }
+
+        function buildBgThemeSwatchGrid() {
+            const grid = document.getElementById("bgThemeSwatchGrid");
+            if (!grid) return;
+            const selectedId = getSavedBgThemeId();
+            grid.innerHTML = BG_THEMES.map(t => `
+                <span class="bg-theme-swatch-wrap">
+                    <span class="color-swatch${t.id === selectedId ? ' selected' : ''}" style="background:${t.bg};" data-click="selectBgTheme" data-theme-id="${t.id}" title="${t.name}"></span>
+                    <span class="bg-theme-swatch-label">${t.name}</span>
+                </span>
+            `).join("");
+        }
+
+        function selectBgTheme(el) {
+            applyBgTheme(el.dataset.themeId);
+            document.querySelectorAll("#bgThemeSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.themeId === el.dataset.themeId));
+        }
+
+        function toggleBgThemeSettings() {
+            const panel = document.getElementById("bgThemeSettingsPanel");
+            const isHidden = panel.style.display === "none";
+            if (isHidden) buildBgThemeSwatchGrid();
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+
         function openMemberFormModal() {
             document.getElementById("editMemberId").value = "";
             document.getElementById("newMemberName").value = "";
@@ -5124,7 +5276,10 @@
             wrap.classList.toggle("hidden", !sidebarAccountShortcutsExpanded);
             const toggleBtn = document.getElementById("sidebarAccountShortcutsToggle");
             if (toggleBtn) {
-                toggleBtn.textContent = sidebarAccountShortcutsExpanded ? "▾" : "▸";
+                // v165: was toggleBtn.textContent = "▾"/"▸" — the button now holds a static SVG
+                // chevron (see index.html) rotated via this class + a CSS transition instead, so
+                // collapsing/expanding animates instead of instantly swapping glyphs.
+                toggleBtn.classList.toggle("collapsed", !sidebarAccountShortcutsExpanded);
                 const label = `${sidebarAccountShortcutsExpanded ? "Collapse" : "Expand"} account type list`;
                 toggleBtn.setAttribute("aria-label", label);
                 toggleBtn.setAttribute("title", label);
@@ -5134,16 +5289,17 @@
             }
         }
 
-        // Wired to the ▾/▸ beside "Financial Accounts" in the sidebar — purely a local show/hide
-        // of the type-shortcut list; does not touch accountsPageTypeFilter or navigate anywhere,
-        // so it's safe to tap even while a filter from one of those shortcuts is still active.
+        // Wired to the chevron beside "Financial Accounts" in the sidebar — purely a local
+        // show/hide of the type-shortcut list; does not touch accountsPageTypeFilter or navigate
+        // anywhere, so it's safe to tap even while a filter from one of those shortcuts is still
+        // active.
         function toggleSidebarAccountShortcuts() {
             sidebarAccountShortcutsExpanded = !sidebarAccountShortcutsExpanded;
             const wrap = document.getElementById("sidebarAccountTypeShortcuts");
             if (wrap) wrap.classList.toggle("hidden", !sidebarAccountShortcutsExpanded);
             const toggleBtn = document.getElementById("sidebarAccountShortcutsToggle");
             if (toggleBtn) {
-                toggleBtn.textContent = sidebarAccountShortcutsExpanded ? "▾" : "▸";
+                toggleBtn.classList.toggle("collapsed", !sidebarAccountShortcutsExpanded);
                 const label = `${sidebarAccountShortcutsExpanded ? "Collapse" : "Expand"} account type list`;
                 toggleBtn.setAttribute("aria-label", label);
                 toggleBtn.setAttribute("title", label);
@@ -5388,7 +5544,7 @@
                     // Multi-Currency accounts (v55 on the global Accounts page, ported here now):
                     // show the one converted Base total rather than a joined "+" string of native
                     // amounts — this page had been left on the pre-v55 joined-string format.
-                    balSummary = `<strong>Base ${escapeHtml(baseCurrency)}: ${formatBalanceHTML(accountBaseValue(a, nativeBalances), baseCurrency)}</strong>`;
+                    balSummary = `<strong>≈ ${formatBalanceHTML(accountBaseValue(a, nativeBalances), baseCurrency)}</strong>`;
                 } else if (a.type === "fd" || a.type === "unittrust") {
                     const baskets = nativeBalances[a.id];
                     const currencies = Object.keys(baskets);
@@ -6725,8 +6881,10 @@
         // opted to fill it in manually — derived from the Account/Reference No. if one was given,
         // else a generic placement label.
         function buildAutoFdDescription() {
-            const ref = document.getElementById("txFdReference").value.trim();
-            return ref ? `Fixed Deposit Placement (${ref})` : "Fixed Deposit Placement";
+            // v168: no longer appends "(ref)" here — the ledger row already shows the reference
+            // number on its own meta line (via fdReferenceNo / referenceText), so baking it into
+            // the title too was showing it twice on the same row.
+            return "Fixed Deposit Placement";
         }
 
         async function syncTransactionCurrency() {
@@ -7103,7 +7261,11 @@
             const action = document.getElementById("resolveFdAction").value;
             const resolutionDate = document.getElementById("resolveFdResolutionDate").value;
             if (!resolutionDate) { alert("Please select a resolution date."); return; }
-            const refLabel = tx.fdReferenceNo ? `Ref: ${tx.fdReferenceNo}` : `#${tx.id}`;
+            // v168: previously always "(Ref: xxx)" / "(#id)" baked into these titles — but when a
+            // reference number exists, the ledger row already shows it separately on its meta line
+            // (via fdReferenceNo), so it was appearing twice on the same row. Now this only supplies
+            // a "(#id)" fallback suffix for placements that have no reference number to show there.
+            const refLabel = tx.fdReferenceNo ? "" : ` (#${tx.id})`;
 
             try {
                 if (action === "withdraw") {
@@ -7114,7 +7276,7 @@
                     // "transfer" (not "expense") — moving your own principal isn't a spend, so it
                     // must not be counted in the Expense report.
                     await writeDB(STORES.TRANSACTIONS, {
-                        type: "transfer", desc: `FD Withdrawal — Principal (${refLabel})`,
+                        type: "transfer", desc: `FD Withdrawal — Principal${refLabel}`,
                         amount: tx.amount, src: holdingAccountId, dest: destId, currency: tx.currency,
                         cat: "Fixed Deposit", date: resolutionDate, image: null,
                         fdReferenceNo: tx.fdReferenceNo || null,
@@ -7124,7 +7286,7 @@
                     // The interest, however, IS genuine new income — record it as such into the destination account.
                     if (interest > 0) {
                         await writeDB(STORES.TRANSACTIONS, {
-                            type: "income", desc: `FD Interest Received (${refLabel})`,
+                            type: "income", desc: `FD Interest Received${refLabel}`,
                             amount: interest, src: destId, dest: "", currency: tx.currency,
                             cat: "FD Interest Income", date: resolutionDate, image: null,
                             fdReferenceNo: tx.fdReferenceNo || null,
@@ -7150,7 +7312,7 @@
                     if (!newMaturity) { alert("Could not calculate the new maturity date — please re-check the commencing date and tenure."); return; }
 
                     await writeDB(STORES.TRANSACTIONS, {
-                        type: "transfer", desc: `FD Placement Closed for Renewal (${refLabel})`,
+                        type: "transfer", desc: `FD Placement Closed for Renewal${refLabel}`,
                         amount: tx.amount, src: holdingAccountId, dest: "", currency: tx.currency,
                         cat: "Fixed Deposit", date: resolutionDate, image: null,
                         fdReferenceNo: tx.fdReferenceNo || null,
@@ -7170,7 +7332,7 @@
                         const interestDestId = document.getElementById("resolveFdInterestDest").value;
                         if (!interestDestId) { alert("Please choose an account to receive the interest."); return; }
                         await writeDB(STORES.TRANSACTIONS, {
-                            type: "income", desc: `FD Interest Received (${refLabel})`,
+                            type: "income", desc: `FD Interest Received${refLabel}`,
                             amount: interest, src: interestDestId, dest: "", currency: tx.currency,
                             cat: "FD Interest Income", date: resolutionDate, image: null,
                             fdReferenceNo: tx.fdReferenceNo || null,
@@ -8419,6 +8581,11 @@
 
         // --- CONSOLIDATED RENDER ENGINE ---
         async function renderApp() {
+            // Reset the dashboard quick-add speed-dial to its closed "+" state on every render
+            // (mirrors closeLedgerQuickAddSheet() being called on every ledger-page render) so it
+            // never stays stuck open across a navigation or a data-driven re-render.
+            closeDashboardQuickAddSheet();
+
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
 
             document.getElementById("currentBasePill").textContent = baseCurrency;
@@ -8700,6 +8867,7 @@
                 else if (categoryDrillMonth !== "all") periodSuffix = ` · ${monthNames[parseInt(categoryDrillMonth)]} (All Years)`;
                 document.getElementById("ledgerTargetTitle").textContent = `${icon} ${activeCategoryView.toUpperCase()}${periodSuffix}`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
+                document.getElementById("ledgerTargetOwnerTags").style.display = "none";
             } else if (directTypeView !== "all") {
                 // v148: same period-suffix treatment as the category branch above, for the report
                 // card's Income/Expense clicks (categoryDrillYear/Month "all" when reached any
@@ -8711,17 +8879,26 @@
                 else if (categoryDrillMonth !== "all") periodSuffix = ` · ${monthNames[parseInt(categoryDrillMonth)]} (All Years)`;
                 document.getElementById("ledgerTargetTitle").textContent = `All ${directTypeView.charAt(0).toUpperCase() + directTypeView.slice(1)} Log${periodSuffix}`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
+                document.getElementById("ledgerTargetOwnerTags").style.display = "none";
             } else if (activeLedgerAccountView === "all") {
                 document.getElementById("ledgerTargetTitle").textContent = "Portfolio General Log";
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
+                document.getElementById("ledgerTargetOwnerTags").style.display = "none";
             } else {
                 const activeAcc = accounts.find(a => a.id === activeLedgerAccountView);
-                // v71: name + owner only here, no Related-account suffix — the dedicated
-                // "🔗 Related Account: X" banner already shows that right below this title,
-                // so repeating it in the title itself was just noise (see Image 2 feedback).
-                const currentActiveAccName = activeAcc ? `${activeAcc.name} (${accountOwnerNamesText(activeAcc)})` : "Vault";
+                // v166: owner names moved out of the title (was cluttered as plain text in
+                // parentheses) and shown instead as colored ● tags on their own line, reusing
+                // accountOwnerTagHTML — the same per-member color dots used on the Accounts page.
+                const currentActiveAccName = activeAcc ? activeAcc.name : "Vault";
                 document.getElementById("ledgerTargetTitle").textContent = `${currentActiveAccName} Activity`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "inline-block";
+                const ownerTagsEl = document.getElementById("ledgerTargetOwnerTags");
+                if (activeAcc) {
+                    ownerTagsEl.innerHTML = accountOwnerTagHTML(activeAcc);
+                    ownerTagsEl.style.display = "flex";
+                } else {
+                    ownerTagsEl.style.display = "none";
+                }
             }
 
             let ledgerHTML = "";
@@ -9989,6 +10166,50 @@
             calculateStorageMetrics();
         }
 
+        // v168 data migration (one-time, guarded by a settings flag so it never re-runs): earlier
+        // versions baked the FD reference number straight into these four auto-generated
+        // transaction descriptions — "Fixed Deposit Placement (ref)", "FD Withdrawal — Principal
+        // (Ref: ref)", "FD Interest Received (Ref: ref)", "FD Placement Closed for Renewal
+        // (Ref: ref)" — while the ledger row's meta line *also* shows that same fdReferenceNo
+        // separately, so any transaction saved before this fix displays its reference number
+        // twice on the same row (see the FD Withdrawal / Fixed Deposit Placement screenshot).
+        // The code fix only changes how new descriptions are generated going forward — it can't
+        // retroactively rewrite text already committed to existing records — so this strips the
+        // now-redundant "(...)" suffix from any already-saved transaction whose desc still has it
+        // baked in, one time, the first time this version runs.
+        async function migrateFdDescRefDedup() {
+            const flagKey = "migratedFdDescRefDedup_v168";
+            const already = await readKeyDB("settings", flagKey);
+            if (already) return;
+
+            const patterns = [
+                { prefix: "Fixed Deposit Placement" },
+                { prefix: "FD Withdrawal — Principal" },
+                { prefix: "FD Interest Received" },
+                { prefix: "FD Placement Closed for Renewal" },
+            ];
+
+            const allTx = await readAllDB(STORES.TRANSACTIONS);
+            for (const t of allTx) {
+                if (!t.fdReferenceNo || typeof t.desc !== "string") continue;
+                for (const { prefix } of patterns) {
+                    // Matches "<prefix> (Ref: xxx)" or "<prefix> (xxx)" only when it's this exact
+                    // record's own reference number being repeated — never touches a manually-
+                    // typed description that just happens to start the same way with different
+                    // trailing text.
+                    const refEsc = t.fdReferenceNo.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                    const re = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} \\((?:Ref: )?${refEsc}\\)$`);
+                    if (re.test(t.desc)) {
+                        t.desc = prefix;
+                        await writeDB(STORES.TRANSACTIONS, t);
+                        break;
+                    }
+                }
+            }
+
+            await writeDB(STORES.SETTINGS, { key: flagKey, value: true });
+        }
+
         async function bootstrap() {
             const lockResult = await runLockFlow();
             await initDB();
@@ -10055,6 +10276,7 @@
 
             await syncAndLoadCategories();
             await ensureDefaultCategories();
+            await migrateFdDescRefDedup();
 
             const accs = await readAllDB(STORES.ACCOUNTS);
             if(accs.length === 0) {
@@ -10373,12 +10595,17 @@
             togglePinnedAccountsSettings: () => togglePinnedAccountsSettings(),
             toggleMemberNetWorthCollapse: () => toggleMemberNetWorthCollapse(),
             selectMemberColor: (el) => selectMemberColor(el),
+            toggleBgThemeSettings: () => toggleBgThemeSettings(),
+            selectBgTheme: (el) => selectBgTheme(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
             toggleLedgerQuickAddSheet: () => toggleLedgerQuickAddSheet(),
             closeLedgerQuickAddSheet: () => closeLedgerQuickAddSheet(),
             quickAddChooseType: (el) => quickAddChooseType(el),
+            toggleDashboardQuickAddSheet: () => toggleDashboardQuickAddSheet(),
+            closeDashboardQuickAddSheet: () => closeDashboardQuickAddSheet(),
+            dashboardQuickAddChooseAction: (el) => dashboardQuickAddChooseAction(el),
             openAccountFormModal: () => openAccountFormModal(),
             openCategoryFormModal: () => openCategoryFormModal(),
             editCategory: (el) => editCategory(el.dataset.id),
