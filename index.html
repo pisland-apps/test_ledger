@@ -66,6 +66,12 @@
     <link rel="apple-touch-icon" href="icon-192.png">
     <style>
         :root {
+            color-scheme: light; /* v195: lets the browser render native form controls (select
+                dropdown lists, date/time picker calendar icons, checkboxes) in a matching
+                light/dark chrome — see the midnight preset's colorScheme override below. Without
+                this, a native <select>'s dropdown list ignores our CSS vars entirely and always
+                renders with the OS's light-mode white background + dark text, which becomes
+                invisible once *our* page text goes light-on-dark. */
             --bg-color: #f8fafc;
             --card-bg: #ffffff;
             --text-main: #0f172a;
@@ -142,6 +148,17 @@
             margin: 0 auto;
             padding-bottom: 40px;
         }
+
+        /* v195: plain <button> elements don't inherit `color` from their ancestors by default —
+           the UA stylesheet gives them their own fixed `color: buttontext` (a near-black system
+           color), independent of whatever theme is active. Every icon-only "×" close button
+           across the app's modals relies on inheriting the surrounding text color and never sets
+           its own, so on the light theme this went unnoticed (buttontext ≈ our light-theme dark
+           text anyway) but on 暗夜描边 those buttons rendered as a barely-visible dark "×" on a
+           dark modal. This is a foundational reset — every component that already sets its own
+           `color` (`.submit-btn`, etc.) does so via a class or a style attribute, both of which
+           beat this plain-tag-selector rule, so nothing already-styled is affected. */
+        button { color: inherit; font-family: inherit; }
 
         /* v163 美化方案 point 6: custom scrollbar — thin, rounded, semi-transparent, so it
            doesn't stand out against the app's own rounded/shadowed card styling the way a
@@ -1575,6 +1592,20 @@
         .form-row-icon .field-icon { flex: 0 0 22px; text-align: center; font-size: 1.05rem; line-height: 1; color: var(--text-muted); }
         .form-row-icon input, .form-row-icon .account-picker-btn { flex: 1 1 auto !important; width: auto !important; min-width: 0; margin: 0; }
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: var(--chip-bg); height: 44px; }
+
+        /* v195: the browser's own autofill styling (e.g. Chrome recognizing a field like
+           #txDesc/#txNotes as a "name" field once it has a saved suggestion for it) paints its
+           own fixed light background + dark text UNDER our CSS, which `background`/`color` alone
+           can't override — it needs this specific `-webkit-box-shadow` inset trick to paint over
+           it, plus `-webkit-text-fill-color` since autofill ignores a plain `color` declaration.
+           Without this, an autofilled field stayed a pale box with unreadable text regardless of
+           theme (light theme included — just less noticeable there). */
+        input:-webkit-autofill, input:-webkit-autofill:hover, input:-webkit-autofill:focus, input:-webkit-autofill:active {
+            -webkit-box-shadow: 0 0 0 1000px var(--chip-bg) inset !important;
+            -webkit-text-fill-color: var(--text-main) !important;
+            caret-color: var(--text-main);
+            transition: background-color 5000s ease-in-out 0s;
+        }
         .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
         .calc-btn {
@@ -2032,7 +2063,8 @@
                         hardwareTrackBg: "--hardware-track-bg", hardwareTrackBorder: "--hardware-track-border",
                         hardwareFillStart: "--hardware-fill-start", hardwareFillEnd: "--hardware-fill-end",
                         primary: "--primary", incomeColor: "--income-color", expenseColor: "--expense-color",
-                        transferColor: "--transfer-color", salaryColor: "--salary-color"
+                        transferColor: "--transfer-color", salaryColor: "--salary-color",
+                        colorScheme: "color-scheme"
                     };
                     var root = document.documentElement.style;
                     for (var key in varMap) { if (saved[key]) root.setProperty(varMap[key], saved[key]); }
@@ -3344,7 +3376,7 @@
                 <input type="hidden" id="newMemberColor">
             </div>
             <button type="button" id="memberFormSubmitBtn" data-click="handleCreateMemberMobile" class="submit-btn" style="background: var(--transfer-color);">Add Member</button>
-            <button type="button" id="memberFormDeleteBtn" data-click="deleteMemberFromForm" class="submit-btn" style="background:#fee2e2; color:var(--expense-color); margin-top:6px; display:none;">🗑 Delete Member</button>
+            <button type="button" id="memberFormDeleteBtn" data-click="deleteMemberFromForm" class="submit-btn" style="background:var(--expense-chip-bg); color:var(--expense-color); margin-top:6px; display:none;">🗑 Delete Member</button>
         </div>
     </div>
 

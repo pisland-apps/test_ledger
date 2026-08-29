@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v195";
+        const APP_VERSION = "v196";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -85,6 +85,7 @@
             cardShadow: "0 1px 3px rgba(0,0,0,0.06)",
             hardwareTrackBg: "#f4ede4", hardwareTrackBorder: "#dcd1c4", hardwareFillStart: "#e3cbb3", hardwareFillEnd: "#c5a88a",
             primary: "#6366f1", incomeColor: "#10b981", expenseColor: "#ef4444", transferColor: "#3b82f6", salaryColor: "#d97706",
+            colorScheme: "light",
             themeColor: "#4f46e5",
         };
         const BG_THEMES = [
@@ -125,6 +126,11 @@
                 // are the standard higher-lightness, lower-saturation dark-mode equivalents.
                 primary: "#818cf8", incomeColor: "#34d399", expenseColor: "#f87171",
                 transferColor: "#60a5fa", salaryColor: "#fbbf24",
+                // v195: switches native form-control chrome (select dropdown lists, date/time
+                // picker icons, checkboxes) to the browser's own dark rendering — see the :root
+                // comment above. This is what actually fixes the Auto-Lock/Member/Scheme <select>
+                // dropdowns and the NAV Date picker icon, which our CSS vars can't reach directly.
+                colorScheme: "dark",
                 themeColor: "#0a0a0f",
             },
         ];
@@ -3015,7 +3021,7 @@
             const isEditing = document.getElementById("editAccountId").value !== "";
 
             [normalBtn, ccBtn, multiBtn, fdBtn, utBtn].forEach(btn => {
-                btn.style.background = "#e2e8f0"; btn.style.color = "var(--text-main)";
+                btn.style.background = "var(--chip-bg)"; btn.style.color = "var(--text-main)";
             });
 
             balCurrRow.style.display = "none";
@@ -3127,7 +3133,7 @@
 
             const row = document.createElement("div");
             row.id = rowId;
-            row.style.cssText = "background:#faf5ff; border:1px solid #ede9fe; border-radius:10px; padding:10px; margin-bottom:10px; position:relative;";
+            row.style.cssText = "background:var(--primary-chip-bg); border:1px solid var(--border-color); border-radius:10px; padding:10px; margin-bottom:10px; position:relative;";
             row.innerHTML = `
                 <button type="button" data-click="removeRow" data-row-id="${rowId}" style="position:absolute; top:8px; right:8px; background:none; border:none; font-size:1rem; cursor:pointer;">🗑</button>
                 <div class="form-row-inline">
@@ -5107,7 +5113,7 @@
                     const e = navByFund[fid];
                     return `<td style="padding:8px 10px;">${e ? formatNav(e.nav, e.currency) : "-"}</td>`;
                 }).join("");
-                return `<tr style="${idx % 2 === 0 ? "background:#f8fafc;" : ""}">
+                return `<tr style="${idx % 2 === 0 ? "background:var(--chip-bg);" : ""}">
                     <td style="padding:8px 10px; color:var(--text-muted);">${idx + 1}</td>
                     <td style="padding:8px 10px; white-space:nowrap; font-weight:700;">${formatNavHistoryDate(h.date)}</td>
                     ${cells}
@@ -5301,6 +5307,7 @@
             hardwareFillStart: "--hardware-fill-start", hardwareFillEnd: "--hardware-fill-end",
             primary: "--primary", incomeColor: "--income-color", expenseColor: "--expense-color",
             transferColor: "--transfer-color", salaryColor: "--salary-color",
+            colorScheme: "color-scheme",
         };
         function applyBgTheme(themeId, { save = true } = {}) {
             const theme = BG_THEMES.find(t => t.id === themeId) || BG_THEMES[0];
@@ -7095,8 +7102,8 @@
             const thumbSrc = att.thumb || (isImage ? att.data : null);
             const icon = isImage ? "🖼️" : "📄";
             return `
-                <div class="tx-att-item" style="display:flex; align-items:center; gap:8px; background:#f8fafc; border:1px solid var(--border-color); border-radius:8px; padding:6px 8px;">
-                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:#e2e8f0; font-size:1.1rem;">
+                <div class="tx-att-item" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:6px 8px;">
+                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--chip-bg); font-size:1.1rem;">
                         ${thumbSrc ? `<img src="${thumbSrc}" alt="" style="width:100%; height:100%; object-fit:cover;">` : icon}
                     </div>
                     <div style="flex:1; min-width:0;">
@@ -7144,8 +7151,8 @@
 
             const list = document.getElementById("txAttachmentsPickerList");
             list.innerHTML = atts.map((att, idx) => `
-                <div class="tx-att-item" data-click="openAttachmentFromPicker" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:#f8fafc; border:1px solid var(--border-color); border-radius:8px; padding:8px; cursor:pointer;">
-                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:#e2e8f0; font-size:1.1rem;">
+                <div class="tx-att-item" data-click="openAttachmentFromPicker" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:8px; cursor:pointer;">
+                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--chip-bg); font-size:1.1rem;">
                         ${att.thumb ? `<img src="${att.thumb}" alt="" style="width:100%; height:100%; object-fit:cover;">` : ((att.mime || "").startsWith("image/") ? "🖼️" : "📄")}
                     </div>
                     <div style="flex:1; min-width:0; font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
@@ -7616,12 +7623,12 @@
 
             if (action === "renew") {
                 renewBtn.style.background = "var(--transfer-color)"; renewBtn.style.color = "white";
-                withdrawBtn.style.background = "#e2e8f0"; withdrawBtn.style.color = "var(--text-main)";
+                withdrawBtn.style.background = "var(--chip-bg)"; withdrawBtn.style.color = "var(--text-main)";
                 renewWrap.style.display = "block";
                 withdrawWrap.style.display = "none";
             } else {
                 withdrawBtn.style.background = "var(--transfer-color)"; withdrawBtn.style.color = "white";
-                renewBtn.style.background = "#e2e8f0"; renewBtn.style.color = "var(--text-main)";
+                renewBtn.style.background = "var(--chip-bg)"; renewBtn.style.color = "var(--text-main)";
                 renewWrap.style.display = "none";
                 withdrawWrap.style.display = "block";
                 recalcResolveFdWithdrawPreview();
@@ -7636,11 +7643,11 @@
 
             if (mode === "capitalize") {
                 capBtn.style.background = "var(--transfer-color)"; capBtn.style.color = "white";
-                prinBtn.style.background = "#e2e8f0"; prinBtn.style.color = "var(--text-main)";
+                prinBtn.style.background = "var(--chip-bg)"; prinBtn.style.color = "var(--text-main)";
                 destRow.style.display = "none";
             } else {
                 prinBtn.style.background = "var(--transfer-color)"; prinBtn.style.color = "white";
-                capBtn.style.background = "#e2e8f0"; capBtn.style.color = "var(--text-main)";
+                capBtn.style.background = "var(--chip-bg)"; capBtn.style.color = "var(--text-main)";
                 destRow.style.display = "block";
             }
             recalcResolveFdMaturity();
@@ -8480,8 +8487,8 @@
                     <div style="font-size:0.7rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px;">Attachments</div>
                     <div style="display:flex; flex-direction:column; gap:6px;">
                         ${quickViewAtts.map((att, idx) => `
-                            <div class="tx-att-item" data-click="openAttachmentFromQuickView" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:#f8fafc; border:1px solid var(--border-color); border-radius:8px; padding:6px 8px; cursor:pointer;">
-                                <div style="width:32px; height:32px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:#e2e8f0; font-size:1rem;">
+                            <div class="tx-att-item" data-click="openAttachmentFromQuickView" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:6px 8px; cursor:pointer;">
+                                <div style="width:32px; height:32px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--chip-bg); font-size:1rem;">
                                     ${att.thumb || ((att.mime || "").startsWith("image/") && att.data) ? `<img src="${att.thumb || att.data}" alt="" style="width:100%; height:100%; object-fit:cover;">` : ((att.mime || "").startsWith("image/") ? "🖼️" : "📄")}
                                 </div>
                                 <div style="flex:1; min-width:0; font-size:0.78rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
@@ -8522,7 +8529,7 @@
                 btn.style.color = "#15803d";
             } else {
                 btn.textContent = "☐ Mark as Checked";
-                btn.style.background = "#e2e8f0";
+                btn.style.background = "var(--chip-bg)";
                 btn.style.color = "var(--text-main)";
             }
         }
@@ -8639,7 +8646,7 @@
             // skipped automatically by option-menu-btn's click handling and by the typeahead
             // listener below (which only ever queries for ".option-menu-btn").
             const optionRowHTML = (opt) => `
-                <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:#e0e7ff;" : ""}">
+                <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:var(--primary-chip-bg);" : ""}">
                     <span>${opt.textContent}</span>
                     ${opt.value === currentVal ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
                 </button>
@@ -9675,7 +9682,7 @@
             if (matchedCount > ledgerRenderLimit) {
                 const remaining = matchedCount - ledgerRenderLimit;
                 ledgerHTML += `
-                    <button type="button" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin:12px;" data-click="loadMoreLedgerRows">
+                    <button type="button" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin:12px;" data-click="loadMoreLedgerRows">
                         Load ${Math.min(remaining, LEDGER_PAGE_SIZE)} more (${remaining} remaining)
                     </button>
                 `;
