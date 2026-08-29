@@ -71,19 +71,43 @@
             --text-main: #0f172a;
             --text-muted: #64748b;
             --primary: #6366f1;
-            /* v195: accent-theme companion tokens — every chip/hover/gradient color that used
-               to be hardcoded indigo now reads from these, so switching --primary via
-               applyPrimaryTheme() (ledger.js) re-skins the whole app instead of leaving stray
-               indigo patches. Defaults below = the original Indigo look, byte-for-byte. */
-            --primary-hover: #4338ca;
-            --primary-bg-subtle: #eef2ff;
-            --primary-border-subtle: #e0e7ff;
-            --primary-deep: #312e81;
             --income-color: #10b981;
             --expense-color: #ef4444;
             --transfer-color: #3b82f6;
             --salary-color: #d97706;
             --border-color: #e2e8f0;
+
+            /* v195: semantic "surface state" tokens — previously every :hover/:active feedback
+               flash, "selected row" highlight, and subtle chip/well background across the app
+               was a literal light-gray hex (#f3f4f6 etc.), which read fine on the original light
+               theme but becomes an unreadable pale patch once a dark background theme is picked
+               (the theme's own light text sitting on top of it). These let a dark preset override
+               them; light presets keep the original hexes as their default (THEME_DEFAULTS). */
+            --hover-bg: #f3f4f6;    /* :hover feedback on list rows/buttons */
+            --press-bg: #f1f5f9;    /* :active (tap/press) feedback — one step past hover */
+            --active-bg: #eef2ff;   /* "currently selected" state (active sidebar item, etc.) */
+            --active-border: #e0e7ff; /* accent rail/border paired with --active-bg (e.g. the
+                                          Account-Type shortcuts left rail under Financial Accounts) */
+            --chip-bg: #e2e8f0;     /* subtotal chips, input wells, progress-bar tracks */
+
+            /* v195: soft color-tinted chip backgrounds (stat boxes, the split-row remove button)
+               — was a flat pastel hex tied to nothing, so a dark preset couldn't turn it into a
+               low-alpha tint of the matching --income-color/--expense-color instead. */
+            --income-chip-bg: #f0fdf4; --income-chip-border: #bbf7d0;
+            --expense-chip-bg: #fef2f2; --expense-chip-border: #fecaca;
+            --primary-chip-bg: #f5f3ff; /* purple-tinted chip/card bg (Surplus Margin card, month-scope badge, calc-key press) */
+
+            /* v195: card elevation. A dark preset sets this to "none" — a black drop-shadow on a
+               near-black background is invisible anyway, so elevation there comes from
+               --border-color + --card-bg being a shade lighter than --bg-color instead. */
+            --card-shadow: 0 1px 3px rgba(0,0,0,0.06);
+
+            /* v195: the "hardware/storage meter" bar (Settings > storage) has its own warm
+               wood-tone palette, independent of the app's income/expense/chip colors — kept as
+               its own token group so a dark preset can darken the wood tone rather than reuse an
+               unrelated color. */
+            --hardware-track-bg: #f4ede4; --hardware-track-border: #dcd1c4;
+            --hardware-fill-start: #e3cbb3; --hardware-fill-end: #c5a88a;
 
             /* --- v156: decorative-only design tokens (neumorphism + glass) ---
                Scoped to chrome/controls (FAB, calculator keys, nav bar, modal/sheet
@@ -151,7 +175,7 @@
             border-radius: 16px;
             border: 1px solid var(--border-color);
             margin-bottom: 20px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            box-shadow: var(--card-shadow);
         }
 
         .net-worth-container {
@@ -219,7 +243,7 @@
         }
 
         .currency-pill {
-            background: #f1f5f9;
+            background: var(--press-bg);
             border: 1px solid var(--border-color);
             padding: 9px 10px; /* v160: tightened from 12px 14px to help the top-bar's right-hand
                                   cluster (pill + save + lock) fit on one line on narrow phones —
@@ -234,7 +258,7 @@
             display: flex;
             align-items: center;
             gap: 4px;
-            background: #f1f5f9;
+            background: var(--press-bg);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 6px 8px;
@@ -281,7 +305,7 @@
             cursor: pointer;
             transition: background-color 0.15s ease-out, color 0.15s ease-out;
         }
-        .text-btn:hover { background: var(--primary-bg-subtle); color: var(--primary-hover); }
+        .text-btn:hover { background: var(--active-bg); color: #4338ca; }
 
         .actions-bar {
             display: grid;
@@ -330,7 +354,7 @@
             border-radius: 16px;
             border: 1.5px solid var(--border-color);
             padding: 16px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            box-shadow: var(--card-shadow);
         }
 
         /* --- Financial Report Card, two-tile layout (v147) --- */
@@ -345,7 +369,7 @@
             border: 1.5px solid var(--border-color);
             padding: 12px;
             min-width: 0; /* allow grid children to shrink below content width */
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            box-shadow: var(--card-shadow);
         }
         .report-card-mini-header {
             display: flex;
@@ -393,7 +417,7 @@
         /* v166: was :active-only (opacity dim on tap) — added a proper hover surface tint so a
            mouse user sees this row is clickable before clicking, same "surface-muted" treatment
            as .ledger-item rows elsewhere (Accounts / Transactions). */
-        .report-card-mini-row:hover { background: #f3f4f6; }
+        .report-card-mini-row:hover { background: var(--hover-bg); }
         .report-card-mini-row:active { opacity: 0.7; }
         .report-card-mini-label { font-size: 0.68rem; font-weight: 700; white-space: nowrap; }
         .report-card-mini-value {
@@ -487,8 +511,8 @@
             transition: opacity 0.15s;
         }
         .stat-box:active { opacity: 0.8; }
-        .stat-box.income { background: #f0fdf4; border: 1px solid #bbf7d0; }
-        .stat-box.expense { background: #fef2f2; border: 1px solid #fecaca; }
+        .stat-box.income { background: var(--income-chip-bg); border: 1px solid var(--income-chip-border); }
+        .stat-box.expense { background: var(--expense-chip-bg); border: 1px solid var(--expense-chip-border); }
 
         .stat-title { font-size: 0.65rem; font-weight: 700; text-transform: uppercase; }
         .stat-amount { font-size: 1.15rem; margin-top: 4px; font-weight: 700; }
@@ -506,7 +530,7 @@
         .net-savings-banner:active { transform: scale(0.98); }
 
         .progress-bar-container {
-            background: #e2e8f0;
+            background: var(--chip-bg);
             height: 8px;
             border-radius: 4px;
             overflow: hidden;
@@ -520,7 +544,7 @@
             padding: 10px 6px; /* Easier to tap on phone screens */
             border-radius: 8px;
         }
-        .category-row-item:active { background: #f1f5f9; }
+        .category-row-item:active { background: var(--press-bg); }
 
         /* v187: redesigned donut chart (buildBreakdownDonutSVG) — was a plain stroke-to-stroke
            ring with a small side legend, which on the dashboard's narrow Insights rail (300px,
@@ -601,7 +625,7 @@
             cursor: pointer;
         }
         .account-list-row:last-child { border-bottom: none; }
-        .account-list-row:active { background-color: #f1f5f9; }
+        .account-list-row:active { background-color: var(--press-bg); }
 
         /* Storage Metrics elements */
         .data-meter-box {
@@ -611,12 +635,12 @@
             padding: 14px;
             margin-top: 24px;
             font-size: 0.78rem;
-            color: #555555;
+            color: var(--text-muted);
             line-height: 1.6;
         }
         .hardware-track {
-            background-color: #f4ede4;
-            border: 1.5px solid #dcd1c4;
+            background-color: var(--hardware-track-bg);
+            border: 1.5px solid var(--hardware-track-border);
             height: 14px;
             border-radius: 7px;
             margin: 8px 0;
@@ -624,7 +648,7 @@
             padding: 1px;
         }
         .hardware-fill {
-            background: linear-gradient(to bottom, #e3cbb3, #c5a88a);
+            background: linear-gradient(to bottom, var(--hardware-fill-start), var(--hardware-fill-end));
             height: 100%;
             border-radius: 5px;
             width: 0.5%;
@@ -662,7 +686,7 @@
             cursor: pointer;
             font-size: 0.85rem;
         }
-        .back-btn:active { background: #f1f5f9; }
+        .back-btn:active { background: var(--press-bg); }
 
         /* ================= SIDEBAR NAVIGATION DRAWER ================= */
         /* v162: wraps .top-bar (hamburger+title) and .header-controls-group (Base/Save/Lock) as
@@ -699,7 +723,7 @@
             transition: box-shadow 0.1s ease, transform 0.1s ease;
         }
         .hamburger-btn:active {
-            background: #f1f5f9;
+            background: var(--press-bg);
             transform: scale(0.94);
             box-shadow: inset 2px 2px 4px var(--neu-dark), inset -1px -1px 3px var(--neu-light);
         }
@@ -766,7 +790,7 @@
             width: 38px;
             height: 38px;
             border-radius: 11px;
-            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
+            background: linear-gradient(135deg, var(--primary), #4338ca);
             color: #fff;
             display: flex;
             align-items: center;
@@ -801,7 +825,7 @@
             color: var(--text-muted);
             padding: 6px 14px;
             margin: 2px 0 4px;
-            background: #f8fafc;
+            background: var(--chip-bg);
             border-radius: 8px;
             text-align: right;
         }
@@ -830,7 +854,7 @@
         .config-list-subtotal .total-amount,
         .config-list-grouptotal .total-amount {
             display: inline-block;
-            background: #e2e8f0;
+            background: var(--chip-bg);
             color: var(--text-muted);
             font-weight: 800;
             border-radius: 6px;
@@ -867,10 +891,10 @@
            nothing for a mouse hovering without clicking — this app also runs in a desktop
            browser window, not just touch). :not(.active) so hovering the already-active row
            doesn't fight with its own highlight below. */
-        .sidebar-item:hover:not(.active) { background: #f3f4f6; }
-        .sidebar-item:active { background: #f1f5f9; }
+        .sidebar-item:hover:not(.active) { background: var(--hover-bg); }
+        .sidebar-item:active { background: var(--press-bg); }
         .sidebar-item.active {
-            background: var(--primary-bg-subtle);
+            background: var(--active-bg);
             color: var(--primary);
             position: relative;
         }
@@ -957,7 +981,7 @@
             width: 44px;
             height: 44px;
             border-radius: 50%;
-            background: #fff;
+            background: var(--card-bg);
             color: var(--text-muted);
             border: 1.5px solid var(--border-color);
             font-size: 1.3rem;
@@ -977,7 +1001,7 @@
         }
         .back-to-top-btn.visible { display: flex; }
         .back-to-top-btn:active {
-            background: #f1f5f9;
+            background: var(--press-bg);
             transform: scale(0.94);
             box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 5px var(--neu-light);
         }
@@ -1002,7 +1026,7 @@
             width: 44px;
             height: 44px;
             border-radius: 50%;
-            background: #fff;
+            background: var(--card-bg);
             color: var(--primary);
             border: 1.5px solid var(--border-color);
             font-size: 1.2rem;
@@ -1019,7 +1043,7 @@
             transition: box-shadow 0.12s ease, transform 0.12s ease;
         }
         .print-fab-btn:active {
-            background: #f1f5f9;
+            background: var(--press-bg);
             transform: scale(0.94);
             box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 5px var(--neu-light);
         }
@@ -1072,8 +1096,8 @@
             gap: 10px;
         }
         .speed-dial-label {
-            background: #fff;
-            color: var(--text-primary, #1e293b);
+            background: var(--card-bg);
+            color: var(--text-main);
             font-weight: 700;
             font-size: 0.85rem;
             padding: 8px 14px;
@@ -1196,7 +1220,7 @@
             display: flex; align-items: center; justify-content: space-between; gap: 10px;
             background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 12px;
             padding: 12px 14px; cursor: pointer;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            box-shadow: var(--card-shadow);
             transition: opacity 0.15s, box-shadow 0.15s ease-out, transform 0.15s ease-out;
         }
         .member-networth-row:hover {
@@ -1232,9 +1256,9 @@
             text-align: left; color: var(--text-main);
             transition: background-color 0.15s ease, color 0.15s ease;
         }
-        .sidebar-member-item:hover:not(.active) { background: #f3f4f6; }
-        .sidebar-member-item:active { background: #f1f5f9; }
-        .sidebar-member-item.active { background: var(--primary-bg-subtle); color: var(--primary); }
+        .sidebar-member-item:hover:not(.active) { background: var(--hover-bg); }
+        .sidebar-member-item:active { background: var(--press-bg); }
+        .sidebar-member-item.active { background: var(--active-bg); color: var(--primary); }
         .sidebar-member-item .member-row-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .sidebar-empty-hint { padding: 6px 20px 10px; font-size: 0.72rem; color: var(--text-muted); font-weight: 600; }
 
@@ -1254,12 +1278,12 @@
             text-align: left; color: var(--text-muted);
             transition: background-color 0.15s ease, color 0.15s ease;
         }
-        .sidebar-account-type-item:hover:not(.active) { background: #f3f4f6; }
-        .sidebar-account-type-item:active { background: #f1f5f9; }
-        .sidebar-account-type-item.active { background: var(--primary-bg-subtle); color: var(--primary); font-weight: 700; }
+        .sidebar-account-type-item:hover:not(.active) { background: var(--hover-bg); }
+        .sidebar-account-type-item:active { background: var(--press-bg); }
+        .sidebar-account-type-item.active { background: var(--active-bg); color: var(--primary); font-weight: 700; }
         #sidebarAccountTypeShortcuts {
             margin-left: 24px;
-            border-left: 2px solid var(--primary-border-subtle);
+            border-left: 2px solid var(--active-border);
         }
 
         /* Color swatch picker (member form) */
@@ -1409,7 +1433,7 @@
             border: 1.5px solid var(--border-color);
             border-radius: 16px;
             overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            box-shadow: var(--card-shadow);
         }
 
         .ledger-item {
@@ -1425,8 +1449,8 @@
            renders both the Dashboard's pinned Accounts widget rows AND the main Transactions
            list rows (see renderPinnedAccountsWidget / comment on .ledger-item-tx below), so one
            fix here covers both. */
-        .ledger-item:hover { background: #f3f4f6; }
-        .ledger-item:active { background: #f1f5f9; }
+        .ledger-item:hover { background: var(--hover-bg); }
+        .ledger-item:active { background: var(--press-bg); }
         .item-left { display: flex; flex-direction: column; gap: 2px; max-width: 65%; }
         .item-name { font-weight: 600; font-size: 0.9rem; }
         .item-meta { font-size: 0.75rem; color: var(--text-muted); font-weight: 500; }
@@ -1494,7 +1518,7 @@
             font-size: 0.85rem;
         }
         .statement-row:last-child { border-bottom: none; }
-        .statement-row:active { background: #f8fafc; }
+        .statement-row:active { background: var(--chip-bg); }
 
         /* Modal Elements */
         .modal {
@@ -1537,7 +1561,7 @@
             border: 1px solid var(--border-color);
             border-radius: 16px;
             padding: 16px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            box-shadow: var(--card-shadow);
             margin-bottom: 18px;
         }
         .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
@@ -1550,12 +1574,12 @@
         .form-row-icon { display: flex; align-items: center; gap: 10px; }
         .form-row-icon .field-icon { flex: 0 0 22px; text-align: center; font-size: 1.05rem; line-height: 1; color: var(--text-muted); }
         .form-row-icon input, .form-row-icon .account-picker-btn { flex: 1 1 auto !important; width: auto !important; min-width: 0; margin: 0; }
-        input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: #f8fafc; height: 44px; }
+        input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: var(--chip-bg); height: 44px; }
         .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
         .calc-btn {
             flex-shrink:0; width: 44px; height: 44px; border-radius: 10px; border: none;
-            background: #f8fafc; font-size: 1.1rem; cursor: pointer; display:flex;
+            background: var(--chip-bg); font-size: 1.1rem; cursor: pointer; display:flex;
             align-items:center; justify-content:center; padding:0; box-sizing:border-box;
             /* v156: soft-UI raised key on the light-gray surface — replaces the flat 1.5px
                border with a light/dark shadow pair so it reads as slightly embossed. */
@@ -1563,7 +1587,7 @@
             transition: box-shadow 0.1s ease, transform 0.1s ease;
         }
         .calc-btn:active {
-            background: var(--primary-bg-subtle);
+            background: var(--active-bg);
             transform: scale(0.95);
             box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 4px var(--neu-light);
         }
@@ -1577,9 +1601,9 @@
         .split-row select.form-input { margin: 0; }
         .split-amt-line { display:flex; gap:6px; }
         .split-row-catline { display:flex; align-items:center; gap:8px; margin-top:10px; }
-        .split-cat-icon { flex:0 0 auto; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.05rem; background:var(--primary-bg-subtle); }
+        .split-cat-icon { flex:0 0 auto; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.05rem; background:var(--active-bg); }
         .split-row-catline button.account-picker-btn { flex:1 1 auto !important; width:auto !important; min-width:0; margin:0; }
-        .split-remove-btn { flex:0 0 auto; width:32px; height:32px; border-radius:50%; border:none; background:#fee2e2; color:var(--expense-color); font-size:1.05rem; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; line-height:1; }
+        .split-remove-btn { flex:0 0 auto; width:32px; height:32px; border-radius:50%; border:none; background:var(--expense-chip-bg); color:var(--expense-color); font-size:1.05rem; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; line-height:1; }
         .split-remove-btn:active { opacity:0.8; }
         .split-total-row { display:flex; justify-content:space-between; align-items:center; gap:10px; margin:2px 0 12px; }
         .split-add-btn {
@@ -1595,7 +1619,7 @@
             box-shadow: inset 2px 2px 5px var(--neu-primary-dark), inset -1px -1px 3px var(--neu-primary-light);
         }
         .calc-key {
-            height: 48px; border-radius: 10px; border: none; background: #f1f5f9;
+            height: 48px; border-radius: 10px; border: none; background: var(--press-bg);
             font-size: 1.05rem; font-weight: 700; cursor: pointer; color: var(--text-main);
             /* v156: same pressable-key language as .calc-btn, tuned slightly lighter since
                these sit edge-to-edge in a dense grid rather than standing alone. */
@@ -1607,13 +1631,13 @@
             box-shadow: inset 2px 2px 4px var(--neu-dark), inset -1px -1px 3px var(--neu-light);
         }
         .calc-key-op {
-            background: var(--primary-border-subtle); color: var(--primary);
+            background: var(--primary-chip-bg); color: var(--primary);
             box-shadow: -2px -2px 5px rgba(255, 255, 255, 0.7), 2px 2px 5px rgba(129, 140, 248, 0.35);
         }
         .calc-key-op:active {
             box-shadow: inset 2px 2px 4px rgba(99, 102, 241, 0.35), inset -1px -1px 3px rgba(255, 255, 255, 0.6);
         }
-        .option-menu-btn { display:flex; align-items:center; padding: 14px; border-radius: 10px; border: none; background: #f1f5f9; color: var(--text-main); font-weight: 700; font-size: 0.88rem; cursor: pointer; text-align: left; width: 100%; }
+        .option-menu-btn { display:flex; align-items:center; padding: 14px; border-radius: 10px; border: none; background: var(--press-bg); color: var(--text-main); font-weight: 700; font-size: 0.88rem; cursor: pointer; text-align: left; width: 100%; }
         .option-menu-btn:active { opacity: 0.85; }
         /* v142: label row for a grouped picker (Category's Main Category / Subcategory
            <optgroup>s) inside #accountPickerList — see the select.children walk in
@@ -1628,7 +1652,7 @@
            can't be reduced from here. This button+modal combo fully controls its own text size
            instead, and (for Category) its own grouping too — see openAccountPicker()/
            selectAccountPickerOption() in ledger.js. */
-        button.form-input.account-picker-btn { width:100%; padding:12px; border:1.5px solid var(--border-color); border-radius:8px; font-size:0.9rem; background:#f8fafc; height:44px; color:var(--text-main); display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; font-weight:700; cursor:pointer; }
+        button.form-input.account-picker-btn { width:100%; padding:12px; border:1.5px solid var(--border-color); border-radius:8px; font-size:0.9rem; background:var(--chip-bg); height:44px; color:var(--text-main); display:flex; align-items:center; justify-content:space-between; gap:8px; text-align:left; font-weight:700; cursor:pointer; }
         .account-picker-chevron { opacity:0.55; flex:0 0 auto; }
         .account-picker-btn span:first-child { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0; }
         .config-list { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
@@ -1645,7 +1669,7 @@
             background: var(--card-bg);
             border-radius: 14px;
             border: 1px solid var(--border-color);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            box-shadow: var(--card-shadow);
             transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
         }
         .config-item:hover {
@@ -1661,7 +1685,7 @@
         .fund-subrow {
             margin-left: 18px;
             padding: 8px 12px;
-            background: #fff;
+            background: var(--card-bg);
             font-size: 0.8rem;
             box-shadow: none;
             border-radius: 8px;
@@ -1748,14 +1772,14 @@
         .subrow-toggle-btn .chevron-icon { transition: transform 0.2s ease; }
         .subrow-toggle-btn.collapsed .chevron-icon { transform: rotate(-90deg); }
         .util-row { display: flex; gap: 8px; margin-top: 24px; }
-        .btn-util { flex: 1; padding: 12px; font-size: 0.8rem; border-radius: 8px; background: #e2e8f0; border: none; font-weight: 600; cursor: pointer; }
+        .btn-util { flex: 1; padding: 12px; font-size: 0.8rem; border-radius: 8px; background: var(--chip-bg); border: none; font-weight: 600; cursor: pointer; }
 
         /* Emoji Icon Picker Grid Design */
         .emoji-picker-container {
             border: 1.5px solid var(--border-color);
             border-radius: 8px;
             padding: 10px;
-            background: #f8fafc;
+            background: var(--chip-bg);
             max-height: 180px;
             overflow-y: auto;
             margin-bottom: 12px;
@@ -1774,7 +1798,7 @@
             gap: 6px;
         }
         .emoji-btn {
-            background: white;
+            background: var(--card-bg);
             border: 1px solid var(--border-color);
             border-radius: 6px;
             font-size: 1.2rem;
@@ -1798,7 +1822,7 @@
         /* ===== App Lock (PBKDF2 + AES-GCM) ===== */
         #lockOverlay {
             position: fixed; inset: 0; z-index: 9999;
-            background: linear-gradient(160deg, var(--primary) 0%, var(--primary-deep) 100%);
+            background: linear-gradient(160deg, #4f46e5 0%, #312e81 100%);
             display: flex; align-items: center; justify-content: center;
             padding: 24px;
         }
@@ -1983,44 +2007,39 @@
         }
     </style>
     <!-- v179: apply any saved background-theme choice before first paint, so the page never
-         flashes the default slate background and then jumps to the user's chosen tint. Only
-         --bg-color / --neu-dark and the browser-chrome theme-color are touched here; every
-         other design token (glass, card colors, data colors) is untouched, so the rest of the
-         v156+ glass/neumorphism styling is unaffected regardless of which background is picked. -->
+         flashes the default slate background and then jumps to the user's chosen tint.
+         v195: mirrors ledger.js's full BG_THEME_VAR_MAP (bg/card/text/border/neu/glass/chip/data
+         colors), not just --bg-color/--neu-dark, so a saved full dark preset (e.g. 暗夜描边)
+         doesn't flash the light card/text/chip colors for a frame before ledger.js's own
+         applyBgTheme() re-runs. -->
     <script>
         (function () {
             try {
                 var saved = JSON.parse(localStorage.getItem("ledgerBgTheme"));
                 if (saved && saved.bg) {
-                    document.documentElement.style.setProperty("--bg-color", saved.bg);
-                    if (saved.neuDark) document.documentElement.style.setProperty("--neu-dark", saved.neuDark);
+                    var varMap = {
+                        bg: "--bg-color", cardBg: "--card-bg", textMain: "--text-main", textMuted: "--text-muted",
+                        borderColor: "--border-color", neuLight: "--neu-light", neuDark: "--neu-dark",
+                        neuPrimaryLight: "--neu-primary-light", neuPrimaryDark: "--neu-primary-dark",
+                        glassBg: "--glass-bg", glassBgStrong: "--glass-bg-strong",
+                        glassBgModal: "--glass-bg-modal", glassBorder: "--glass-border",
+                        hoverBg: "--hover-bg", pressBg: "--press-bg", activeBg: "--active-bg",
+                        activeBorder: "--active-border", chipBg: "--chip-bg",
+                        incomeChipBg: "--income-chip-bg", incomeChipBorder: "--income-chip-border",
+                        expenseChipBg: "--expense-chip-bg", expenseChipBorder: "--expense-chip-border",
+                        primaryChipBg: "--primary-chip-bg",
+                        cardShadow: "--card-shadow",
+                        hardwareTrackBg: "--hardware-track-bg", hardwareTrackBorder: "--hardware-track-border",
+                        hardwareFillStart: "--hardware-fill-start", hardwareFillEnd: "--hardware-fill-end",
+                        primary: "--primary", incomeColor: "--income-color", expenseColor: "--expense-color",
+                        transferColor: "--transfer-color", salaryColor: "--salary-color"
+                    };
+                    var root = document.documentElement.style;
+                    for (var key in varMap) { if (saved[key]) root.setProperty(varMap[key], saved[key]); }
                     if (saved.themeColor) {
                         var m = document.querySelector('meta[name="theme-color"]');
                         if (m) m.setAttribute("content", saved.themeColor);
                     }
-                }
-            } catch (e) {}
-        })();
-    </script>
-    <!-- v195: same no-flash pre-paint trick as the background-theme block above, but for the
-         accent-color theme (--primary and its companion tokens). This one also owns the
-         browser-chrome theme-color meta tag, since the accent color is the more prominent
-         brand color the user actually sees in buttons — it applies last so it wins over
-         whatever the background block above set. -->
-    <script>
-        (function () {
-            try {
-                var saved = JSON.parse(localStorage.getItem("ledgerPrimaryTheme"));
-                if (saved && saved.primary) {
-                    var root = document.documentElement.style;
-                    root.setProperty("--primary", saved.primary);
-                    root.setProperty("--primary-hover", saved.hover);
-                    root.setProperty("--primary-bg-subtle", saved.bgSubtle);
-                    root.setProperty("--primary-border-subtle", saved.borderSubtle);
-                    root.setProperty("--primary-deep", saved.deep);
-                    root.setProperty("--neu-primary-dark", saved.neuDark);
-                    var m = document.querySelector('meta[name="theme-color"]');
-                    if (m) m.setAttribute("content", saved.primary);
                 }
             } catch (e) {}
         })();
@@ -2376,7 +2395,7 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
             </div>
         </div>
-        <div id="ledgerCurrentBalanceBanner" class="net-savings-banner" style="display:none; background:var(--primary-bg-subtle);">
+        <div id="ledgerCurrentBalanceBanner" class="net-savings-banner" style="display:none; background:var(--active-bg);">
             <span id="ledgerCurrentBalanceLabel">Current Balance</span>: <span id="ledgerCurrentBalanceValue">0.00</span>
         </div>
         <div id="ledgerLinkedAccountBanner" style="display:none; cursor:pointer; font-size:0.78rem; font-weight:700; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:8px 12px; margin:-6px 0 14px; text-align:center;" data-click="navigateToLinkedAccountFromLedgerHeader">
@@ -2434,7 +2453,7 @@
                 <button type="button" data-click="closeModal" data-modal="noteSummaryModal" style="background:none; border:none; font-size:1.5rem; padding:0 0 0 10px; line-height:1;">&times;</button>
             </div>
             <div id="noteSummaryModalList" style="max-height:60vh; overflow-y:auto;"></div>
-            <button type="button" data-click="closeModal" data-modal="noteSummaryModal" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:4px;">Close</button>
+            <button type="button" data-click="closeModal" data-modal="noteSummaryModal" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin-top:4px;">Close</button>
         </div>
     </div>
 
@@ -2451,7 +2470,7 @@
                 <div id="fundActivityMeta" style="display:flex; flex-wrap:wrap; gap:10px; font-size:0.72rem; color:var(--text-muted); font-weight:600;"></div>
             </div>
         </div>
-        <div class="net-savings-banner" style="background:var(--primary-bg-subtle);">
+        <div class="net-savings-banner" style="background:var(--active-bg);">
             Current Value: <span id="fundActivityBalanceValue">0.00</span>
         </div>
         <div class="ledger-container" id="fundActivityList"></div>
@@ -2468,7 +2487,7 @@
                 <p id="currencyActivityMeta" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;"></p>
             </div>
         </div>
-        <div class="net-savings-banner" style="background:var(--primary-bg-subtle);">
+        <div class="net-savings-banner" style="background:var(--active-bg);">
             Current Balance: <span id="currencyActivityBalanceValue">0.00</span>
         </div>
         <div class="ledger-container" id="currencyActivityList"></div>
@@ -2701,7 +2720,7 @@
         <!-- v73: categories flagged "Exclude from Net Savings Report" (Manage Categories) are left
              out of the total/chart above and tallied here instead, matching the Net Savings
              Statement page. Hidden entirely when nothing is excluded. -->
-        <div class="report-card" id="spendingBreakdownExcludedCard" style="display:none; background:#f8fafc; margin-top:10px;">
+        <div class="report-card" id="spendingBreakdownExcludedCard" style="display:none; background:var(--chip-bg); margin-top:10px;">
             <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted); margin-bottom:2px;">
                 Excluded from Report: <span id="spendingBreakdownExcludedTotal" style="color:var(--text-muted);">0.00</span>
             </div>
@@ -2757,7 +2776,7 @@
 
         <!-- v73: mirrors the Excluded card on the Spending Breakdown page above, for income-side
              excluded categories (rare, but the toggle in Manage Categories isn't type-restricted). -->
-        <div class="report-card" id="incomeBreakdownExcludedCard" style="display:none; background:#f8fafc; margin-top:10px;">
+        <div class="report-card" id="incomeBreakdownExcludedCard" style="display:none; background:var(--chip-bg); margin-top:10px;">
             <div style="font-size:0.8rem; font-weight:700; color:var(--text-muted); margin-bottom:2px;">
                 Excluded from Report: <span id="incomeBreakdownExcludedTotal" style="color:var(--text-muted);">0.00</span>
             </div>
@@ -2784,7 +2803,7 @@
 
         <!-- v148: shown only after reaching this page via the dashboard report card's "Total"
              row on a month-based tile (This Month/Last Month) — see savingsFilterMonth. -->
-        <div id="savingsMonthScopeBadge" style="display:none; align-items:center; justify-content:space-between; gap:8px; background:var(--primary-bg-subtle); border:1.5px solid var(--primary); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:0.78rem; font-weight:700; color:var(--primary);">
+        <div id="savingsMonthScopeBadge" style="display:none; align-items:center; justify-content:space-between; gap:8px; background:var(--primary-chip-bg); border:1.5px solid var(--primary); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:0.78rem; font-weight:700; color:var(--primary);">
             <span id="savingsMonthScopeBadgeText"></span>
             <button type="button" class="trash-btn" data-click="clearSavingsMonthScope" style="padding:2px 8px; font-size:0.7rem;">Clear</button>
         </div>
@@ -2808,7 +2827,7 @@
             </div>
         </div>
 
-        <div class="statement-card" style="border: 2px solid var(--primary); background: var(--primary-bg-subtle);">
+        <div class="statement-card" style="border: 2px solid var(--primary); background: var(--primary-chip-bg); color: var(--primary);">
             <div style="display:flex; justify-content:space-between; font-weight:800; font-size:1.1rem;">
                 <span id="savingsSurplusLabel">Surplus Margin:</span>
                 <span id="savingsSurplusValue">0.00</span>
@@ -2819,7 +2838,7 @@
              out of the Income/Expense totals and Surplus above, and tallied here instead — e.g.
              gifts to family that leave your account but shouldn't count as personal spending.
              Hidden entirely when nothing is excluded. -->
-        <div class="statement-card" id="savingsExcludedCard" style="display:none; background:#f8fafc;">
+        <div class="statement-card" id="savingsExcludedCard" style="display:none; background:var(--chip-bg);">
             <h4 style="margin-bottom:4px; color:var(--text-muted);">EXCLUDED FROM REPORT</h4>
             <p style="font-size:0.7rem; color:var(--text-muted); margin-bottom:10px;">Not counted in the Surplus/Deficit above.</p>
             <div id="savingsExcludedRows"></div>
@@ -2859,7 +2878,7 @@
                     <span class="stat-title" style="color:#166534;">Portfolio Value</span>
                     <div class="stat-amount" id="portfolioValueTotal" style="color:#15803d;">0.00</div>
                 </div>
-                <div class="stat-box" style="background:var(--primary-bg-subtle); border:1px solid var(--primary-border-subtle);">
+                <div class="stat-box" style="background:#f5f3ff; border:1px solid #ddd6fe;">
                     <span class="stat-title" style="color:#5b21b6;">Total Invested</span>
                     <div class="stat-amount" id="portfolioInvestedTotal" style="color:#6d28d9;">0.00</div>
                 </div>
@@ -2956,14 +2975,6 @@
             <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the page background and the tint of the chrome shadows (FAB, calculator, nav bar) to match. Cards, glass panels and data colors stay the same.</p>
                 <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
-            </div>
-            <div class="config-item" style="cursor:pointer;" data-click="togglePrimaryThemeSettings">
-                <span>🎯 <strong>Accent Color</strong></span>
-                <span style="color:var(--text-muted);">›</span>
-            </div>
-            <div id="primaryThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the color of buttons, selected states and highlights app-wide. Chosen to stay clear of the green/red income &amp; expense colors and the gold Salary category color.</p>
-                <div class="color-swatch-grid" id="primaryThemeSwatchGrid"></div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
                 <span>👪 <strong>Manage Members</strong></span>
@@ -3107,10 +3118,10 @@
                     <label>Account Type</label>
                     <div style="display:flex; gap:6px; flex-wrap:wrap;">
                         <button type="button" id="accTypeBtnNormal" data-click="setAccountTypeUI" data-type="normal" class="submit-btn" style="margin-top:0; flex:1; font-size:0.72rem; padding:10px 4px; min-width:70px;">🏛️ Normal</button>
-                        <button type="button" id="accTypeBtnCc" data-click="setAccountTypeUI" data-type="creditcard" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">💳 Credit Card</button>
-                        <button type="button" id="accTypeBtnMulti" data-click="setAccountTypeUI" data-type="multi" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">💱 Multi-Currency</button>
-                        <button type="button" id="accTypeBtnFd" data-click="setAccountTypeUI" data-type="fd" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">🏦 Fixed Deposit</button>
-                        <button type="button" id="accTypeBtnUt" data-click="setAccountTypeUI" data-type="unittrust" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">🧺 Unit Trust</button>
+                        <button type="button" id="accTypeBtnCc" data-click="setAccountTypeUI" data-type="creditcard" class="submit-btn" style="margin-top:0; flex:1; background:var(--chip-bg); color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">💳 Credit Card</button>
+                        <button type="button" id="accTypeBtnMulti" data-click="setAccountTypeUI" data-type="multi" class="submit-btn" style="margin-top:0; flex:1; background:var(--chip-bg); color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">💱 Multi-Currency</button>
+                        <button type="button" id="accTypeBtnFd" data-click="setAccountTypeUI" data-type="fd" class="submit-btn" style="margin-top:0; flex:1; background:var(--chip-bg); color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">🏦 Fixed Deposit</button>
+                        <button type="button" id="accTypeBtnUt" data-click="setAccountTypeUI" data-type="unittrust" class="submit-btn" style="margin-top:0; flex:1; background:var(--chip-bg); color:var(--text-main); font-size:0.72rem; padding:10px 4px; min-width:70px;">🧺 Unit Trust</button>
                     </div>
                     <input type="hidden" id="newAccType" value="normal">
                 </div>
@@ -3595,8 +3606,8 @@
                 <div class="form-row">
                     <label>Attachments (optional) — photos or PDFs</label>
                     <div style="display:flex; gap:8px;">
-                        <button type="button" data-click="openCameraInput" class="submit-btn" style="margin-top:0; background:#e2e8f0; color:var(--text-main); flex:1;">📷 Take Photo</button>
-                        <button type="button" data-click="openFilesInput" class="submit-btn" style="margin-top:0; background:#e2e8f0; color:var(--text-main); flex:1;">📎 Add Files</button>
+                        <button type="button" data-click="openCameraInput" class="submit-btn" style="margin-top:0; background:var(--chip-bg); color:var(--text-main); flex:1;">📷 Take Photo</button>
+                        <button type="button" data-click="openFilesInput" class="submit-btn" style="margin-top:0; background:var(--chip-bg); color:var(--text-main); flex:1;">📎 Add Files</button>
                     </div>
                     <input type="file" id="txCameraInput" accept="image/*" capture="environment" style="display:none;" data-change="handleTxAttachmentsSelected">
                     <input type="file" id="txFilesInput" accept="image/*,application/pdf" multiple style="display:none;" data-change="handleTxAttachmentsSelected">
@@ -3621,7 +3632,7 @@
                 <h3 style="font-weight:800;">Calculator</h3>
                 <button data-click="closeModal" data-modal="calcPadModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
             </div>
-            <div id="calcPadDisplay" style="background:#f8fafc; border:1.5px solid var(--border-color); border-radius:8px; padding:14px; text-align:right; font-size:1.4rem; font-weight:700; margin-bottom:10px; min-height:28px; word-break:break-all;">0</div>
+            <div id="calcPadDisplay" style="background:var(--chip-bg); border:1.5px solid var(--border-color); border-radius:8px; padding:14px; text-align:right; font-size:1.4rem; font-weight:700; margin-bottom:10px; min-height:28px; word-break:break-all;">0</div>
             <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px;">
                 <button type="button" class="calc-key" data-click="calcPadPress" data-val="C" style="grid-column:span 2;">C</button>
                 <button type="button" class="calc-key" data-click="calcPadPress" data-val="⌫">⌫</button>
@@ -3665,11 +3676,11 @@
             <div style="padding:20px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
                     <span id="txQuickViewDesc" style="font-weight:800; font-size:1rem;"></span>
-                    <button type="button" data-click="openTxOptionsMenu" title="More options" style="background:var(--primary-bg-subtle); border:none; width:34px; height:34px; border-radius:8px; font-weight:900; cursor:pointer; font-size:1.1rem; color:var(--primary);">⋮</button>
+                    <button type="button" data-click="openTxOptionsMenu" title="More options" style="background:var(--active-bg); border:none; width:34px; height:34px; border-radius:8px; font-weight:900; cursor:pointer; font-size:1.1rem; color:var(--primary);">⋮</button>
                 </div>
                 <div id="txQuickViewDetails" style="font-size:0.85rem; line-height:2; color:var(--text-main); margin-bottom:16px;"></div>
                 <button type="button" id="txQuickViewCheckedBtn" data-click="toggleTxCheckedFromQuickView" class="submit-btn" style="margin-top:0;"></button>
-                <button type="button" data-click="closeModal" data-modal="txQuickViewModal" class="submit-btn" style="background:#e2e8f0; color:var(--text-main);">Close</button>
+                <button type="button" data-click="closeModal" data-modal="txQuickViewModal" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main);">Close</button>
             </div>
         </div>
     </div>
@@ -3748,7 +3759,7 @@
                 <label>What would you like to do?</label>
                 <div style="display:flex; gap:8px;">
                     <button type="button" id="resolveFdActionRenewBtn" data-click="setResolveFdAction" data-action-value="renew" class="submit-btn" style="margin-top:0; flex:1;">🔄 Renew</button>
-                    <button type="button" id="resolveFdActionWithdrawBtn" data-click="setResolveFdAction" data-action-value="withdraw" class="submit-btn" style="margin-top:0; flex:1; background:#e2e8f0; color:var(--text-main);">💸 Withdraw & Close</button>
+                    <button type="button" id="resolveFdActionWithdrawBtn" data-click="setResolveFdAction" data-action-value="withdraw" class="submit-btn" style="margin-top:0; flex:1; background:var(--chip-bg); color:var(--text-main);">💸 Withdraw & Close</button>
                 </div>
                 <input type="hidden" id="resolveFdAction" value="renew">
             </div>
@@ -3759,7 +3770,7 @@
                     <label>Renewal Mode</label>
                     <div style="display:flex; gap:8px;">
                         <button type="button" id="resolveFdModeCapitalizeBtn" data-click="setResolveFdRenewMode" data-mode="capitalize" class="submit-btn" style="margin-top:0; flex:1; font-size:0.78rem;">➕ Renew with Interest</button>
-                        <button type="button" id="resolveFdModePrincipalBtn" data-click="setResolveFdRenewMode" data-mode="principal" class="submit-btn" style="margin-top:0; flex:1; font-size:0.78rem; background:#e2e8f0; color:var(--text-main);">🏛️ Principal Only</button>
+                        <button type="button" id="resolveFdModePrincipalBtn" data-click="setResolveFdRenewMode" data-mode="principal" class="submit-btn" style="margin-top:0; flex:1; font-size:0.78rem; background:var(--chip-bg); color:var(--text-main);">🏛️ Principal Only</button>
                     </div>
                     <input type="hidden" id="resolveFdRenewMode" value="capitalize">
                 </div>
@@ -3999,7 +4010,7 @@
             </div>
 
             <button type="button" data-click="handleSaveSalaryRecord" class="submit-btn">Save Record</button>
-            <button type="button" data-click="closeModal" data-modal="salaryModal" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:8px;">Cancel</button>
+            <button type="button" data-click="closeModal" data-modal="salaryModal" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin-top:8px;">Cancel</button>
         </div>
     </div>
 
@@ -4085,7 +4096,7 @@
             <p id="attachmentViewerTitle" style="font-size:0.85rem; font-weight:700; margin:0; padding:16px 16px 10px; word-break:break-all; flex-shrink:0;"></p>
             <div id="attachmentViewerBody" style="flex:1 1 auto; min-height:0; overflow-y:auto; max-width:80vw; padding:0 16px;"></div>
             <div style="display:flex; gap:8px; padding:14px 16px; flex-shrink:0; border-top:1px solid var(--border-color);">
-                <a id="btnDownloadAttachment" href="" download="" class="submit-btn" style="margin-top:0; width:auto; padding:10px 20px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; background:#e2e8f0; color:var(--text-main);">⬇ Download</a>
+                <a id="btnDownloadAttachment" href="" download="" class="submit-btn" style="margin-top:0; width:auto; padding:10px 20px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; background:var(--chip-bg); color:var(--text-main);">⬇ Download</a>
                 <button type="button" data-click="closeModal" data-modal="attachmentViewerModal" class="submit-btn" style="margin-top:0; width:auto; padding:10px 24px;">Close</button>
             </div>
         </div>
@@ -4100,7 +4111,7 @@
         <div class="modal-sheet" style="max-width:340px;">
             <p style="font-size:0.85rem; font-weight:700; margin-bottom:10px;">Attachments</p>
             <div id="txAttachmentsPickerList" style="display:flex; flex-direction:column; gap:6px; max-height:50vh; overflow-y:auto;"></div>
-            <button type="button" data-click="closeModal" data-modal="txAttachmentsPickerModal" class="submit-btn" style="margin-top:14px; background:#e2e8f0; color:var(--text-main);">Close</button>
+            <button type="button" data-click="closeModal" data-modal="txAttachmentsPickerModal" class="submit-btn" style="margin-top:14px; background:var(--chip-bg); color:var(--text-main);">Close</button>
         </div>
     </div>
 
@@ -4109,7 +4120,7 @@
         <div class="modal-sheet" style="max-width: 340px;">
             <p id="confirmModalMessage" style="font-size:0.9rem; line-height:1.5; margin-bottom:18px;"></p>
             <div style="display:flex; gap:10px;">
-                <button type="button" id="confirmModalCancelBtn" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:0;">Cancel</button>
+                <button type="button" id="confirmModalCancelBtn" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin-top:0;">Cancel</button>
                 <button type="button" id="confirmModalOkBtn" class="submit-btn" style="background:var(--expense-color); margin-top:0;">Confirm</button>
             </div>
         </div>
@@ -4123,7 +4134,7 @@
             <div id="backupPasscodeError" style="color:var(--expense-color); font-size:0.8rem; font-weight:700; margin-bottom:8px; min-height:1em;"></div>
             <input type="password" id="backupPasscodeInput" class="form-input" autocomplete="off" placeholder="Backup passcode" style="width:100%; margin-bottom:14px;">
             <div style="display:flex; gap:10px;">
-                <button type="button" id="backupPasscodeCancelBtn" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:0;">Cancel</button>
+                <button type="button" id="backupPasscodeCancelBtn" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin-top:0;">Cancel</button>
                 <button type="button" id="backupPasscodeOkBtn" class="submit-btn" style="background:var(--primary); margin-top:0;">Decrypt</button>
             </div>
         </div>

@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v194";
-        const APP_VERSION_DATE = "2026-08-29";
+        const APP_VERSION = "v195";
+        const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -61,13 +61,32 @@
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
 
-        // v179: page-background presets (Setting > Background Theme). Each preset overrides
-        // --bg-color plus two cohesion touches: --neu-dark (the shadow half of the chrome-only
-        // neumorphism effect — FAB, calculator keys, nav bar — tinted to match the background's
-        // hue instead of staying a fixed slate-gray) and the browser-chrome theme-color meta tag.
-        // Deliberately NOT touched: --card-bg, --border-color, --text-*, --glass-*, --neu-light,
-        // or any data color (income/expense/transfer/salary, stat-box chips, badges). Those stay
-        // flat/light and print-safe by design (see the v156 token comment above).
+        // v179: page-background presets (Setting > Background Theme). The 12 original presets
+        // override --bg-color plus two cohesion touches: --neu-dark (the shadow half of the
+        // chrome-only neumorphism effect — FAB, calculator keys, nav bar — tinted to match the
+        // background's hue instead of staying a fixed slate-gray) and the browser-chrome
+        // theme-color meta tag. They deliberately leave every other key alone (any key a preset
+        // omits falls back to THEME_DEFAULTS below, which mirror the original light :root values).
+        //
+        // v195: added "midnight" (暗夜描边), the first FULL dark preset — it overrides every key,
+        // including the data colors (--primary/--income-color/--expense-color/etc, softened —
+        // full-saturation red/green on a near-black background causes halation/eye strain) and
+        // the v195 chip/hardware/card-shadow tokens above, so switching to/from it correctly
+        // resets every touched var either way, not just the two the light presets ever needed.
+        const THEME_DEFAULTS = {
+            bg: "#f8fafc", cardBg: "#ffffff", textMain: "#0f172a", textMuted: "#64748b",
+            borderColor: "#e2e8f0", neuLight: "rgba(255,255,255,0.85)", neuDark: "rgba(148,163,184,0.45)",
+            neuPrimaryLight: "rgba(255,255,255,0.22)", neuPrimaryDark: "rgba(49,46,129,0.55)",
+            glassBg: "rgba(255,255,255,0.68)", glassBgStrong: "rgba(255,255,255,0.82)",
+            glassBgModal: "rgba(255,255,255,0.92)", glassBorder: "rgba(255,255,255,0.55)",
+            hoverBg: "#f3f4f6", pressBg: "#f1f5f9", activeBg: "#eef2ff", activeBorder: "#e0e7ff", chipBg: "#e2e8f0",
+            incomeChipBg: "#f0fdf4", incomeChipBorder: "#bbf7d0", expenseChipBg: "#fef2f2", expenseChipBorder: "#fecaca",
+            primaryChipBg: "#f5f3ff",
+            cardShadow: "0 1px 3px rgba(0,0,0,0.06)",
+            hardwareTrackBg: "#f4ede4", hardwareTrackBorder: "#dcd1c4", hardwareFillStart: "#e3cbb3", hardwareFillEnd: "#c5a88a",
+            primary: "#6366f1", incomeColor: "#10b981", expenseColor: "#ef4444", transferColor: "#3b82f6", salaryColor: "#d97706",
+            themeColor: "#4f46e5",
+        };
         const BG_THEMES = [
             { id: "default",    name: "Slate",       bg: "#f8fafc", neuDark: "rgba(148,163,184,0.45)", themeColor: "#4f46e5" },
             { id: "sand",       name: "Sand",         bg: "#faf5ec", neuDark: "rgba(180,150,110,0.40)", themeColor: "#b9863f" },
@@ -81,32 +100,35 @@
             { id: "rosegold",   name: "Rose Gold",    bg: "#fdf2f5", neuDark: "rgba(200,150,165,0.35)", themeColor: "#c97a95" },
             { id: "cloud",      name: "Cloud Gray",   bg: "#f5f5f6", neuDark: "rgba(150,150,155,0.40)", themeColor: "#6b7280" },
             { id: "butter",     name: "Butter",       bg: "#fdfaf0", neuDark: "rgba(200,180,110,0.35)", themeColor: "#c9a63f" },
+            {
+                id: "midnight", name: "暗夜描边",
+                bg: "#0a0a0f", cardBg: "#15151d", textMain: "#e8eaf0", textMuted: "#8b93a8",
+                borderColor: "rgba(255,255,255,0.14)",
+                neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
+                neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
+                glassBg: "rgba(20,20,28,0.72)", glassBgStrong: "rgba(20,20,28,0.85)",
+                glassBgModal: "rgba(24,24,32,0.95)", glassBorder: "rgba(255,255,255,0.12)",
+                hoverBg: "rgba(255,255,255,0.06)", pressBg: "rgba(255,255,255,0.10)",
+                activeBg: "rgba(99,102,241,0.18)", activeBorder: "rgba(129,140,248,0.35)", chipBg: "rgba(255,255,255,0.08)",
+                // v195: soft/muted tints per 改进建议.md — low-alpha color-on-near-black chips
+                // instead of the light pastel hexes, so they read as "colored glass" not white boxes.
+                incomeChipBg: "rgba(52,211,153,0.15)", incomeChipBorder: "rgba(52,211,153,0.35)",
+                expenseChipBg: "rgba(248,113,113,0.15)", expenseChipBorder: "rgba(248,113,113,0.35)",
+                primaryChipBg: "rgba(129,140,248,0.15)",
+                // A black box-shadow is invisible on a near-black card — elevation instead comes
+                // from the crisp --border-color + cardBg being a shade lighter than bg.
+                cardShadow: "none",
+                hardwareTrackBg: "#2a231c", hardwareTrackBorder: "#46392c",
+                hardwareFillStart: "#6b5642", hardwareFillEnd: "#4a3a2a",
+                // v195: softened/desaturated data colors — full-saturation red/green/indigo on a
+                // near-black background causes halation (glow/"vibration") and eye strain; these
+                // are the standard higher-lightness, lower-saturation dark-mode equivalents.
+                primary: "#818cf8", incomeColor: "#34d399", expenseColor: "#f87171",
+                transferColor: "#60a5fa", salaryColor: "#fbbf24",
+                themeColor: "#0a0a0f",
+            },
         ];
         const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
-
-        // v195: accent-color presets (Setting > Accent Color). Unlike BG_THEMES above, these
-        // override --primary and its companion tokens (see the :root comment in index.html),
-        // i.e. the color of buttons, selected states, gradients and highlights app-wide.
-        //
-        // Curated down from an original 5-preset moodboard to these 4 — two were dropped/adjusted
-        // on purpose rather than offered as-is:
-        //   - "Amber Gold" was dropped entirely: --salary-color is already #d97706 (identical to
-        //     that preset's light-mode primary) and #f59e0b is already in MEMBER_COLORS above, so
-        //     turning the whole UI chrome gold would make the Salary category and any member using
-        //     that color swatch visually disappear into the buttons/nav.
-        //   - "Mint Teal" was hue-shifted from the original ~172° teal toward ~193° cyan (still
-        //     reads as a fresh teal, just pulled further from --income-color's ~160° green) so a
-        //     selected/active chip doesn't get misread as an income cue at a glance.
-        // Indigo, Purple and Slate needed no changes — they sit far enough from both the
-        // green/red income-expense colors and the gold salary color to be safe as-is. Indigo's
-        // values are the app's original hardcoded defaults, kept byte-for-byte as the baseline.
-        const PRIMARY_THEMES = [
-            { id: "indigo", name: "Indigo",  primary: "#6366f1", hover: "#4338ca", bgSubtle: "#eef2ff", borderSubtle: "#e0e7ff", deep: "#312e81", neuDark: "rgba(49,46,129,0.55)" },
-            { id: "teal",   name: "Teal",    primary: "#0e7490", hover: "#155e75", bgSubtle: "#ecfeff", borderSubtle: "#cffafe", deep: "#164e63", neuDark: "rgba(22,78,99,0.55)" },
-            { id: "purple", name: "Purple",  primary: "#7c3aed", hover: "#6d28d9", bgSubtle: "#f5f3ff", borderSubtle: "#ede9fe", deep: "#4c1d95", neuDark: "rgba(76,29,149,0.55)" },
-            { id: "slate",  name: "Slate",   primary: "#475569", hover: "#334155", bgSubtle: "#f1f5f9", borderSubtle: "#e2e8f0", deep: "#1e293b", neuDark: "rgba(30,41,59,0.55)" },
-        ];
-        const PRIMARY_THEME_STORAGE_KEY = "ledgerPrimaryTheme";
 
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
@@ -5255,17 +5277,38 @@
             } catch (e) { return "default"; }
         }
 
-        // Applies a preset's --bg-color / --neu-dark (and matching theme-color meta tag) to the
-        // live page, and — unless save is false — persists it so both the next app launch and
-        // the no-flash inline snippet in <head> pick it up before first paint.
+        // Applies a preset's full palette (bg/card/text/border/neu/glass/chip/data-colors + the
+        // theme-color meta tag) to the live page, and — unless save is false — persists it so
+        // both the next app launch and the no-flash inline snippet in <head> pick it up before
+        // first paint.
+        // v195: every key now falls back to THEME_DEFAULTS and is always (re)written, so
+        // switching from a full preset like "midnight" back to a light preset that only ever
+        // specifies bg/neuDark/themeColor correctly resets every other var it had touched,
+        // instead of leaving it stuck at the previous theme's value.
+        const BG_THEME_VAR_MAP = {
+            bg: "--bg-color", cardBg: "--card-bg", textMain: "--text-main", textMuted: "--text-muted",
+            borderColor: "--border-color", neuLight: "--neu-light", neuDark: "--neu-dark",
+            neuPrimaryLight: "--neu-primary-light", neuPrimaryDark: "--neu-primary-dark",
+            glassBg: "--glass-bg", glassBgStrong: "--glass-bg-strong",
+            glassBgModal: "--glass-bg-modal", glassBorder: "--glass-border",
+            hoverBg: "--hover-bg", pressBg: "--press-bg", activeBg: "--active-bg",
+            activeBorder: "--active-border", chipBg: "--chip-bg",
+            incomeChipBg: "--income-chip-bg", incomeChipBorder: "--income-chip-border",
+            expenseChipBg: "--expense-chip-bg", expenseChipBorder: "--expense-chip-border",
+            primaryChipBg: "--primary-chip-bg",
+            cardShadow: "--card-shadow",
+            hardwareTrackBg: "--hardware-track-bg", hardwareTrackBorder: "--hardware-track-border",
+            hardwareFillStart: "--hardware-fill-start", hardwareFillEnd: "--hardware-fill-end",
+            primary: "--primary", incomeColor: "--income-color", expenseColor: "--expense-color",
+            transferColor: "--transfer-color", salaryColor: "--salary-color",
+        };
         function applyBgTheme(themeId, { save = true } = {}) {
             const theme = BG_THEMES.find(t => t.id === themeId) || BG_THEMES[0];
-            document.documentElement.style.setProperty("--bg-color", theme.bg);
-            if (theme.neuDark) document.documentElement.style.setProperty("--neu-dark", theme.neuDark);
-            // v195: the browser-chrome theme-color meta tag is now owned by the accent-color
-            // theme (applyPrimaryTheme, below) instead of the background theme — the accent
-            // color is the one the user actually sees in buttons, so it's the more accurate
-            // "brand color" for the status bar. See applyPrimaryTheme() for where it's set.
+            for (const key in BG_THEME_VAR_MAP) {
+                document.documentElement.style.setProperty(BG_THEME_VAR_MAP[key], theme[key] || THEME_DEFAULTS[key]);
+            }
+            const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor || THEME_DEFAULTS.themeColor);
             if (save) {
                 try { localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
             }
@@ -5296,59 +5339,6 @@
             panel.style.display = isHidden ? "flex" : "none";
         }
 
-        // --- v195: Accent Color Theme (Setting page) ----------------------------------------
-        function getSavedPrimaryThemeId() {
-            try {
-                const saved = JSON.parse(localStorage.getItem(PRIMARY_THEME_STORAGE_KEY));
-                return (saved && saved.id) || "indigo";
-            } catch (e) { return "indigo"; }
-        }
-
-        // Applies a preset's --primary and companion tokens to the live page, plus the
-        // browser-chrome theme-color meta tag (see the note in applyBgTheme above for why that
-        // ownership moved here), and — unless save is false — persists it so both the next app
-        // launch and the no-flash inline snippet in <head> pick it up before first paint.
-        function applyPrimaryTheme(themeId, { save = true } = {}) {
-            const theme = PRIMARY_THEMES.find(t => t.id === themeId) || PRIMARY_THEMES[0];
-            const root = document.documentElement.style;
-            root.setProperty("--primary", theme.primary);
-            root.setProperty("--primary-hover", theme.hover);
-            root.setProperty("--primary-bg-subtle", theme.bgSubtle);
-            root.setProperty("--primary-border-subtle", theme.borderSubtle);
-            root.setProperty("--primary-deep", theme.deep);
-            root.setProperty("--neu-primary-dark", theme.neuDark);
-            const metaThemeColor = document.querySelector('meta[name="theme-color"]');
-            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.primary);
-            if (save) {
-                try { localStorage.setItem(PRIMARY_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
-            }
-            return theme;
-        }
-
-        function buildPrimaryThemeSwatchGrid() {
-            const grid = document.getElementById("primaryThemeSwatchGrid");
-            if (!grid) return;
-            const selectedId = getSavedPrimaryThemeId();
-            grid.innerHTML = PRIMARY_THEMES.map(t => `
-                <span class="bg-theme-swatch-wrap">
-                    <span class="color-swatch${t.id === selectedId ? ' selected' : ''}" style="background:${t.primary};" data-click="selectPrimaryTheme" data-theme-id="${t.id}" title="${t.name}"></span>
-                    <span class="bg-theme-swatch-label">${t.name}</span>
-                </span>
-            `).join("");
-        }
-
-        function selectPrimaryTheme(el) {
-            applyPrimaryTheme(el.dataset.themeId);
-            document.querySelectorAll("#primaryThemeSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.themeId === el.dataset.themeId));
-        }
-
-        function togglePrimaryThemeSettings() {
-            const panel = document.getElementById("primaryThemeSettingsPanel");
-            const isHidden = panel.style.display === "none";
-            if (isHidden) buildPrimaryThemeSwatchGrid();
-            panel.style.display = isHidden ? "flex" : "none";
-        }
-
         // v184: re-applies the saved theme the moment this script parses (this runs long before
         // bootstrap()'s async lock/DB work, since ledger.js is loaded via a plain <script src>
         // at the end of <body>, not gated on "load" or DB init). This is a deliberate SECOND
@@ -5362,7 +5352,6 @@
         // second time, later in the page's life, as a safety net. save:false so it never
         // rewrites localStorage with the value it just read from it.
         applyBgTheme(getSavedBgThemeId(), { save: false });
-        applyPrimaryTheme(getSavedPrimaryThemeId(), { save: false });
 
         function openMemberFormModal() {
             document.getElementById("editMemberId").value = "";
@@ -8650,7 +8639,7 @@
             // skipped automatically by option-menu-btn's click handling and by the typeahead
             // listener below (which only ever queries for ".option-menu-btn").
             const optionRowHTML = (opt) => `
-                <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:var(--primary-border-subtle);" : ""}">
+                <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:#e0e7ff;" : ""}">
                     <span>${opt.textContent}</span>
                     ${opt.value === currentVal ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
                 </button>
@@ -11163,8 +11152,6 @@
             selectMemberColor: (el) => selectMemberColor(el),
             toggleBgThemeSettings: () => toggleBgThemeSettings(),
             selectBgTheme: (el) => selectBgTheme(el),
-            togglePrimaryThemeSettings: () => togglePrimaryThemeSettings(),
-            selectPrimaryTheme: (el) => selectPrimaryTheme(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
