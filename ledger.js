@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v197";
+        const APP_VERSION = "v198";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -8072,8 +8072,10 @@
             // nudged toward that member's own accounts). With 2+ members "All Members" remains the
             // safer default since guessing which one just got paid isn't possible.
             memberSelect.value = membersCache.length === 1 ? membersCache[0].id : "all";
+            syncAccountPickerButtonText("salaryMemberSelect");
 
             document.getElementById("salaryScheme").value = "none";
+            syncAccountPickerButtonText("salaryScheme");
             document.getElementById("salaryGross").value = "";
             document.getElementById("salaryEEAmount").value = "";
             document.getElementById("salaryERAmount").value = "";
@@ -8087,10 +8089,12 @@
             const currSelect = document.getElementById("salaryCurrency");
             currSelect.innerHTML = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
             currSelect.value = baseCurrency;
+            syncAccountPickerButtonText("salaryCurrency");
 
             const catSelect = document.getElementById("salaryCategory");
             catSelect.innerHTML = buildCategoryOptionsHTML("income", dynamicCategories.filter(c => c.type === "income").map(c => c.name));
             catSelect.value = "Salary";
+            syncAccountPickerButtonText("salaryCategory");
 
             populateSalaryAccountSelects(accounts);
             // Bank Account defaults to Default Receive Account, if one is set and still exists —
@@ -8218,7 +8222,10 @@
 
             const currSelect = document.getElementById("salaryCurrency");
             const schemeCurrency = isEpf ? "MYR" : isCpf ? "SGD" : null;
-            if (schemeCurrency && fxRates[schemeCurrency] !== undefined) currSelect.value = schemeCurrency;
+            if (schemeCurrency && fxRates[schemeCurrency] !== undefined) {
+                currSelect.value = schemeCurrency;
+                syncAccountPickerButtonText("salaryCurrency");
+            }
 
             if (hasScheme) {
                 const memberId = document.getElementById("salaryMemberSelect").value;
@@ -8709,8 +8716,11 @@
             // (txCategory / each split row's <rowId>_cat), so this is a no-op for Account pickers.
             const iconEl = document.getElementById(selectId + "Icon");
             if (iconEl) {
+                // salaryCategory is always populated from income categories only (see
+                // openSalaryEntryForm()), so it can't read txType (that belongs to the separate
+                // Income/Expense/Transfer form and may not even reflect "income" at this moment).
                 const typeEl = document.getElementById("txType");
-                const type = (typeEl && typeEl.value === "income") ? "income" : "expense";
+                const type = selectId === "salaryCategory" ? "income" : (typeEl && typeEl.value === "income") ? "income" : "expense";
                 const catName = select.value;
                 iconEl.textContent = catName ? getCategoryIcon(catName, type) : "🏷️";
                 iconEl.style.background = catName ? getCategoryAvatarColor(catName) : "#eef2ff";

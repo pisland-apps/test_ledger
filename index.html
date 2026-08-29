@@ -3923,13 +3923,19 @@
                     <h3 style="font-weight:800;">💰 Salary Entry</h3>
                     <p style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">Record Gross Salary → Net Bank + EPF/CPF Split</p>
                 </div>
-                <select id="salaryCurrency" class="form-input" data-change="handleSalaryCurrencyChange" style="flex:0 0 auto; width:auto; min-width:74px; height:34px; padding:4px 6px; font-size:0.8rem; margin-right:4px;"></select>
+                <button type="button" id="salaryCurrencyBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryCurrency" data-title="Select Currency" aria-label="Currency" style="flex:0 0 auto; width:auto; min-width:74px; height:34px; padding:4px 8px; font-size:0.8rem; margin-right:4px;">
+                    <span id="salaryCurrencyBtnText">MYR</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="salaryCurrency" style="display:none;" data-change="handleSalaryCurrencyChange"></select>
                 <button data-click="closeModal" data-modal="salaryModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
             </div>
 
             <div class="form-row">
                 <label>Member</label>
-                <select id="salaryMemberSelect" class="form-input" data-change="handleSalaryMemberChange">
+                <button type="button" id="salaryMemberSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryMemberSelect" data-title="Select Member" aria-label="Member">
+                    <span id="salaryMemberSelectBtnText">All Members (show every account)</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="salaryMemberSelect" style="display:none;" data-change="handleSalaryMemberChange">
                     <option value="all">All Members (show every account)</option>
                 </select>
             </div>
@@ -3941,7 +3947,10 @@
                 </div>
                 <div>
                     <label>Scheme</label>
-                    <select id="salaryScheme" class="form-input" data-change="handleSalarySchemeChange">
+                    <button type="button" id="salarySchemeBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryScheme" data-title="Select Scheme" aria-label="Scheme">
+                        <span id="salarySchemeBtnText">None (plain salary)</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="salaryScheme" style="display:none;" data-change="handleSalarySchemeChange">
                         <option value="none">None (plain salary)</option>
                         <option value="epf">EPF (Malaysia)</option>
                         <option value="cpf">CPF (Singapore)</option>
@@ -3964,7 +3973,13 @@
 
             <div class="form-row">
                 <label>Category</label>
-                <select id="salaryCategory" class="form-input"></select>
+                <div class="split-row-catline">
+                    <span class="split-cat-icon" id="salaryCategoryIcon">🏷️</span>
+                    <button type="button" id="salaryCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryCategory" data-title="Select Category" aria-label="Category">
+                        <span id="salaryCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                </div>
+                <select id="salaryCategory" style="display:none;"></select>
             </div>
 
             <div class="form-row" id="salaryContribAccountRow" style="display:none;">
