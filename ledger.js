@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v188";
+        const APP_VERSION = "v189";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2212,16 +2212,18 @@
             }
         }
 
-        // v188: "Group by Note" — collapses every transaction in the category/period currently
-        // being viewed (see navigateToCategoryPage below) into one row per distinct note text
-        // (case-insensitive, trimmed), each with a combined total, an occurrence count, and every
-        // date it was logged — e.g. typing "mcd" as the note on three separate McDonald's
-        // purchases groups them into one "mcd (x3)" row. Mirrors a reference budgeting app's
-        // per-category note-merge summary. Reuses the exact same isBound rule the ledger list
-        // itself uses for a category view (t.cat === activeCategoryView, scoped by
-        // categoryDrillYear/Month) so the two always agree on what's "in" this category/period —
-        // deliberately NOT limited to expenses only, so it also works when viewing an income
-        // category.
+        // v188: "Group by Description" — collapses every transaction in the category/period
+        // currently being viewed (see navigateToCategoryPage below) into one row per distinct
+        // Description text (case-insensitive, trimmed), each with a combined total, an
+        // occurrence count, and every date it was logged — e.g. typing "mcd" as the description
+        // on three separate McDonald's purchases groups them into one "mcd (x3)" row. Mirrors a
+        // reference budgeting app's per-category note-merge summary. Groups by the transaction's
+        // main Description field (t.desc) rather than the optional Notes field, since that's
+        // where most people actually type the merchant/what-it-was text. Reuses the exact same
+        // isBound rule the ledger list itself uses for a category view (t.cat ===
+        // activeCategoryView, scoped by categoryDrillYear/Month) so the two always agree on
+        // what's "in" this category/period — deliberately NOT limited to expenses only, so it
+        // also works when viewing an income category.
         async function openNoteSummaryModal() {
             if (activeCategoryView === "all") return; // button is hidden otherwise, but guard anyway
             const txs = await readAllDB(STORES.TRANSACTIONS);
@@ -2232,9 +2234,9 @@
                 const d = new Date(t.date);
                 if (categoryDrillYear !== "all" && d.getFullYear().toString() !== categoryDrillYear) return;
                 if (categoryDrillMonth !== "all" && d.getMonth().toString() !== categoryDrillMonth) return;
-                const noteRaw = (t.notes || "").trim();
+                const noteRaw = (t.desc || "").trim();
                 const key = noteRaw ? noteRaw.toLowerCase() : "\u0000no-note";
-                if (!groups[key]) groups[key] = { label: noteRaw || "(No note)", total: 0, count: 0, dates: [] };
+                if (!groups[key]) groups[key] = { label: noteRaw || "(No description)", total: 0, count: 0, dates: [] };
                 groups[key].total += convertTxAmountToBase(t, accounts);
                 groups[key].count += 1;
                 groups[key].dates.push(t.date);
@@ -2242,7 +2244,7 @@
 
             const entries = Object.values(groups).sort((a, b) => b.total - a.total);
             const icon = getCategoryIcon(activeCategoryView);
-            document.getElementById("noteSummaryModalTitle").textContent = `${icon} ${activeCategoryView} — Notes Summary`;
+            document.getElementById("noteSummaryModalTitle").textContent = `${icon} ${activeCategoryView} — Description Summary`;
 
             document.getElementById("noteSummaryModalList").innerHTML = entries.length === 0
                 ? `<p style="font-size:0.8rem; text-align:center; color:var(--text-muted);">No transactions to group here.</p>`

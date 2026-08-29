@@ -2325,9 +2325,9 @@
                     <h3 id="ledgerTargetTitle" style="font-weight:800; font-size:1.2rem;">Account Ledger</h3>
                     <button id="ledgerTargetEditBtn" class="icon-edit-btn" style="display:none;" data-click="editAccountFromLedgerHeader" title="Edit account credentials">✏️</button>
                     <!-- v188: only shown while viewing a single category (see navigateToCategoryPage) —
-                         groups this category's transactions by their note text, e.g. every entry
-                         noted "mcd" collapsed into one row with a combined total and dates. -->
-                    <button id="ledgerNoteSummaryBtn" class="icon-edit-btn" style="display:none;" data-click="openNoteSummaryModal" title="Group by note">📝</button>
+                         groups this category's transactions by their Description text, e.g. every
+                         entry described "mcd" collapsed into one row with a combined total and dates. -->
+                    <button id="ledgerNoteSummaryBtn" class="icon-edit-btn" style="display:none;" data-click="openNoteSummaryModal" title="Group by description">📝</button>
                 </div>
                 <div id="ledgerTargetOwnerTags" style="display:none; gap:8px; margin:2px 0 1px;"></div>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
@@ -2380,14 +2380,14 @@
         <button class="fab-btn" data-click="toggleLedgerQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
     </div>
 
-    <!-- MODAL: Notes Summary (v188) — reached via the 📝 button on a category's ledger view
-         (ledgerNoteSummaryBtn above). Groups that category/period's transactions by note text,
-         e.g. every entry noted "mcd" collapsed into one "mcd (x3)" row with a combined total
-         and every date it was logged. -->
+    <!-- MODAL: Description Summary (v188) — reached via the 📝 button on a category's ledger view
+         (ledgerNoteSummaryBtn above). Groups that category/period's transactions by their
+         Description text, e.g. every entry described "mcd" collapsed into one "mcd (x3)" row
+         with a combined total and every date it was logged. -->
     <div class="modal" id="noteSummaryModal">
         <div class="modal-sheet" style="max-width:380px;">
             <div class="modal-header" style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
-                <h3 id="noteSummaryModalTitle" style="font-weight:800; font-size:1rem;">Notes Summary</h3>
+                <h3 id="noteSummaryModalTitle" style="font-weight:800; font-size:1rem;">Description Summary</h3>
                 <button type="button" data-click="closeModal" data-modal="noteSummaryModal" style="background:none; border:none; font-size:1.5rem; padding:0 0 0 10px; line-height:1;">&times;</button>
             </div>
             <div id="noteSummaryModalList" style="max-height:60vh; overflow-y:auto;"></div>
