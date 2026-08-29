@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v190";
+        const APP_VERSION = "v191";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1693,9 +1693,8 @@
                 const allCatsDesc = Object.keys(catTotals).filter(c => catTotals[c] > 0).sort((a, b) => catTotals[b] - catTotals[a]);
                 const donutTotal = allCatsDesc.reduce((sum, c) => sum + catTotals[c], 0);
                 const donutEntries = allCatsDesc.map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
-                donutWrapEl.innerHTML = donutEntries.length
-                    ? buildBreakdownDonutSVG(donutEntries, donutTotal, "expense")
-                    : `<p class="insights-empty">No expenses yet this month.</p>`;
+                if (donutEntries.length) renderDonutIntoWrap("insightsSpendingDonutWrap", donutEntries, donutTotal, "expense");
+                else donutWrapEl.innerHTML = `<p class="insights-empty">No expenses yet this month.</p>`;
             }
 
             const cutoffMs = now.getTime() - 60 * 86400000;
@@ -9955,42 +9954,72 @@
         // .breakdown-donut-svg-holder for why (was a plain solid-stroke ring + cramped side
         // legend that didn't fit the 300px dashboard Insights rail). `entries` must already be
         // sorted descending by value (every caller already does this for its own legend/ranking,
-        // so entries[0] is always the largest slice — that's what the center overlay shows).
-        function buildBreakdownDonutSVG(entries, total, type = "expense") {
+        // so entries[0] is the largest slice — that's what the center overlay shows by default).
+        // v191: interactive — tapping a slice (or its matching legend row) "pops" that segment
+        // outward and swaps the center overlay to show ITS icon/name/amount/share instead of the
+        // default top category; tapping the same one again puts it back. `activeIndex` is which
+        // entries[] index is currently popped (null = none, showing the default top-category
+        // center). `wrapId` is stamped onto every clickable element as data-wrap so the click
+        // handler (toggleDonutSlice, wired through donutState below) knows which <div id=wrapId>
+        // to re-render — every caller must render through renderDonutIntoWrap() (not call this
+        // function directly) for that state tracking to work.
+        function buildBreakdownDonutSVG(entries, total, type = "expense", activeIndex = null, wrapId = "") {
             if (entries.length === 0 || total <= 0) return "";
             const size = 220, r = 76, cx = size / 2, cy = size / 2, circumference = 2 * Math.PI * r;
             // Small fixed-px gap between adjacent segments, centered on each boundary via the
             // half-gap dashoffset nudge below — only applied when there's more than one slice
             // (a single 100% category should still read as a clean unbroken ring).
             const gapPx = entries.length > 1 ? 5 : 0;
+            const popPx = 12; // how far the active slice is pushed outward, in SVG user units
             let offsetCursor = 0;
             let segments = "";
-            entries.forEach(e => {
+            entries.forEach((e, i) => {
                 const sliceLen = (e.value / total) * circumference;
                 const dashVisible = Math.max(0, sliceLen - gapPx);
-                segments += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${e.color}" stroke-width="26" stroke-linecap="round" stroke-dasharray="${dashVisible.toFixed(2)} ${(circumference - dashVisible).toFixed(2)}" stroke-dashoffset="${(-(offsetCursor + gapPx / 2)).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"></circle>`;
+                const isActive = i === activeIndex;
+                // Pop transform: computed as translate-THEN-rotate (rightmost transform applies
+                // first) so the translate happens in the already-rotated screen frame — i.e. dx/dy
+                // below are plain "push this many px toward 3 o'clock / 6 o'clock" screen deltas,
+                // no extra angle correction needed for the existing rotate(-90 cx cy) every slice
+                // already carries.
+                let popTransform = "";
+                if (isActive) {
+                    const midFrac = (offsetCursor + sliceLen / 2) / circumference;
+                    const visualAngleRad = (midFrac * 360 - 90) * (Math.PI / 180);
+                    const dx = (popPx * Math.cos(visualAngleRad)).toFixed(2);
+                    const dy = (popPx * Math.sin(visualAngleRad)).toFixed(2);
+                    popTransform = `translate(${dx} ${dy}) `;
+                }
+                const strokeW = isActive ? 30 : 26;
+                const opacity = (activeIndex !== null && !isActive) ? 0.55 : 1;
+                segments += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${e.color}" stroke-width="${strokeW}" stroke-opacity="${opacity}" stroke-linecap="round" stroke-dasharray="${dashVisible.toFixed(2)} ${(circumference - dashVisible).toFixed(2)}" stroke-dashoffset="${(-(offsetCursor + gapPx / 2)).toFixed(2)}" transform="${popTransform}rotate(-90 ${cx} ${cy})" style="cursor:pointer; transition:stroke-width 0.15s, stroke-opacity 0.15s;" data-click="toggleDonutSlice" data-wrap="${escapeHtml(wrapId)}" data-index="${i}"></circle>`;
                 offsetCursor += sliceLen;
             });
 
-            // Center overlay: the largest category by value (entries[0]) — icon, name, amount,
-            // and its share of the total. A plain HTML div positioned over the SVG hole rather
-            // than SVG <text>, so normal CSS (ellipsis, font-weight, var(--text-main)) applies.
-            const top = entries[0];
-            const topPct = total > 0 ? Math.round((top.value / total) * 100) : 0;
+            // Center overlay: the active slice if one's popped, else the largest category by
+            // value (entries[0]) — icon, name, amount, and its share of the total. A plain HTML
+            // div positioned over the SVG hole rather than SVG <text>, so normal CSS (ellipsis,
+            // font-weight, var(--text-main)) applies.
+            const shown = activeIndex !== null ? entries[activeIndex] : entries[0];
+            const shownPct = total > 0 ? Math.round((shown.value / total) * 100) : 0;
             const centerHTML = `
                 <div class="breakdown-donut-center">
-                    <div class="breakdown-donut-center-icon">${getCategoryIcon(top.label, type)}</div>
-                    <div class="breakdown-donut-center-label">${escapeHtml(top.label)}</div>
-                    <div class="breakdown-donut-center-amount">${formatCurrency(top.value, baseCurrency)}</div>
-                    <div class="breakdown-donut-center-pct">${topPct}% of total</div>
+                    <div class="breakdown-donut-center-icon">${getCategoryIcon(shown.label, type)}</div>
+                    <div class="breakdown-donut-center-label">${escapeHtml(shown.label)}</div>
+                    <div class="breakdown-donut-center-amount">${formatCurrency(shown.value, baseCurrency)}</div>
+                    <div class="breakdown-donut-center-pct">${shownPct}% of total</div>
                 </div>`;
 
-            const legend = entries.map(e => {
+            const legend = entries.map((e, i) => {
                 const pct = total > 0 ? ((e.value / total) * 100).toFixed(0) : 0;
+                const isActive = i === activeIndex;
+                const rowStyle = isActive
+                    ? "background:var(--bg-color); border-radius:8px; padding:4px 6px; margin:-4px -6px;"
+                    : "";
                 return `
-                    <div class="breakdown-donut-legend-row">
-                        <span class="breakdown-donut-legend-dot" style="background:${e.color};"></span>
-                        <span class="breakdown-donut-legend-label">${getCategoryIcon(e.label, type)} ${escapeHtml(e.label)}</span>
+                    <div class="breakdown-donut-legend-row" style="cursor:pointer; ${rowStyle}" data-click="toggleDonutSlice" data-wrap="${escapeHtml(wrapId)}" data-index="${i}">
+                        <span class="breakdown-donut-legend-dot" style="background:${e.color};${isActive ? " box-shadow:0 0 0 3px " + e.color + "40;" : ""}"></span>
+                        <span class="breakdown-donut-legend-label" style="${isActive ? "font-weight:800;" : ""}">${getCategoryIcon(e.label, type)} ${escapeHtml(e.label)}</span>
                         <span class="breakdown-donut-legend-amount">${formatCurrency(e.value, baseCurrency)}</span>
                         <span class="breakdown-donut-legend-pct">${pct}%</span>
                     </div>`;
@@ -10005,11 +10034,37 @@
             `;
         }
 
+        // v191: per-wrapId memory of { entries, total, type, activeIndex } so a slice/legend-row
+        // click (toggleDonutSlice below) can re-render just that one donut with its popped state
+        // toggled, without needing to re-run the whole page's data query. Every donut-producing
+        // caller must go through renderDonutIntoWrap() (not call buildBreakdownDonutSVG directly)
+        // so this stays in sync — a full re-render (filter change, month tick, etc.) always
+        // resets that wrap's activeIndex to null, matching plain "nothing selected" default.
+        let donutState = {};
+
+        function renderDonutIntoWrap(wrapId, entries, total, type) {
+            donutState[wrapId] = { entries, total, type, activeIndex: null };
+            const wrap = document.getElementById(wrapId);
+            if (!wrap) return;
+            wrap.innerHTML = entries.length ? buildBreakdownDonutSVG(entries, total, type, null, wrapId) : "";
+        }
+
+        function toggleDonutSlice(el) {
+            const wrapId = el.dataset.wrap;
+            const idx = parseInt(el.dataset.index, 10);
+            const state = donutState[wrapId];
+            if (!state) return;
+            state.activeIndex = state.activeIndex === idx ? null : idx;
+            const wrap = document.getElementById(wrapId);
+            if (wrap) wrap.innerHTML = buildBreakdownDonutSVG(state.entries, state.total, state.type, state.activeIndex, wrapId);
+        }
+
         function renderBreakdownChart(wrapId, chartType, entries, total, type) {
             const wrap = document.getElementById(wrapId);
             if (chartType === "bar") wrap.innerHTML = buildBreakdownBarSVG(entries);
-            else if (chartType === "donut") wrap.innerHTML = buildBreakdownDonutSVG(entries, total, type);
+            else if (chartType === "donut") renderDonutIntoWrap(wrapId, entries, total, type);
             else wrap.innerHTML = ""; // "list" view has no separate chart — the list rows are the whole view
+
         }
 
         // Fills a breakdown page's "Member" filter dropdown with every member. "All Members"
@@ -11123,6 +11178,7 @@
             handleSalaryCurrencyChange: () => handleSalaryCurrencyChange(),
             changeReportCardPeriod1: (el) => changeReportCardPeriod(1, el.value),
             changeReportCardPeriod2: (el) => changeReportCardPeriod(2, el.value),
+            toggleDonutSlice: (el) => toggleDonutSlice(el),
         };
 
         const INPUT_ACTIONS = {
