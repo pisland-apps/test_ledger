@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v189";
+        const APP_VERSION = "v190";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -9703,7 +9703,12 @@
         // savingsExpandedMains/toggleSavingsMainExpand() above for the expand/collapse state.
         // A Main Category with no Subcategories, or a legacy/fallback category name with no
         // matching record at all, still renders exactly as a single flat row like before v103.
-        function buildSavingsSectionRowsHTML(catSummary, type, filterY) {
+        // v190: filterM (savingsFilterMonth at render time) added — every row here carries it
+        // through to navigateToCategoryPage as data-month, alongside the year it already carried.
+        // Previously only the year was passed, so a category clicked from a month-scoped visit
+        // (report card's "Total" click — see navigateToSavingsPage/savingsFilterMonth) opened
+        // that category's whole-year history instead of just the month actually being viewed.
+        function buildSavingsSectionRowsHTML(catSummary, type, filterY, filterM) {
             const catRecords = dynamicCategories.filter(c => c.type === type);
             const mains = catRecords.filter(c => !c.parentId).sort((a, b) => a.name.localeCompare(b.name));
             const subsByMainId = new Map();
@@ -9738,7 +9743,7 @@
 
                 html += `
                     <div class="statement-row" style="align-items:center;">
-                        <span style="cursor:pointer;" data-click="navigateToCategoryPage" data-category="${escapeHtml(main.name)}" data-back="savings" data-year="${escapeHtml(filterY)}">
+                        <span style="cursor:pointer;" data-click="navigateToCategoryPage" data-category="${escapeHtml(main.name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}">
                             <strong>${icon} ${escapeHtml(main.name)}</strong>
                         </span>
                         <span style="display:flex; align-items:center; gap:8px;">
@@ -9751,7 +9756,7 @@
                 if (hasSubs && expanded) {
                     subRowsData.forEach(s => {
                         html += `
-                            <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(s.name)}" data-back="savings" data-year="${escapeHtml(filterY)}" style="padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;">
+                            <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(s.name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}" style="padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;">
                                 <span><span style="color:var(--text-muted);">↳</span> ${s.icon} ${escapeHtml(s.name)}</span>
                                 <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(s.value, baseCurrency)}</span>
                             </div>
@@ -9766,7 +9771,7 @@
                 if (Math.abs(val) < SAVINGS_ZERO_EPS) return;
                 const icon = getCategoryIcon(name, type);
                 html += `
-                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(name)}" data-back="savings" data-year="${escapeHtml(filterY)}">
+                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}">
                         <strong>${icon} ${escapeHtml(name)}</strong>
                         <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(val, baseCurrency)}</span>
                     </div>
@@ -9856,11 +9861,11 @@
                 }
             });
 
-            let incRowsHTML = buildSavingsSectionRowsHTML(catSummary.income, "income", filterY);
+            let incRowsHTML = buildSavingsSectionRowsHTML(catSummary.income, "income", filterY, savingsFilterMonth);
             document.getElementById("savingsIncomeRows").innerHTML = incRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No income entries logged.</p>';
             document.getElementById("savingsIncomeTotal").textContent = `+${formatCurrency(Math.abs(incBaseTotal) < SAVINGS_ZERO_EPS ? 0 : incBaseTotal, baseCurrency)}`;
 
-            let expRowsHTML = buildSavingsSectionRowsHTML(catSummary.expense, "expense", filterY);
+            let expRowsHTML = buildSavingsSectionRowsHTML(catSummary.expense, "expense", filterY, savingsFilterMonth);
             document.getElementById("savingsExpenseRows").innerHTML = expRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No expense entries logged.</p>';
             document.getElementById("savingsExpenseTotal").textContent = `-${formatCurrency(Math.abs(expBaseTotal) < SAVINGS_ZERO_EPS ? 0 : expBaseTotal, baseCurrency)}`;
 
@@ -9881,7 +9886,7 @@
                 const sign = entry.type === "income" ? "+" : "-";
                 const color = entry.type === "income" ? "var(--income-color)" : "var(--expense-color)";
                 excludedRowsHTML += `
-                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}">
+                    <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(savingsFilterMonth)}">
                         <strong>${icon} ${escapeHtml(c)}</strong>
                         <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(entry.value, baseCurrency)}</span>
                     </div>
