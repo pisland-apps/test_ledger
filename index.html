@@ -514,6 +514,40 @@
         }
         .category-row-item:active { background: #f1f5f9; }
 
+        /* v187: redesigned donut chart (buildBreakdownDonutSVG) — was a plain stroke-to-stroke
+           ring with a small side legend, which on the dashboard's narrow Insights rail (300px,
+           see .desktop-insights-rail) usually just rendered as a single flat-colored circle with
+           nothing else visible. Now: rounded, gapped segments (modern flat-chart look) with an
+           HTML overlay centered in the hole showing the top category — real info instead of a
+           blank hole — and a full-width legend list below (icon, name, amount, percentage per
+           row) instead of the cramped side column. Used by the dashboard Insights widget and
+           both the Spending/Income Breakdown pages' own donut view, so all three inherit this at
+           once (see the standing "duplicated list renderers" lesson — this one IS a shared
+           function/component, unlike the account-card renderers, so one change covers all
+           callers here). */
+        .breakdown-donut-svg-holder { position: relative; width: 100%; max-width: 220px; margin: 0 auto; }
+        .breakdown-donut-svg-holder svg { display: block; width: 100%; height: auto; }
+        .breakdown-donut-center {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 62%; text-align: center; pointer-events: none;
+        }
+        .breakdown-donut-center-icon { font-size: 1.1rem; line-height: 1; margin-bottom: 2px; }
+        .breakdown-donut-center-label {
+            font-size: 0.66rem; font-weight: 700; color: var(--text-muted);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .breakdown-donut-center-amount { font-size: 0.92rem; font-weight: 800; color: var(--text-main); letter-spacing: -0.01em; }
+        .breakdown-donut-center-pct { font-size: 0.68rem; font-weight: 700; color: var(--primary); margin-top: 1px; }
+        .breakdown-donut-legend { margin-top: 16px; display: flex; flex-direction: column; gap: 9px; }
+        .breakdown-donut-legend-row { display: flex; align-items: center; gap: 8px; font-size: 0.76rem; }
+        .breakdown-donut-legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+        .breakdown-donut-legend-label {
+            flex: 1; min-width: 0; font-weight: 700; color: var(--text-main);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .breakdown-donut-legend-amount { font-weight: 800; color: var(--text-main); white-space: nowrap; }
+        .breakdown-donut-legend-pct { color: var(--text-muted); font-weight: 600; white-space: nowrap; min-width: 30px; text-align: right; }
+
         .filters {
             display: flex;
             gap: 8px;
@@ -903,7 +937,7 @@
             width: 44px;
             height: 44px;
             border-radius: 50%;
-            background: var(--card-bg);
+            background: #fff;
             color: var(--text-muted);
             border: 1.5px solid var(--border-color);
             font-size: 1.3rem;
@@ -948,7 +982,7 @@
             width: 44px;
             height: 44px;
             border-radius: 50%;
-            background: var(--card-bg);
+            background: #fff;
             color: var(--primary);
             border: 1.5px solid var(--border-color);
             font-size: 1.2rem;
@@ -1018,8 +1052,8 @@
             gap: 10px;
         }
         .speed-dial-label {
-            background: var(--card-bg);
-            color: var(--text-main);
+            background: #fff;
+            color: var(--text-primary, #1e293b);
             font-weight: 700;
             font-size: 0.85rem;
             padding: 8px 14px;
@@ -1607,7 +1641,7 @@
         .fund-subrow {
             margin-left: 18px;
             padding: 8px 12px;
-            background: var(--card-bg);
+            background: #fff;
             font-size: 0.8rem;
             box-shadow: none;
             border-radius: 8px;
@@ -1720,7 +1754,7 @@
             gap: 6px;
         }
         .emoji-btn {
-            background: var(--card-bg);
+            background: white;
             border: 1px solid var(--border-color);
             border-radius: 6px;
             font-size: 1.2rem;
@@ -1929,24 +1963,17 @@
         }
     </style>
     <!-- v179: apply any saved background-theme choice before first paint, so the page never
-         flashes the default slate background and then jumps to the user's chosen tint.
-         v185: now mirrors ledger.js's full BG_THEME_VAR_MAP (bg/card/text/border/neu/glass), not
-         just --bg-color/--neu-dark, so a saved full dark preset (e.g. 暗夜描边) doesn't flash the
-         light card/text colors for a frame before ledger.js's own applyBgTheme() re-runs. -->
+         flashes the default slate background and then jumps to the user's chosen tint. Only
+         --bg-color / --neu-dark and the browser-chrome theme-color are touched here; every
+         other design token (glass, card colors, data colors) is untouched, so the rest of the
+         v156+ glass/neumorphism styling is unaffected regardless of which background is picked. -->
     <script>
         (function () {
             try {
                 var saved = JSON.parse(localStorage.getItem("ledgerBgTheme"));
                 if (saved && saved.bg) {
-                    var varMap = {
-                        bg: "--bg-color", cardBg: "--card-bg", textMain: "--text-main", textMuted: "--text-muted",
-                        borderColor: "--border-color", neuLight: "--neu-light", neuDark: "--neu-dark",
-                        neuPrimaryLight: "--neu-primary-light", neuPrimaryDark: "--neu-primary-dark",
-                        glassBg: "--glass-bg", glassBgStrong: "--glass-bg-strong",
-                        glassBgModal: "--glass-bg-modal", glassBorder: "--glass-border"
-                    };
-                    var root = document.documentElement.style;
-                    for (var key in varMap) { if (saved[key]) root.setProperty(varMap[key], saved[key]); }
+                    document.documentElement.style.setProperty("--bg-color", saved.bg);
+                    if (saved.neuDark) document.documentElement.style.setProperty("--neu-dark", saved.neuDark);
                     if (saved.themeColor) {
                         var m = document.querySelector('meta[name="theme-color"]');
                         if (m) m.setAttribute("content", saved.themeColor);
@@ -2297,6 +2324,10 @@
                 <div style="display:flex; align-items:center; gap:8px;">
                     <h3 id="ledgerTargetTitle" style="font-weight:800; font-size:1.2rem;">Account Ledger</h3>
                     <button id="ledgerTargetEditBtn" class="icon-edit-btn" style="display:none;" data-click="editAccountFromLedgerHeader" title="Edit account credentials">✏️</button>
+                    <!-- v188: only shown while viewing a single category (see navigateToCategoryPage) —
+                         groups this category's transactions by their note text, e.g. every entry
+                         noted "mcd" collapsed into one row with a combined total and dates. -->
+                    <button id="ledgerNoteSummaryBtn" class="icon-edit-btn" style="display:none;" data-click="openNoteSummaryModal" title="Group by note">📝</button>
                 </div>
                 <div id="ledgerTargetOwnerTags" style="display:none; gap:8px; margin:2px 0 1px;"></div>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
@@ -2347,6 +2378,21 @@
             <button class="action-btn btn-transfer" data-click="quickAddChooseType" data-type="transfer"><span>🔄 Transfer</span></button>
         </div>
         <button class="fab-btn" data-click="toggleLedgerQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
+    </div>
+
+    <!-- MODAL: Notes Summary (v188) — reached via the 📝 button on a category's ledger view
+         (ledgerNoteSummaryBtn above). Groups that category/period's transactions by note text,
+         e.g. every entry noted "mcd" collapsed into one "mcd (x3)" row with a combined total
+         and every date it was logged. -->
+    <div class="modal" id="noteSummaryModal">
+        <div class="modal-sheet" style="max-width:380px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:12px;">
+                <h3 id="noteSummaryModalTitle" style="font-weight:800; font-size:1rem;">Notes Summary</h3>
+                <button type="button" data-click="closeModal" data-modal="noteSummaryModal" style="background:none; border:none; font-size:1.5rem; padding:0 0 0 10px; line-height:1;">&times;</button>
+            </div>
+            <div id="noteSummaryModalList" style="max-height:60vh; overflow-y:auto;"></div>
+            <button type="button" data-click="closeModal" data-modal="noteSummaryModal" class="submit-btn" style="background:#e2e8f0; color:var(--text-main); margin-top:4px;">Close</button>
+        </div>
     </div>
 
     <!-- ================= PAGE: FUND ACTIVITY (v48 — one fund's own transactions, mirrors an

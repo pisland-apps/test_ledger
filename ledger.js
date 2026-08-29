@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v185";
+        const APP_VERSION = "v188";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -61,25 +61,13 @@
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
 
-        // v179: page-background presets (Setting > Background Theme). The 12 original presets
-        // override --bg-color plus two cohesion touches: --neu-dark (the shadow half of the
-        // chrome-only neumorphism effect — FAB, calculator keys, nav bar — tinted to match the
-        // background's hue instead of staying a fixed slate-gray) and the browser-chrome
-        // theme-color meta tag. They deliberately leave --card-bg, --border-color, --text-*,
-        // --glass-*, and --neu-light alone (any key a preset omits falls back to THEME_DEFAULTS
-        // below, which mirror the light :root values) — see the v156 token comment above.
-        //
-        // v185: added "midnight" (暗夜描边), the first FULL dark preset — it overrides every key
-        // so switching to/from it correctly restores every touched var either way, not just the
-        // two the light presets ever needed.
-        const THEME_DEFAULTS = {
-            bg: "#f8fafc", cardBg: "#ffffff", textMain: "#0f172a", textMuted: "#64748b",
-            borderColor: "#e2e8f0", neuLight: "rgba(255,255,255,0.85)", neuDark: "rgba(148,163,184,0.45)",
-            neuPrimaryLight: "rgba(255,255,255,0.22)", neuPrimaryDark: "rgba(49,46,129,0.55)",
-            glassBg: "rgba(255,255,255,0.68)", glassBgStrong: "rgba(255,255,255,0.82)",
-            glassBgModal: "rgba(255,255,255,0.92)", glassBorder: "rgba(255,255,255,0.55)",
-            themeColor: "#4f46e5",
-        };
+        // v179: page-background presets (Setting > Background Theme). Each preset overrides
+        // --bg-color plus two cohesion touches: --neu-dark (the shadow half of the chrome-only
+        // neumorphism effect — FAB, calculator keys, nav bar — tinted to match the background's
+        // hue instead of staying a fixed slate-gray) and the browser-chrome theme-color meta tag.
+        // Deliberately NOT touched: --card-bg, --border-color, --text-*, --glass-*, --neu-light,
+        // or any data color (income/expense/transfer/salary, stat-box chips, badges). Those stay
+        // flat/light and print-safe by design (see the v156 token comment above).
         const BG_THEMES = [
             { id: "default",    name: "Slate",       bg: "#f8fafc", neuDark: "rgba(148,163,184,0.45)", themeColor: "#4f46e5" },
             { id: "sand",       name: "Sand",         bg: "#faf5ec", neuDark: "rgba(180,150,110,0.40)", themeColor: "#b9863f" },
@@ -93,16 +81,6 @@
             { id: "rosegold",   name: "Rose Gold",    bg: "#fdf2f5", neuDark: "rgba(200,150,165,0.35)", themeColor: "#c97a95" },
             { id: "cloud",      name: "Cloud Gray",   bg: "#f5f5f6", neuDark: "rgba(150,150,155,0.40)", themeColor: "#6b7280" },
             { id: "butter",     name: "Butter",       bg: "#fdfaf0", neuDark: "rgba(200,180,110,0.35)", themeColor: "#c9a63f" },
-            {
-                id: "midnight", name: "暗夜描边",
-                bg: "#0a0a0f", cardBg: "#15151d", textMain: "#e8eaf0", textMuted: "#8b93a8",
-                borderColor: "rgba(255,255,255,0.14)",
-                neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
-                neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
-                glassBg: "rgba(20,20,28,0.72)", glassBgStrong: "rgba(20,20,28,0.85)",
-                glassBgModal: "rgba(24,24,32,0.95)", glassBorder: "rgba(255,255,255,0.12)",
-                themeColor: "#0a0a0f",
-            },
         ];
         const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
 
@@ -1716,7 +1694,7 @@
                 const donutTotal = allCatsDesc.reduce((sum, c) => sum + catTotals[c], 0);
                 const donutEntries = allCatsDesc.map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
                 donutWrapEl.innerHTML = donutEntries.length
-                    ? buildBreakdownDonutSVG(donutEntries, donutTotal)
+                    ? buildBreakdownDonutSVG(donutEntries, donutTotal, "expense")
                     : `<p class="insights-empty">No expenses yet this month.</p>`;
             }
 
@@ -2232,6 +2210,60 @@
             } else {
                 openTransactionForm(action);
             }
+        }
+
+        // v188: "Group by Note" — collapses every transaction in the category/period currently
+        // being viewed (see navigateToCategoryPage below) into one row per distinct note text
+        // (case-insensitive, trimmed), each with a combined total, an occurrence count, and every
+        // date it was logged — e.g. typing "mcd" as the note on three separate McDonald's
+        // purchases groups them into one "mcd (x3)" row. Mirrors a reference budgeting app's
+        // per-category note-merge summary. Reuses the exact same isBound rule the ledger list
+        // itself uses for a category view (t.cat === activeCategoryView, scoped by
+        // categoryDrillYear/Month) so the two always agree on what's "in" this category/period —
+        // deliberately NOT limited to expenses only, so it also works when viewing an income
+        // category.
+        async function openNoteSummaryModal() {
+            if (activeCategoryView === "all") return; // button is hidden otherwise, but guard anyway
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const groups = {}; // normalized note -> { label, total, count, dates: [] }
+            txs.forEach(t => {
+                if (t.cat !== activeCategoryView) return;
+                const d = new Date(t.date);
+                if (categoryDrillYear !== "all" && d.getFullYear().toString() !== categoryDrillYear) return;
+                if (categoryDrillMonth !== "all" && d.getMonth().toString() !== categoryDrillMonth) return;
+                const noteRaw = (t.notes || "").trim();
+                const key = noteRaw ? noteRaw.toLowerCase() : "\u0000no-note";
+                if (!groups[key]) groups[key] = { label: noteRaw || "(No note)", total: 0, count: 0, dates: [] };
+                groups[key].total += convertTxAmountToBase(t, accounts);
+                groups[key].count += 1;
+                groups[key].dates.push(t.date);
+            });
+
+            const entries = Object.values(groups).sort((a, b) => b.total - a.total);
+            const icon = getCategoryIcon(activeCategoryView);
+            document.getElementById("noteSummaryModalTitle").textContent = `${icon} ${activeCategoryView} — Notes Summary`;
+
+            document.getElementById("noteSummaryModalList").innerHTML = entries.length === 0
+                ? `<p style="font-size:0.8rem; text-align:center; color:var(--text-muted);">No transactions to group here.</p>`
+                : entries.map(g => {
+                    const datesHTML = g.dates.slice().sort().reverse().map(dt => `<div style="padding-left:2px;">• ${escapeHtml(dt)}</div>`).join("");
+                    const countSuffix = g.count > 1 ? ` (x${g.count})` : "";
+                    return `
+                        <div style="background:var(--bg-color); border:1px solid var(--border-color); border-left:4px solid var(--primary); border-radius:10px; padding:12px 14px; margin-bottom:12px;">
+                            <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
+                                <strong style="font-size:0.95rem;">${escapeHtml(g.label)}${countSuffix}</strong>
+                                <span style="font-weight:800; color:var(--text-main); white-space:nowrap;">${formatCurrency(g.total, baseCurrency)}</span>
+                            </div>
+                            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:6px;">
+                                📅 Dates:
+                                ${datesHTML}
+                            </div>
+                        </div>
+                    `;
+                }).join("");
+
+            openModal("noteSummaryModal");
         }
 
         function navigateToCategoryPage(categoryName, backTarget = "workspace", year = "all", month = "all") {
@@ -3933,7 +3965,13 @@
             activeFundActivityId = fundId;
             // v78: rows in the Unit Trust Portfolio Report link here too — send Back to that
             // report instead of misrouting to Ledger/Accounts when that's where the tap came from.
-            if (!document.getElementById("page-portfolio-report").classList.contains("hidden")) {
+            // v186: a member page's own fund subrow (data-back="member") gets a third explicit
+            // target — needed now that the member page has fund/currency/FD subrows of its own
+            // (see renderMemberPage), otherwise it fell through to the generic ledger/accounts
+            // guess below and Back would strand the user on the wrong page.
+            if (typeof el !== "string" && el.dataset.back === "member") {
+                fundActivityBackToPage = "member";
+            } else if (!document.getElementById("page-portfolio-report").classList.contains("hidden")) {
                 fundActivityBackToPage = "portfolio-report";
             } else {
                 fundActivityBackToPage = activeLedgerAccountView !== "all" ? "ledger" : "accounts";
@@ -3951,6 +3989,9 @@
             } else if (fundActivityBackToPage === "portfolio-report") {
                 showPage("page-portfolio-report");
                 await renderPortfolioReportPage();
+            } else if (fundActivityBackToPage === "member") {
+                showPage("page-member");
+                await renderMemberPage();
             } else {
                 showPage("page-accounts");
                 await renderAccountsPage();
@@ -4016,7 +4057,11 @@
             workspaceScrollY = window.scrollY;
             activeCurrencyActivityAccountId = accountId;
             activeCurrencyActivityCurrency = currency;
-            currencyActivityBackToPage = el.dataset.back === "accounts" ? "accounts" : "ledger";
+            // v186: added "member" as a third explicit target (see the matching comment on
+            // navigateToFundActivityPage) now that the member page has currency subrows too.
+            currencyActivityBackToPage = el.dataset.back === "accounts" ? "accounts"
+                : el.dataset.back === "member" ? "member"
+                : "ledger";
             showPage("page-currencyactivity");
             window.scrollTo(0, 0);
             pushVirtualState("currencyactivity");
@@ -4027,6 +4072,9 @@
             if (currencyActivityBackToPage === "accounts") {
                 showPage("page-accounts");
                 await renderAccountsPage();
+            } else if (currencyActivityBackToPage === "member") {
+                showPage("page-member");
+                await renderMemberPage();
             } else {
                 showPage("page-ledger");
                 await renderApp();
@@ -5154,27 +5202,15 @@
             } catch (e) { return "default"; }
         }
 
-        // Applies a preset's full palette (bg/card/text/border/neu/glass + theme-color meta) to
-        // the live page, and — unless save is false — persists it so both the next app launch
-        // and the no-flash inline snippet in <head> pick it up before first paint.
-        // v185: every key now falls back to THEME_DEFAULTS and is always (re)written, so
-        // switching from a full preset like "midnight" back to a light preset that only ever
-        // specifies bg/neuDark/themeColor correctly resets every other var it had touched,
-        // instead of leaving it stuck at the previous theme's value.
-        const BG_THEME_VAR_MAP = {
-            bg: "--bg-color", cardBg: "--card-bg", textMain: "--text-main", textMuted: "--text-muted",
-            borderColor: "--border-color", neuLight: "--neu-light", neuDark: "--neu-dark",
-            neuPrimaryLight: "--neu-primary-light", neuPrimaryDark: "--neu-primary-dark",
-            glassBg: "--glass-bg", glassBgStrong: "--glass-bg-strong",
-            glassBgModal: "--glass-bg-modal", glassBorder: "--glass-border",
-        };
+        // Applies a preset's --bg-color / --neu-dark (and matching theme-color meta tag) to the
+        // live page, and — unless save is false — persists it so both the next app launch and
+        // the no-flash inline snippet in <head> pick it up before first paint.
         function applyBgTheme(themeId, { save = true } = {}) {
             const theme = BG_THEMES.find(t => t.id === themeId) || BG_THEMES[0];
-            for (const key in BG_THEME_VAR_MAP) {
-                document.documentElement.style.setProperty(BG_THEME_VAR_MAP[key], theme[key] || THEME_DEFAULTS[key]);
-            }
+            document.documentElement.style.setProperty("--bg-color", theme.bg);
+            if (theme.neuDark) document.documentElement.style.setProperty("--neu-dark", theme.neuDark);
             const metaThemeColor = document.querySelector('meta[name="theme-color"]');
-            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor || THEME_DEFAULTS.themeColor);
+            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor);
             if (save) {
                 try { localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
             }
@@ -5659,9 +5695,24 @@
         async function renderMemberPage() {
             if (!activeMemberFilter) return;
             const { type, ids } = activeMemberFilter;
-            const { accounts, nativeBalances } = await computeAccountBalances();
+            const { accounts, txs, nativeBalances } = await computeAccountBalances();
             const subset = filterAccountsByOwnership(accounts, type, ids);
             const { total, currencyTotals } = summarizeAccountsNetWorth(subset, nativeBalances);
+            // v186: same fund/FD-placement subrow data the global Accounts page builds (see
+            // renderAccountsPage) — needed here now that this page's cards match that page's
+            // card style/arrangement (accountAvatarHTML, group headers, subrows) instead of the
+            // older plain-list format.
+            const allFunds = await readAllDB(STORES.FUNDS);
+            const fundsByAccountId = {};
+            allFunds.forEach(f => { (fundsByAccountId[f.accountId] = fundsByAccountId[f.accountId] || []).push(f); });
+            const fdPlacementsByAccountId = {};
+            txs.filter(t => t.type === "transfer" && t.fdMaturityDate && !t.fdResolved && t.dest).forEach(t => {
+                (fdPlacementsByAccountId[t.dest] = fdPlacementsByAccountId[t.dest] || []).push(t);
+            });
+            // Subrow expand/collapse state (v64 pattern) is scoped per view — this page's own
+            // prefix so it can never collide with the global Accounts page's "all"/filter-based
+            // keys for the same account id.
+            const subrowFilterKeyPrefix = `member_${type}_${ids.join("-")}`.replace(/\s+/g, "-");
 
             const titleEl = document.getElementById("memberPageTitle");
             if (type === "member") {
@@ -5688,8 +5739,51 @@
                     </div>
                 `).join("");
 
+            // v186: card markup/grouping below mirrors renderAccountsPage's "account-card" style
+            // exactly (avatar chip, top row name+balance, meta-row type badge, ref line, subline,
+            // group/sub-group section headers + sub-totals, collapsible fund/currency/FD subrows)
+            // so a member's own Accounts view matches the global Accounts page's arrangement —
+            // this page had been left on an older plain-row format. Per the standing "duplicated
+            // list renderers" lesson, this is a second hand-written copy of that same block, not
+            // a shared component — any future layout change to one needs the same check against
+            // the other.
             let html = "";
+            let lastGroup = null;
+            let lastSubgroup = undefined;
+            let groupTotal = 0, subgroupTotal = 0;
+
+            function flushSubgroupTotal() {
+                if (lastSubgroup) {
+                    html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <span class="total-amount">${formatBalanceHTML(subgroupTotal, baseCurrency)}</span></div>`;
+                }
+                subgroupTotal = 0;
+            }
+            function flushGroupTotal() {
+                if (lastGroup !== null) {
+                    html += `<div class="config-list-grouptotal"><span class="total-label">Group Total · ${escapeHtml(lastGroup)}</span>: <span class="total-amount">${formatBalanceHTML(groupTotal, baseCurrency)}</span></div>`;
+                }
+                groupTotal = 0;
+            }
+
             sortAccountsByGroupThenName(subset).forEach(a => {
+                const subrowKey = `${subrowFilterKeyPrefix}__${a.id}`;
+                const group = a.group || DEFAULT_ACCOUNT_GROUP;
+                const subgroup = a.subgroup || "";
+                if (group !== lastGroup) {
+                    flushSubgroupTotal();
+                    flushGroupTotal();
+                    html += `<div class="config-list-section-label">${accountGroupBadgeHTML(group)}</div>`;
+                    lastGroup = group;
+                    lastSubgroup = undefined;
+                }
+                if (subgroup !== lastSubgroup) {
+                    flushSubgroupTotal();
+                    if (subgroup) {
+                        html += `<div class="config-list-subgroup-label">↳ ${escapeHtml(subgroup)}</div>`;
+                    }
+                    lastSubgroup = subgroup;
+                }
+
                 const typeBadge = a.type === "fd"
                     ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#ede9fe; color:#6d28d9; font-weight:bold;">Fixed Deposit</span>`
                     : a.type === "multi"
@@ -5700,55 +5794,140 @@
                                 ? `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:#fce7f3; color:#9d174d; font-weight:bold;">Credit Card</span>`
                                 : currencyBadgeHTML(a.currency);
 
+                const baseVal = accountBaseValue(a, nativeBalances);
+
                 let balSummary;
                 if (a.type === "multi") {
-                    // Multi-Currency accounts (v55 on the global Accounts page, ported here now):
-                    // show the one converted Base total rather than a joined "+" string of native
-                    // amounts — this page had been left on the pre-v55 joined-string format.
-                    balSummary = `<strong>≈ ${formatBalanceHTML(accountBaseValue(a, nativeBalances), baseCurrency)}</strong>`;
+                    balSummary = `≈ ${formatBalanceHTML(baseVal, baseCurrency)}`;
                 } else if (a.type === "fd" || a.type === "unittrust") {
                     const baskets = nativeBalances[a.id];
                     const currencies = Object.keys(baskets);
                     balSummary = currencies.length === 0
                         ? '<span style="color:var(--text-muted);">No funds yet</span>'
-                        : currencies.map(curr => `<strong>${formatBalanceHTML(baskets[curr], curr)}</strong>`).join(" + ");
+                        : currencies.map(curr => formatBalanceHTML(baskets[curr], curr)).join(" + ");
                 } else {
-                    balSummary = `<strong>${formatBalanceHTML(nativeBalances[a.id], a.currency)}</strong>`;
+                    balSummary = formatBalanceHTML(nativeBalances[a.id], a.currency);
                 }
+
+                groupTotal += baseVal;
+                subgroupTotal += baseVal;
 
                 const linkedAcc = a.linkedAccountId ? accounts.find(x => x.id === a.linkedAccountId) : null;
                 const linkedLine = linkedAcc
-                    ? ` · <span style="color:#92400e; font-weight:600;">🔗 ${escapeHtml(accountOptionLabel(linkedAcc, accounts))}</span>`
+                    ? `<br><span style="font-size:0.7rem; color:#92400e; font-weight:600;">🔗 Related: ${escapeHtml(accountOptionLabel(linkedAcc, accounts))}</span>`
                     : "";
 
                 // Real Estate (v53): same "excluded from Net Worth" flag renderAccountsPage()
-                // already shows on the global Accounts page — was missing here, so a property
-                // marked Exclude looked identical to an included one on a member's own page.
+                // already shows on the global Accounts page.
                 const excludedLine = a.includeInNetWorth === false
-                    ? ` · <span style="color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
+                    ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
-                const extraInfoLine = accountExtraInfoLine(a, nativeBalances);
+                const acctRefLine = a.accountRef
+                    ? `<div class="account-card-refline">${escapeHtml(a.accountRef)}</div>`
+                    : "";
+                const extraInfoLine = accountExtraInfoLine(a, nativeBalances, false);
 
                 // Credit Card (v127): same "Amount due" line + 💳 Pay button as the main Accounts
                 // page (renderAccountsPage) — see that copy's comment for what amountDue means.
                 const ccAmountDue = a.type === "creditcard" ? Math.max(0, -(nativeBalances[a.id] || 0)) : 0;
                 const ccAmountDueLine = ccAmountDue > 0.005
-                    ? ` · <span style="color:#9d174d; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
+                    ? `<br><span style="font-size:0.72rem; color:#9d174d; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
                     : "";
                 const ccPayBtnHTML = ccAmountDue > 0.005
-                    ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer; margin-right:6px;">💳 Pay</button>`
+                    ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">💳 Pay</button>`
+                    : "";
+
+                let subrowsHtml = "";
+
+                if (a.type === "multi") {
+                    const baskets = nativeBalances[a.id] || {};
+                    const currencies = Object.keys(baskets).sort();
+                    if (currencies.length > 0) {
+                        subrowsHtml += currencies.map(curr => {
+                            const subText = curr !== baseCurrency
+                                ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(baskets[curr], curr, baseCurrency), baseCurrency)}</span>`
+                                : "";
+                            return `
+                            <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(a.id)}" data-currency="${escapeHtml(curr)}" data-back="member">
+                                <span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span>${subText}</span>
+                                <span style="color:var(--text-muted);">›</span>
+                            </div>`;
+                        }).join("");
+                    }
+                }
+
+                if (a.type === "unittrust") {
+                    const funds = (fundsByAccountId[a.id] || []).slice().sort((x, y) => x.name.localeCompare(y.name));
+                    if (funds.length > 0) {
+                        subrowsHtml += funds.map(f => {
+                            const value = (f.units || 0) * (f.currentNav || 0);
+                            return `
+                                <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}" data-back="member">
+                                    <span>${escapeHtml(f.name)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(value, f.currency)}</span></span>
+                                    <span style="color:var(--text-muted);">›</span>
+                                </div>`;
+                        }).join("");
+                    }
+                }
+
+                if (a.type === "fd") {
+                    const placements = (fdPlacementsByAccountId[a.id] || []).slice().sort((x, y) => new Date(y.date) - new Date(x.date));
+                    if (placements.length > 0) {
+                        subrowsHtml += placements.map(t => {
+                            const isOverdue = new Date(t.fdMaturityDate + "T00:00:00").getTime() < new Date(todayLocalStr() + "T00:00:00").getTime();
+                            const statusBadge = isOverdue
+                                ? `<span style="font-size:0.62rem; font-weight:700; color:#b91c1c; background:#fee2e2; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">⏰ Due</span>`
+                                : `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">🟢 Active</span>`;
+                            const refText = t.fdReferenceNo ? ` (${escapeHtml(t.fdReferenceNo)})` : '';
+                            const resolveBtnHTML = isOverdue
+                                ? `<button type="button" data-click="openResolveFdModal" data-id="${escapeHtml(t.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#b91c1c; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">⏰ Resolve Maturity</button>`
+                                : "";
+                            return `
+                                <div class="config-item fund-subrow" style="cursor:pointer;" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
+                                    <span>
+                                        Fixed Deposit Placement${refText}${statusBadge}
+                                        <br><span style="color:var(--text-muted); font-weight:600;">${formatBalanceHTML(t.amount, t.currency)} · Matures ${escapeHtml(t.fdMaturityDate)}</span>
+                                    </span>
+                                    <span style="display:flex; align-items:center; gap:6px;">
+                                        ${resolveBtnHTML}
+                                        <span style="color:var(--text-muted);">›</span>
+                                    </span>
+                                </div>`;
+                        }).join("");
+                    }
+                }
+
+                const isExpanded = expandedAccountSubrows.has(subrowKey);
+                const subrowToggleHTML = subrowsHtml
+                    ? `<button type="button" class="subrow-toggle-btn" data-click="toggleAccountSubrows" data-id="${escapeHtml(subrowKey)}" aria-label="${isExpanded ? "Collapse" : "Expand"} details" title="${isExpanded ? "Collapse" : "Expand"} details">${isExpanded ? "▾" : "▸"}</button>`
                     : "";
 
                 html += `
-                    <div class="config-item" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="member">
-                        <span><strong>${escapeHtml(a.name)}</strong> ${typeBadge} - ${balSummary}<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.group || DEFAULT_ACCOUNT_GROUP)}</span>${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}</span>
+                    <div class="config-item account-card" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="member">
+                        ${accountAvatarHTML(a.name)}
+                        <div class="account-card-body">
+                            <div class="account-card-toprow">
+                                <span class="account-card-name">${escapeHtml(a.name)}</span>
+                                <span class="account-card-balance">${balSummary}</span>
+                            </div>
+                            <div class="account-card-metarow">${typeBadge}</div>
+                            ${acctRefLine}
+                            <div class="account-card-subline">${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}</div>
+                        </div>
                         <span style="display:flex; align-items:center; gap:6px;">
                             ${ccPayBtnHTML}
+                            ${subrowToggleHTML}
                             <span style="color:var(--text-muted);">›</span>
                         </span>
                     </div>`;
+
+                if (subrowsHtml) {
+                    html += `<div id="acctSubrows-${escapeHtml(subrowKey)}" class="${isExpanded ? "" : "hidden"}">${subrowsHtml}</div>`;
+                }
             });
+            flushSubgroupTotal();
+            flushGroupTotal();
             document.getElementById("memberPageAccountsList").innerHTML = html || `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts tagged to this member yet.</p>`;
         }
 
@@ -9030,6 +9209,11 @@
                 document.getElementById("ledgerTargetTitle").textContent = `${icon} ${activeCategoryView.toUpperCase()}${periodSuffix}`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
                 document.getElementById("ledgerTargetOwnerTags").style.display = "none";
+                // v188: "Group by Note" — only makes sense once a single category is being
+                // viewed (mirrors a reference app's per-category note-merge summary: same note
+                // text logged across several entries — e.g. "mcd" — collapsed into one row with
+                // its combined total and every date it was used).
+                document.getElementById("ledgerNoteSummaryBtn").style.display = "";
             } else if (directTypeView !== "all") {
                 // v148: same period-suffix treatment as the category branch above, for the report
                 // card's Income/Expense clicks (categoryDrillYear/Month "all" when reached any
@@ -9042,10 +9226,12 @@
                 document.getElementById("ledgerTargetTitle").textContent = `All ${directTypeView.charAt(0).toUpperCase() + directTypeView.slice(1)} Log${periodSuffix}`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
                 document.getElementById("ledgerTargetOwnerTags").style.display = "none";
+                document.getElementById("ledgerNoteSummaryBtn").style.display = "none";
             } else if (activeLedgerAccountView === "all") {
                 document.getElementById("ledgerTargetTitle").textContent = "Portfolio General Log";
                 document.getElementById("ledgerTargetEditBtn").style.display = "none";
                 document.getElementById("ledgerTargetOwnerTags").style.display = "none";
+                document.getElementById("ledgerNoteSummaryBtn").style.display = "none";
             } else {
                 const activeAcc = accounts.find(a => a.id === activeLedgerAccountView);
                 // v166: owner names moved out of the title (was cluttered as plain text in
@@ -9054,6 +9240,7 @@
                 const currentActiveAccName = activeAcc ? activeAcc.name : "Vault";
                 document.getElementById("ledgerTargetTitle").textContent = `${currentActiveAccName} Activity`;
                 document.getElementById("ledgerTargetEditBtn").style.display = "inline-block";
+                document.getElementById("ledgerNoteSummaryBtn").style.display = "none";
                 const ownerTagsEl = document.getElementById("ledgerTargetOwnerTags");
                 if (activeAcc) {
                     ownerTagsEl.innerHTML = accountOwnerTagHTML(activeAcc);
@@ -9755,39 +9942,66 @@
         }
 
         // Donut chart via stroke-dasharray on a circle — the standard no-library technique for a
-        // simple pie/donut in raw SVG. A separate color-coded legend accompanies it since slice
-        // labels don't fit cleanly inside thin donut segments.
-        function buildBreakdownDonutSVG(entries, total) {
+        // simple pie/donut in raw SVG. v187: rounded, gapped segments + an HTML overlay centered
+        // in the hole showing the top (largest) category, plus a full-width legend list below
+        // with icon/name/amount/percentage per row — see the matching CSS comment on
+        // .breakdown-donut-svg-holder for why (was a plain solid-stroke ring + cramped side
+        // legend that didn't fit the 300px dashboard Insights rail). `entries` must already be
+        // sorted descending by value (every caller already does this for its own legend/ranking,
+        // so entries[0] is always the largest slice — that's what the center overlay shows).
+        function buildBreakdownDonutSVG(entries, total, type = "expense") {
             if (entries.length === 0 || total <= 0) return "";
-            const size = 200, r = 70, cx = size / 2, cy = size / 2, circumference = 2 * Math.PI * r;
-            let offset = 0;
+            const size = 220, r = 76, cx = size / 2, cy = size / 2, circumference = 2 * Math.PI * r;
+            // Small fixed-px gap between adjacent segments, centered on each boundary via the
+            // half-gap dashoffset nudge below — only applied when there's more than one slice
+            // (a single 100% category should still read as a clean unbroken ring).
+            const gapPx = entries.length > 1 ? 5 : 0;
+            let offsetCursor = 0;
             let segments = "";
             entries.forEach(e => {
-                const frac = e.value / total;
-                const dash = frac * circumference;
-                segments += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${e.color}" stroke-width="28" stroke-dasharray="${dash.toFixed(2)} ${(circumference - dash).toFixed(2)}" stroke-dashoffset="${(-offset).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"></circle>`;
-                offset += dash;
+                const sliceLen = (e.value / total) * circumference;
+                const dashVisible = Math.max(0, sliceLen - gapPx);
+                segments += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${e.color}" stroke-width="26" stroke-linecap="round" stroke-dasharray="${dashVisible.toFixed(2)} ${(circumference - dashVisible).toFixed(2)}" stroke-dashoffset="${(-(offsetCursor + gapPx / 2)).toFixed(2)}" transform="rotate(-90 ${cx} ${cy})"></circle>`;
+                offsetCursor += sliceLen;
             });
+
+            // Center overlay: the largest category by value (entries[0]) — icon, name, amount,
+            // and its share of the total. A plain HTML div positioned over the SVG hole rather
+            // than SVG <text>, so normal CSS (ellipsis, font-weight, var(--text-main)) applies.
+            const top = entries[0];
+            const topPct = total > 0 ? Math.round((top.value / total) * 100) : 0;
+            const centerHTML = `
+                <div class="breakdown-donut-center">
+                    <div class="breakdown-donut-center-icon">${getCategoryIcon(top.label, type)}</div>
+                    <div class="breakdown-donut-center-label">${escapeHtml(top.label)}</div>
+                    <div class="breakdown-donut-center-amount">${formatCurrency(top.value, baseCurrency)}</div>
+                    <div class="breakdown-donut-center-pct">${topPct}% of total</div>
+                </div>`;
+
             const legend = entries.map(e => {
                 const pct = total > 0 ? ((e.value / total) * 100).toFixed(0) : 0;
-                return `<div style="display:flex; align-items:center; gap:6px; font-size:0.7rem; margin-bottom:4px;">
-                    <span style="width:10px; height:10px; border-radius:50%; background:${e.color}; flex-shrink:0;"></span>
-                    <span style="flex:1;">${escapeHtml(e.label)}</span>
-                    <span style="color:var(--text-muted);">${pct}%</span>
-                </div>`;
+                return `
+                    <div class="breakdown-donut-legend-row">
+                        <span class="breakdown-donut-legend-dot" style="background:${e.color};"></span>
+                        <span class="breakdown-donut-legend-label">${getCategoryIcon(e.label, type)} ${escapeHtml(e.label)}</span>
+                        <span class="breakdown-donut-legend-amount">${formatCurrency(e.value, baseCurrency)}</span>
+                        <span class="breakdown-donut-legend-pct">${pct}%</span>
+                    </div>`;
             }).join("");
+
             return `
-                <div style="display:flex; flex-wrap:wrap; gap:16px; align-items:center; justify-content:center;">
-                    <svg viewBox="0 0 ${size} ${size}" style="width:180px; height:180px; flex-shrink:0;">${segments}</svg>
-                    <div style="min-width:140px; flex:1;">${legend}</div>
+                <div class="breakdown-donut-svg-holder">
+                    <svg viewBox="0 0 ${size} ${size}">${segments}</svg>
+                    ${centerHTML}
                 </div>
+                <div class="breakdown-donut-legend">${legend}</div>
             `;
         }
 
         function renderBreakdownChart(wrapId, chartType, entries, total, type) {
             const wrap = document.getElementById(wrapId);
             if (chartType === "bar") wrap.innerHTML = buildBreakdownBarSVG(entries);
-            else if (chartType === "donut") wrap.innerHTML = buildBreakdownDonutSVG(entries, total);
+            else if (chartType === "donut") wrap.innerHTML = buildBreakdownDonutSVG(entries, total, type);
             else wrap.innerHTML = ""; // "list" view has no separate chart — the list rows are the whole view
         }
 
@@ -10814,6 +11028,7 @@
             navigateToLedgerPage: (el) => navigateToLedgerPage(el.dataset.id, el.dataset.back || "workspace"),
             deleteTxFromEditModal: () => deleteTxFromEditModal(),
             navigateToCategoryPage: (el) => navigateToCategoryPage(el.dataset.category, el.dataset.back || "workspace", el.dataset.year || "all", el.dataset.month || "all"),
+            openNoteSummaryModal: () => openNoteSummaryModal(),
             numpadDigit: (el) => numpadDigit(el.dataset.digit),
             numpadBackspace: () => numpadBackspace(),
             numpadClear: () => numpadClear(),
@@ -10980,35 +11195,57 @@
         // the left screen edge, matching the standard "edge swipe" gesture used by most mobile
         // apps/OSes — this avoids hijacking an ordinary left-right scroll or swipe gesture that
         // starts in the middle of the page content (e.g. dismissing a card, a chart pan, etc.).
+        // v185: swipe-to-close added alongside the existing edge-swipe-to-open above. When the
+        // drawer is OPEN, a touch starting anywhere inside #sidebarDrawer (not just the edge —
+        // the whole open panel is a natural "drag it away" target) that moves leftward past the
+        // threshold closes it, mirroring the rightward open gesture. Tracked with the same
+        // touchStartX/Y pair so only one of the two branches (open vs close) can ever be "armed"
+        // for a given touch, since the open-branch's own guard already bails out when the drawer
+        // is open.
         (function setupSidebarSwipeGesture() {
             const EDGE_ZONE_PX = 24;
             const MIN_SWIPE_PX = 60;
             let touchStartX = null;
             let touchStartY = null;
             let startedInEdgeZone = false;
+            let startedInsideOpenDrawer = false;
 
             document.addEventListener("touchstart", (e) => {
                 if (window.innerWidth >= 768) return; // desktop/tablet: sidebar already docked
-                if (document.getElementById("sidebarDrawer").classList.contains("open")) return;
+                const isOpen = document.getElementById("sidebarDrawer").classList.contains("open");
                 const t = e.touches[0];
                 touchStartX = t.clientX;
                 touchStartY = t.clientY;
-                startedInEdgeZone = t.clientX <= EDGE_ZONE_PX;
+                if (isOpen) {
+                    startedInEdgeZone = false;
+                    startedInsideOpenDrawer = document.getElementById("sidebarDrawer").contains(e.target);
+                } else {
+                    startedInEdgeZone = t.clientX <= EDGE_ZONE_PX;
+                    startedInsideOpenDrawer = false;
+                }
             }, { passive: true });
 
             document.addEventListener("touchend", (e) => {
-                if (!startedInEdgeZone || touchStartX === null) return;
+                if (touchStartX === null) return;
                 const t = e.changedTouches[0];
                 const dx = t.clientX - touchStartX;
                 const dy = Math.abs(t.clientY - touchStartY);
-                // Require a mostly-horizontal rightward swipe so an edge-starting vertical
-                // scroll doesn't accidentally pop the drawer open.
-                if (dx > MIN_SWIPE_PX && dy < dx) {
-                    openSidebar();
+                if (startedInEdgeZone) {
+                    // Require a mostly-horizontal rightward swipe so an edge-starting vertical
+                    // scroll doesn't accidentally pop the drawer open.
+                    if (dx > MIN_SWIPE_PX && dy < dx) {
+                        openSidebar();
+                    }
+                } else if (startedInsideOpenDrawer) {
+                    // Mirror image: mostly-horizontal leftward swipe closes the open drawer.
+                    if (dx < -MIN_SWIPE_PX && dy < -dx) {
+                        closeSidebar();
+                    }
                 }
                 touchStartX = null;
                 touchStartY = null;
                 startedInEdgeZone = false;
+                startedInsideOpenDrawer = false;
             }, { passive: true });
         })();
 
@@ -11024,36 +11261,55 @@
         // with nothing actually scrollable) — so nearly every swipe got silently disqualified,
         // matching the "1 in 10" report. Switched to the same deterministic edge-zone check the
         // left drawer already uses reliably, instead of trying to detect scrollability at all.
+        // v185: swipe-to-close added alongside the existing edge-swipe-to-open above, mirroring
+        // setupSidebarSwipeGesture()'s open/close pairing exactly but for the opposite edge —
+        // when the rail is OPEN, a touch starting anywhere inside #desktopInsightsRail that
+        // moves rightward past the threshold closes it.
         (function setupInsightsDrawerSwipeGesture() {
             const EDGE_ZONE_PX = 24;
             const MIN_SWIPE_PX = 60;
             let touchStartX = null;
             let touchStartY = null;
             let startedInEdgeZone = false;
+            let startedInsideOpenDrawer = false;
 
             document.addEventListener("touchstart", (e) => {
                 if (window.innerWidth >= 768) return; // tablet/desktop: rail is docked or hidden, not a drawer
-                if (document.getElementById("desktopInsightsRail").classList.contains("open")) return;
+                const isOpen = document.getElementById("desktopInsightsRail").classList.contains("open");
                 const t = e.touches[0];
                 touchStartX = t.clientX;
                 touchStartY = t.clientY;
-                startedInEdgeZone = t.clientX >= window.innerWidth - EDGE_ZONE_PX;
+                if (isOpen) {
+                    startedInEdgeZone = false;
+                    startedInsideOpenDrawer = document.getElementById("desktopInsightsRail").contains(e.target);
+                } else {
+                    startedInEdgeZone = t.clientX >= window.innerWidth - EDGE_ZONE_PX;
+                    startedInsideOpenDrawer = false;
+                }
             }, { passive: true });
 
             document.addEventListener("touchend", (e) => {
-                if (!startedInEdgeZone || touchStartX === null) return;
+                if (touchStartX === null) return;
                 const t = e.changedTouches[0];
                 const dx = t.clientX - touchStartX;
                 const dy = Math.abs(t.clientY - touchStartY);
-                // Require a mostly-horizontal leftward swipe (dx negative), same "mostly
-                // horizontal" guard as the sidebar gesture, so an edge-starting vertical scroll
-                // doesn't accidentally pop the drawer open.
-                if (dx < -MIN_SWIPE_PX && dy < -dx) {
-                    openInsightsDrawer();
+                if (startedInEdgeZone) {
+                    // Require a mostly-horizontal leftward swipe (dx negative), same "mostly
+                    // horizontal" guard as the sidebar gesture, so an edge-starting vertical
+                    // scroll doesn't accidentally pop the drawer open.
+                    if (dx < -MIN_SWIPE_PX && dy < -dx) {
+                        openInsightsDrawer();
+                    }
+                } else if (startedInsideOpenDrawer) {
+                    // Mirror image: mostly-horizontal rightward swipe closes the open rail.
+                    if (dx > MIN_SWIPE_PX && dy < dx) {
+                        closeInsightsDrawer();
+                    }
                 }
                 touchStartX = null;
                 touchStartY = null;
                 startedInEdgeZone = false;
+                startedInsideOpenDrawer = false;
             }, { passive: true });
         })();
 
