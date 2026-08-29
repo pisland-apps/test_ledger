@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v193";
+        const APP_VERSION = "v194";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1908,6 +1908,20 @@
                 }
                 window.history.back();
             }
+        }
+
+        // v194: lightweight bottom-of-screen toast for actions that don't navigate anywhere (e.g.
+        // exportBackupQuick below) — without a page change, the person needs SOME confirmation
+        // the action actually happened. Reuses one static #toastMsg element (see index.html) so
+        // repeated calls just restart its timer rather than stacking multiple toasts.
+        let toastHideTimer = null;
+        function showToast(message) {
+            const el = document.getElementById("toastMsg");
+            if (!el) return;
+            el.textContent = message;
+            el.classList.add("show");
+            clearTimeout(toastHideTimer);
+            toastHideTimer = setTimeout(() => el.classList.remove("show"), 2400);
         }
 
         // Custom confirm dialog: returns a Promise<boolean>, styled consistently with the rest of the app.
@@ -10775,7 +10789,14 @@
             hint.classList.toggle("hidden", toggle.checked);
         }
 
-        async function exportBackup() {
+        // v194: forceEncrypted lets a caller skip the on-page toggle entirely and always produce
+        // an encrypted backup — used by the dashboard's quick 💾 button (exportBackupQuick below)
+        // so that quick action always behaves the same regardless of whatever the Backup &
+        // Restore page's own toggle happens to be left at, and can never accidentally produce an
+        // unencrypted file with no page/confirmation in view. The Backup & Restore page's own
+        // "Export JSON" button still calls this with no argument, so it keeps respecting the
+        // toggle exactly as before.
+        async function exportBackup(forceEncrypted = false) {
             const bundle = {
                 accounts: await readAllDB(STORES.ACCOUNTS),
                 transactions: await readAllDB(STORES.TRANSACTIONS),
@@ -10798,7 +10819,7 @@
             };
 
             const toggle = document.getElementById("exportEncryptToggle");
-            const wantsEncryption = toggle ? toggle.checked : true; // encrypted-by-default
+            const wantsEncryption = forceEncrypted ? true : (toggle ? toggle.checked : true); // encrypted-by-default
 
             let outputPayload = bundle;
             let filenameSuffix = "";
@@ -10824,6 +10845,13 @@
             const a = document.createElement("a");
             a.href = url; a.download = `ledger_backup_${todayLocalStr()}${filenameSuffix}.json`;
             a.click(); URL.revokeObjectURL(url);
+            showToast(wantsEncryption ? "🔒 Encrypted backup downloaded" : "📄 Backup downloaded (unencrypted)");
+        }
+
+        // v194: the dashboard header's quick 💾 button — see exportBackup's comment above for why
+        // this always forces encryption rather than reading the Backup & Restore page's toggle.
+        async function exportBackupQuick() {
+            await exportBackup(true);
         }
 
         // Prompts for a backup's passcode via the backupPasscodeModal; resolves with the entered
@@ -11035,7 +11063,6 @@
             navigateToAccountsPage: () => navigateToAccountsPage(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
             navigateToBackupPage: () => navigateToBackupPage(),
-            navigateToBackupPageFromDashboard: () => navigateToBackupPage("workspace"),
             handleBackupBackClick: () => handleBackupBackClick(),
             navigateToAllLedgerPage: () => navigateToAllLedgerPage(),
             navigateToDataSecurityPage: () => navigateToDataSecurityPage(),
@@ -11075,6 +11102,7 @@
             openCreditCardPaymentFromLedgerHeader: () => openCreditCardPaymentFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportBackup: () => exportBackup(),
+            exportBackupQuick: () => exportBackupQuick(),
             openImportInput: () => document.getElementById("importInput").click(),
             handleLedgerBackClick: () => handleLedgerBackClick(),
             navigateToWorkspace: () => navigateToWorkspace(),
