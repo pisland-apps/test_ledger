@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v180";
+        const APP_VERSION = "v181";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1633,6 +1633,76 @@
             const panel = document.getElementById("recentTxSettingsPanel");
             if (!panel) return;
             panel.style.display = panel.style.display === "none" ? "flex" : "none";
+        }
+
+        // v181: Desktop "Insights" right rail (only visible at 1400px+, see the matching CSS).
+        // Two lightweight, non-configurable summaries — deliberately no settings/filters like the
+        // dashboard's other widgets, since this is meant as a quick glance while working with the
+        // main content, not a destination in itself:
+        //   1. Top Categories This Month — same expense/refund convention as Spending Breakdown
+        //      (a refund nets back against its own category rather than being ignored outright).
+        //   2. Recent Large Transactions — the biggest income/expense entries (transfers excluded,
+        //      since they don't represent money actually gained/spent) from the last 60 days.
+        // No-ops harmlessly if the rail markup isn't present (defensive, matches the existing
+        // `if (!list) return;` pattern in renderRecentTransactionsWidget above).
+        function renderDesktopInsightsRail(accounts, txs) {
+            const catListEl = document.getElementById("insightsTopCategoriesList");
+            const largeTxListEl = document.getElementById("insightsLargeTxList");
+            if (!catListEl || !largeTxListEl) return;
+
+            const now = new Date();
+            const curMonth = now.getMonth();
+            const curYear = now.getFullYear();
+
+            const catTotals = {};
+            txs.forEach(t => {
+                const isRefundCredit = t.type === "income" && t.isRefund;
+                if (t.type !== "expense" && !isRefundCredit) return;
+                const d = new Date(t.date);
+                if (d.getMonth() !== curMonth || d.getFullYear() !== curYear) return;
+                const base = convertTxAmountToBase(t, accounts);
+                const cat = t.cat || "Other Expenses";
+                catTotals[cat] = (catTotals[cat] || 0) + (isRefundCredit ? -base : base);
+            });
+            const topCats = Object.keys(catTotals).filter(c => catTotals[c] > 0).sort((a, b) => catTotals[b] - catTotals[a]).slice(0, 5);
+            const maxCatAmt = topCats.length ? catTotals[topCats[0]] : 0;
+
+            catListEl.innerHTML = topCats.length ? topCats.map(c => {
+                const amt = catTotals[c];
+                const pct = maxCatAmt > 0 ? Math.round((amt / maxCatAmt) * 100) : 0;
+                return `
+                    <div class="insights-row">
+                        <div class="insights-row-top">
+                            <span class="insights-row-label">${getCategoryIcon(c, "expense")} ${escapeHtml(c)}</span>
+                            <span class="insights-row-amount">${formatCurrency(amt, baseCurrency)}</span>
+                        </div>
+                        <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%;"></div></div>
+                    </div>
+                `;
+            }).join("") : `<p class="insights-empty">No expenses yet this month.</p>`;
+
+            const cutoffMs = now.getTime() - 60 * 86400000;
+            const largeTx = txs
+                .filter(t => (t.type === "income" || t.type === "expense") && new Date(t.date).getTime() >= cutoffMs)
+                .map(t => ({ t, base: convertTxAmountToBase(t, accounts) }))
+                .sort((a, b) => b.base - a.base)
+                .slice(0, 5);
+
+            largeTxListEl.innerHTML = largeTx.length ? largeTx.map(({ t, base }) => {
+                const col = t.type === "income" ? "income-color" : "expense-color";
+                const sgn = t.type === "income" ? "+" : "-";
+                return `
+                    <div class="insights-row insights-tx-row" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                        <div class="insights-row-top">
+                            <span class="insights-row-label">${getCategoryIcon(t.cat, t.type)} ${escapeHtml(t.desc)}</span>
+                        </div>
+                        <div class="insights-row-top" style="margin-top:2px;">
+                            <span class="insights-tx-date">${t.date}</span>
+                            <span class="insights-row-amount" style="color:var(--${col});">${sgn}${formatCurrency(base, baseCurrency)}</span>
+                        </div>
+                    </div>
+                `;
+            }).join("") : `<p class="insights-empty">No large transactions in the last 60 days.</p>`;
         }
 
         async function handleRecentTxSettingChange() {
@@ -8640,6 +8710,7 @@
             renderMemberNetWorthRows(accounts, nativeBalances);
             renderPinnedAccountsWidget(accounts, nativeBalances);
             renderRecentTransactionsWidget(accounts, txs);
+            renderDesktopInsightsRail(accounts, txs);
 
             // --- Fixed Deposit maturity reminders ---
             // FD terms now live on the individual deposit transaction (each "placement"), not the
@@ -10818,6 +10889,45 @@
             btn.classList.toggle("visible", window.scrollY > 300);
         }
         window.addEventListener("scroll", toggleBackToTopVisibility, { passive: true });
+
+        // v181: edge-swipe to open the sidebar drawer on phones. Only below the 768px
+        // breakpoint (above that the sidebar is already permanently docked open, see the
+        // matching @media rule in index.html) and only when the swipe STARTS within ~24px of
+        // the left screen edge, matching the standard "edge swipe" gesture used by most mobile
+        // apps/OSes — this avoids hijacking an ordinary left-right scroll or swipe gesture that
+        // starts in the middle of the page content (e.g. dismissing a card, a chart pan, etc.).
+        (function setupSidebarSwipeGesture() {
+            const EDGE_ZONE_PX = 24;
+            const MIN_SWIPE_PX = 60;
+            let touchStartX = null;
+            let touchStartY = null;
+            let startedInEdgeZone = false;
+
+            document.addEventListener("touchstart", (e) => {
+                if (window.innerWidth >= 768) return; // desktop/tablet: sidebar already docked
+                if (document.getElementById("sidebarDrawer").classList.contains("open")) return;
+                const t = e.touches[0];
+                touchStartX = t.clientX;
+                touchStartY = t.clientY;
+                startedInEdgeZone = t.clientX <= EDGE_ZONE_PX;
+            }, { passive: true });
+
+            document.addEventListener("touchend", (e) => {
+                if (!startedInEdgeZone || touchStartX === null) return;
+                const t = e.changedTouches[0];
+                const dx = t.clientX - touchStartX;
+                const dy = Math.abs(t.clientY - touchStartY);
+                // Require a mostly-horizontal rightward swipe so an edge-starting vertical
+                // scroll doesn't accidentally pop the drawer open.
+                if (dx > MIN_SWIPE_PX && dy < dx) {
+                    openSidebar();
+                }
+                touchStartX = null;
+                touchStartY = null;
+                startedInEdgeZone = false;
+            }, { passive: true });
+        })();
+
 
         // Register the Service Worker for offline support. Only works when served over http(s)
         // (e.g. GitHub Pages) — silently does nothing when opened as a local file:// page.

@@ -1224,6 +1224,56 @@
         .bg-theme-swatch-wrap .color-swatch.selected { box-shadow: none; }
         .bg-theme-swatch-label { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-align: center; line-height: 1.2; }
 
+        /* ============ v181: Desktop "Insights" right rail ============
+           Fills the empty space to the right of the centered content column that appears once
+           the viewport is wide enough that the docked sidebar (336px, see the 768px breakpoint
+           above) + the 720px content column no longer fill the screen. Only ever shown at
+           1400px+ — narrower desktop/tablet widths keep the existing layout untouched, and this
+           lives outside every .page div (like the sidebar/back-to-top button) so it stays put
+           across page navigation rather than needing to be re-added per page. Content is
+           refreshed from renderApp() whenever the dashboard data changes — see
+           renderDesktopInsightsRail(). */
+        .desktop-insights-rail {
+            display: none;
+            position: fixed;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            width: 300px;
+            padding: 24px 16px;
+            overflow-y: auto;
+        }
+        @media (min-width: 1400px) {
+            .desktop-insights-rail { display: block; }
+        }
+        .insights-card {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-radius: 16px;
+            padding: 16px;
+            margin-bottom: 16px;
+        }
+        .insights-card h4 {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            font-weight: 800;
+            margin-bottom: 12px;
+        }
+        .insights-row { margin-bottom: 12px; }
+        .insights-row:last-child { margin-bottom: 0; }
+        .insights-row-top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+        .insights-row-label {
+            font-size: 0.8rem; font-weight: 700; color: var(--text-main);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .insights-row-amount { font-size: 0.8rem; font-weight: 800; color: var(--text-main); flex-shrink: 0; white-space: nowrap; }
+        .insights-tx-row { cursor: pointer; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); }
+        .insights-tx-row:last-child { border-bottom: none; padding-bottom: 0; }
+        .insights-tx-date { font-size: 0.68rem; color: var(--text-muted); font-weight: 600; }
+        .insights-empty { font-size: 0.76rem; color: var(--text-muted); text-align: center; padding: 6px 0; }
+
         /* Net worth card on a member/joint filtered page */
         .member-page-networth-card {
             background: var(--card-bg); border-radius: 16px; border: 1.5px solid var(--border-color);
@@ -1770,7 +1820,8 @@
                div/span elements for actual transaction data specifically, so this blanket
                button rule can never hide real content, only controls). */
             button, input[type="file"], select, .sidebar-overlay, .sidebar-drawer, #lockOverlay,
-            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet, .speed-dial-sheet, .print-filter-row {
+            .modal, #versionBadge, .quick-add-backdrop, .quick-add-sheet, .speed-dial-sheet, .print-filter-row,
+            .desktop-insights-rail {
                 display: none !important;
             }
             /* Report pages replace their <select> filters (hidden above) with a plain-text
@@ -1869,6 +1920,20 @@
          across page switches instead of needing to be re-added per page; visibility is purely
          scroll-driven (see toggleBackToTopVisibility), not tied to which page is active. -->
     <button type="button" class="back-to-top-btn" id="backToTopBtn" data-click="scrollToTop" aria-label="Back to top" title="Back to top">&uarr;</button>
+
+    <!-- v181: Desktop "Insights" right rail — see the matching CSS comment above for why this
+         only shows at 1400px+. Lives outside every .page div (same reasoning as the back-to-top
+         button above) and is refreshed by renderDesktopInsightsRail(), called from renderApp(). -->
+    <div class="desktop-insights-rail" id="desktopInsightsRail">
+        <div class="insights-card">
+            <h4>Top Categories This Month</h4>
+            <div id="insightsTopCategoriesList"></div>
+        </div>
+        <div class="insights-card">
+            <h4>Recent Large Transactions</h4>
+            <div id="insightsLargeTxList"></div>
+        </div>
+    </div>
 
     <!-- ================= SIDEBAR NAVIGATION DRAWER ================= -->
     <div class="sidebar-overlay" id="sidebarOverlay" data-click="closeSidebar"></div>
