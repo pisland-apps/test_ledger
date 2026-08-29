@@ -1593,6 +1593,18 @@
         .form-row-icon input, .form-row-icon .account-picker-btn { flex: 1 1 auto !important; width: auto !important; min-width: 0; margin: 0; }
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: var(--chip-bg); height: 44px; }
 
+        /* v196: `color-scheme: dark` (see :root above) is only a *hint* — some Chromium builds
+           (notably the WebView2 runtime this app runs in when installed as a desktop PWA) still
+           render a <select>'s dropdown POPUP using the OS's light-mode native list chrome
+           regardless of it, even though the closed control itself already renders correctly via
+           the CSS above. Explicit background-color/color set directly on <option> elements is
+           the older, more reliably-honored mechanism for styling that popup — every <select> in
+           the app (whether or not it carries .form-input) gets this, so Auto-Lock, Salary
+           Entry's Member/Scheme/Currency, and Global Currency Settings' base-currency dropdown
+           all render their expanded list in the current theme instead of native white. */
+        select, option { color-scheme: inherit; }
+        select option { background-color: var(--card-bg); color: var(--text-main); }
+
         /* v195: the browser's own autofill styling (e.g. Chrome recognizing a field like
            #txDesc/#txNotes as a "name" field once it has a saved suggestion for it) paints its
            own fixed light background + dark text UNDER our CSS, which `background`/`color` alone
@@ -3173,7 +3185,7 @@
                      reference only, nothing here computes which transactions fall in which cycle.
                      Default Payment Account feeds the 💳 Pay button (openCreditCardPayment) — the
                      account a payment transfer defaults to coming from, editable per-payment. -->
-                <div id="ccWrap" style="display:none; background:#fdf2f8; border:1px solid #fbcfe8; border-radius:10px; padding:12px; margin-bottom:12px;">
+                <div id="ccWrap" style="display:none; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:10px; padding:12px; margin-bottom:12px;">
                     <div class="form-row">
                         <label>Credit Limit</label>
                         <input type="number" id="newAccCcLimit" step="0.01" placeholder="0.00">
