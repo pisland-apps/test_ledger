@@ -1838,35 +1838,21 @@
             a[href]::after { content: none !important; }
         }
     </style>
-    <!-- v179: apply any saved background-theme / dark-mode choice before first paint, so the
-         page never flashes the default slate background and then jumps to the user's chosen
-         look. Only the structural tokens below (bg/card/text/border/glass/neu) and the
-         browser-chrome theme-color are touched here; data colors and hardcoded chip/badge
-         colors elsewhere in the page are untouched either way. -->
+    <!-- v179: apply any saved background-theme choice before first paint, so the page never
+         flashes the default slate background and then jumps to the user's chosen tint. Only
+         --bg-color / --neu-dark and the browser-chrome theme-color are touched here; every
+         other design token (glass, card colors, data colors) is untouched, so the rest of the
+         v156+ glass/neumorphism styling is unaffected regardless of which background is picked. -->
     <script>
         (function () {
             try {
-                var isDark = localStorage.getItem("ledgerDarkMode") === "1";
-                if (isDark) {
-                    var darkVars = {
-                        "--bg-color": "#0f1420", "--card-bg": "#1b2333", "--text-main": "#e7ebf3",
-                        "--text-muted": "#94a3b8", "--border-color": "#2f3b52",
-                        "--neu-light": "rgba(255,255,255,0.05)", "--neu-dark": "rgba(0,0,0,0.55)",
-                        "--glass-bg": "rgba(27,35,51,0.68)", "--glass-bg-strong": "rgba(27,35,51,0.82)",
-                        "--glass-bg-modal": "rgba(27,35,51,0.92)", "--glass-border": "rgba(255,255,255,0.08)"
-                    };
-                    Object.keys(darkVars).forEach(function (k) { document.documentElement.style.setProperty(k, darkVars[k]); });
-                    var m1 = document.querySelector('meta[name="theme-color"]');
-                    if (m1) m1.setAttribute("content", "#0f1420");
-                } else {
-                    var saved = JSON.parse(localStorage.getItem("ledgerBgTheme"));
-                    if (saved && saved.bg) {
-                        document.documentElement.style.setProperty("--bg-color", saved.bg);
-                        if (saved.neuDark) document.documentElement.style.setProperty("--neu-dark", saved.neuDark);
-                        if (saved.themeColor) {
-                            var m2 = document.querySelector('meta[name="theme-color"]');
-                            if (m2) m2.setAttribute("content", saved.themeColor);
-                        }
+                var saved = JSON.parse(localStorage.getItem("ledgerBgTheme"));
+                if (saved && saved.bg) {
+                    document.documentElement.style.setProperty("--bg-color", saved.bg);
+                    if (saved.neuDark) document.documentElement.style.setProperty("--neu-dark", saved.neuDark);
+                    if (saved.themeColor) {
+                        var m = document.querySelector('meta[name="theme-color"]');
+                        if (m) m.setAttribute("content", saved.themeColor);
                     }
                 }
             } catch (e) {}
@@ -2753,15 +2739,7 @@
                 <span style="color:var(--text-muted);">›</span>
             </div>
             <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
-                <div class="toggle-switch-row" style="margin:0;">
-                    <span class="toggle-switch-label">🌙 Dark Mode</span>
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="darkModeToggle" data-change="handleDarkModeToggleChange">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-                <p style="font-size:0.68rem; color:var(--text-muted); font-weight:600;">Light-touch flip of background, cards, text, borders &amp; glass. A few hardcoded chip colors (e.g. income/expense badges) stay their original light shade.</p>
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600; border-top:1px solid var(--border-color); padding-top:8px;">Or pick a background tint — also tints the chrome shadows (FAB, calculator, nav bar) to match. Selecting one turns Dark Mode off.</p>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the page background and the tint of the chrome shadows (FAB, calculator, nav bar) to match. Cards, glass panels and data colors stay the same.</p>
                 <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">

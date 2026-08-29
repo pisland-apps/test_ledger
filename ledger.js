@@ -67,8 +67,7 @@
         // hue instead of staying a fixed slate-gray) and the browser-chrome theme-color meta tag.
         // Deliberately NOT touched: --card-bg, --border-color, --text-*, --glass-*, --neu-light,
         // or any data color (income/expense/transfer/salary, stat-box chips, badges). Those stay
-        // flat/light and print-safe by design (see the v156 token comment above), which is also
-        // why this mechanism stops short of a full dark mode — see applyDarkMode() below instead.
+        // flat/light and print-safe by design (see the v156 token comment above).
         const BG_THEMES = [
             { id: "default",    name: "Slate",       bg: "#f8fafc", neuDark: "rgba(148,163,184,0.45)", themeColor: "#4f46e5" },
             { id: "sand",       name: "Sand",         bg: "#faf5ec", neuDark: "rgba(180,150,110,0.40)", themeColor: "#b9863f" },
@@ -84,43 +83,6 @@
             { id: "butter",     name: "Butter",       bg: "#fdfaf0", neuDark: "rgba(200,180,110,0.35)", themeColor: "#c9a63f" },
         ];
         const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
-
-        // v179: Dark Mode (light-touch flip). Only the structural tokens are overridden —
-        // background, card surface, text, border, and the glass/neumorphism decorative tokens.
-        // Deliberately NOT touched: --primary and the data colors (income/expense/transfer/
-        // salary), which read fine as saturated accents on a dark surface, and the ~136 spots
-        // in index.html that hardcode a light chip/badge color (stat-box, category badges, the
-        // passbook page, etc.) — those keep their original light styling by design, so a few of
-        // them may read a little less polished on dark than a from-scratch dark theme would.
-        // When dark mode is switched off, the previously-selected BG_THEME's light values (or
-        // the light-mode defaults) are restored via applyBgTheme()/DARK_MODE_LIGHT_DEFAULTS.
-        const DARK_MODE_VARS = {
-            "--bg-color": "#0f1420",
-            "--card-bg": "#1b2333",
-            "--text-main": "#e7ebf3",
-            "--text-muted": "#94a3b8",
-            "--border-color": "#2f3b52",
-            "--neu-light": "rgba(255,255,255,0.05)",
-            "--neu-dark": "rgba(0,0,0,0.55)",
-            "--glass-bg": "rgba(27,35,51,0.68)",
-            "--glass-bg-strong": "rgba(27,35,51,0.82)",
-            "--glass-bg-modal": "rgba(27,35,51,0.92)",
-            "--glass-border": "rgba(255,255,255,0.08)",
-        };
-        const DARK_MODE_STORAGE_KEY = "ledgerDarkMode";
-        // The light-mode token values dark mode temporarily overrides, so turning dark mode
-        // back off can restore exactly these (rather than guessing/duplicating BG_THEMES' bg).
-        const DARK_MODE_LIGHT_DEFAULTS = {
-            "--card-bg": "#ffffff",
-            "--text-main": "#0f172a",
-            "--text-muted": "#64748b",
-            "--border-color": "#e2e8f0",
-            "--neu-light": "rgba(255,255,255,0.85)",
-            "--glass-bg": "rgba(255,255,255,0.68)",
-            "--glass-bg-strong": "rgba(255,255,255,0.82)",
-            "--glass-bg-modal": "rgba(255,255,255,0.92)",
-            "--glass-border": "rgba(255,255,255,0.55)",
-        };
 
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
@@ -5091,16 +5053,9 @@
                     <span class="bg-theme-swatch-label">${t.name}</span>
                 </span>
             `).join("");
-            const darkToggle = document.getElementById("darkModeToggle");
-            if (darkToggle) darkToggle.checked = isDarkModeOn();
         }
 
         function selectBgTheme(el) {
-            if (isDarkModeOn()) {
-                applyDarkMode(false); // picking a light preset implies leaving dark mode
-                const darkToggle = document.getElementById("darkModeToggle");
-                if (darkToggle) darkToggle.checked = false;
-            }
             applyBgTheme(el.dataset.themeId);
             document.querySelectorAll("#bgThemeSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.themeId === el.dataset.themeId));
         }
@@ -5110,31 +5065,6 @@
             const isHidden = panel.style.display === "none";
             if (isHidden) buildBgThemeSwatchGrid();
             panel.style.display = isHidden ? "flex" : "none";
-        }
-
-        // --- v179: Dark Mode (light-touch) ---------------------------------------------------
-        function isDarkModeOn() {
-            return localStorage.getItem(DARK_MODE_STORAGE_KEY) === "1";
-        }
-
-        // enabled=true flips bg/card/text/border/glass/neu to the dark set. enabled=false
-        // restores the light-mode defaults for card/text/border/glass/neu-light, then re-applies
-        // whichever BG_THEME (bg-color + neu-dark) was last selected — so switching dark mode
-        // off lands you back on your chosen pastel, not a hardcoded slate.
-        function applyDarkMode(enabled, { save = true } = {}) {
-            if (enabled) {
-                Object.entries(DARK_MODE_VARS).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
-            } else {
-                Object.entries(DARK_MODE_LIGHT_DEFAULTS).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
-                applyBgTheme(getSavedBgThemeId(), { save: false });
-            }
-            if (save) {
-                try { localStorage.setItem(DARK_MODE_STORAGE_KEY, enabled ? "1" : "0"); } catch (e) {}
-            }
-        }
-
-        function handleDarkModeToggleChange(el) {
-            applyDarkMode(el.checked);
         }
 
         function openMemberFormModal() {
@@ -10782,7 +10712,6 @@
             importBackup: (el, e) => importBackup(e),
             handleExportEncryptToggleChange: () => handleExportEncryptToggleChange(),
             handleBiometricToggleChange: () => handleBiometricToggleChange(),
-            handleDarkModeToggleChange: (el) => handleDarkModeToggleChange(el),
             handleBaseCurrencyChange: () => handleBaseCurrencyChange(),
             recalcTxFdMaturity: () => { recalcTxFdMaturity(); recalcTxSplitTotal(); },
             syncTransactionCurrency: () => syncTransactionCurrency(),
