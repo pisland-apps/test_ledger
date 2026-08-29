@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v183";
+        const APP_VERSION = "v184";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -5170,6 +5170,20 @@
             if (isHidden) buildBgThemeSwatchGrid();
             panel.style.display = isHidden ? "flex" : "none";
         }
+
+        // v184: re-applies the saved theme the moment this script parses (this runs long before
+        // bootstrap()'s async lock/DB work, since ledger.js is loaded via a plain <script src>
+        // at the end of <body>, not gated on "load" or DB init). This is a deliberate SECOND
+        // application on top of the "no-flash" snippet already in index.html's <head> — reported
+        // symptom: on an installed PWA, after fully quitting and relaunching, the saved theme was
+        // still correctly recorded (Settings > Background Theme's swatch grid showed the right
+        // one selected) but the page's actual background/chrome had silently reverted to
+        // default, only fixing itself once the swatch was tapped again (i.e. once applyBgTheme()
+        // ran again "for real"). Whatever causes the <head> snippet to occasionally not stick in
+        // that environment, this line re-runs the exact same, already-proven-correct code path a
+        // second time, later in the page's life, as a safety net. save:false so it never
+        // rewrites localStorage with the value it just read from it.
+        applyBgTheme(getSavedBgThemeId(), { save: false });
 
         function openMemberFormModal() {
             document.getElementById("editMemberId").value = "";
