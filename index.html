@@ -1368,6 +1368,12 @@
                underneath the sidebar, completely covered and unclickable. Shift it past the
                sidebar's own width (336px, matching body's margin-left right above) instead. */
             .print-fab-btn { left: 356px; }
+            /* v179's speed-dial color-theme toggle button/panel are also left:20px-anchored
+               (see .sd-theme-toggle-btn/.sd-theme-panel) — same problem, same fix. Missed this
+               when v179 first shipped, which is why the button was invisible (hidden under the
+               docked sidebar) on any screen ≥768px wide. */
+            .sd-theme-toggle-btn { left: 356px; }
+            .sd-theme-panel { left: 356px; }
         }
 
         /* v166: layered-surface shadow — static (this container isn't itself a click target;
