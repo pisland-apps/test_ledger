@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v192";
+        const APP_VERSION = "v193";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -3778,9 +3778,23 @@
                                 <span class="account-card-name">${escapeHtml(a.name)}</span>
                                 <span class="account-card-balance">${balSummary}</span>
                             </div>
-                            <div class="account-card-metarow">${typeBadge}</div>
+                            <div class="account-card-metarow" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">${typeBadge}${accountOwnerTagHTML(a)}</div>
                             ${acctRefLine}
-                            <div class="account-card-subline">${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}</div>
+                            ${(() => {
+                                // v193: owner tags moved up into the metarow above (next to the
+                                // MYR/type badge) — was buried in this subline below the account
+                                // number, one glance too many to see who an account belongs to.
+                                // Everything else here still stacks the same as before; each piece
+                                // still carries its own leading "<br>" (needed when more than one
+                                // is present, to separate them from each other), so strip only ONE
+                                // leading "<br>" off the combined string — that's the one that used
+                                // to separate this content from the owner tags, now unneeded since
+                                // owner tags aren't the line right before it anymore. Omit the div
+                                // entirely when nothing's left, so a plain account doesn't leave a
+                                // dangling empty line.
+                                const rest = `${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}`.replace(/^<br>/, "");
+                                return rest ? `<div class="account-card-subline">${rest}</div>` : "";
+                            })()}
                         </div>
                         <span style="display:flex; align-items:center; gap:6px;">
                             ${ccPayBtnHTML}
@@ -5912,9 +5926,14 @@
                                 <span class="account-card-name">${escapeHtml(a.name)}</span>
                                 <span class="account-card-balance">${balSummary}</span>
                             </div>
-                            <div class="account-card-metarow">${typeBadge}</div>
+                            <div class="account-card-metarow" style="display:flex; align-items:center; gap:8px; flex-wrap:wrap;">${typeBadge}${accountOwnerTagHTML(a)}</div>
                             ${acctRefLine}
-                            <div class="account-card-subline">${accountOwnerTagHTML(a)}${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}</div>
+                            ${(() => {
+                                // v193: see the matching comment on the Accounts-page copy of this
+                                // card (renderAccountsPage) — same owner-tags-moved-up change here.
+                                const rest = `${linkedLine}${excludedLine}${extraInfoLine}${ccAmountDueLine}`.replace(/^<br>/, "");
+                                return rest ? `<div class="account-card-subline">${rest}</div>` : "";
+                            })()}
                         </div>
                         <span style="display:flex; align-items:center; gap:6px;">
                             ${ccPayBtnHTML}
