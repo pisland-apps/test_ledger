@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v182.1";
+        const APP_VERSION = "v183";
         const APP_VERSION_DATE = "2026-08-29";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1636,18 +1636,22 @@
         }
 
         // v181: Desktop "Insights" right rail (only visible at 1400px+, see the matching CSS).
-        // Two lightweight, non-configurable summaries — deliberately no settings/filters like the
-        // dashboard's other widgets, since this is meant as a quick glance while working with the
-        // main content, not a destination in itself:
-        //   1. Top Categories This Month — same expense/refund convention as Spending Breakdown
+        // Three lightweight, non-configurable summaries — deliberately no settings/filters like
+        // the dashboard's other widgets, since this is meant as a quick glance while working with
+        // the main content, not a destination in itself:
+        //   1. Spending Breakdown (This Month) — a donut chart, v183, reusing the same
+        //      buildBreakdownDonutSVG() the full-page Spending Breakdown uses (see below), same
+        //      expense/refund convention as #2.
+        //   2. Top Categories This Month — same expense/refund convention as Spending Breakdown
         //      (a refund nets back against its own category rather than being ignored outright).
-        //   2. Recent Large Transactions — the biggest income/expense entries (transfers excluded,
+        //   3. Recent Large Transactions — the biggest income/expense entries (transfers excluded,
         //      since they don't represent money actually gained/spent) from the last 60 days.
         // No-ops harmlessly if the rail markup isn't present (defensive, matches the existing
         // `if (!list) return;` pattern in renderRecentTransactionsWidget above).
         function renderDesktopInsightsRail(accounts, txs) {
             const catListEl = document.getElementById("insightsTopCategoriesList");
             const largeTxListEl = document.getElementById("insightsLargeTxList");
+            const donutWrapEl = document.getElementById("insightsSpendingDonutWrap");
             if (!catListEl || !largeTxListEl) return;
 
             const now = new Date();
@@ -1680,6 +1684,19 @@
                     </div>
                 `;
             }).join("") : `<p class="insights-empty">No expenses yet this month.</p>`;
+
+            // v183: same catTotals as the list above, but as a full donut chart — every category
+            // with a positive net spend this month gets a slice (no top-5 cap, matching how the
+            // full-page Spending Breakdown never caps its own chart either), colored/sorted the
+            // same way that page does (BREAKDOWN_CHART_COLORS cycled by descending-spend rank).
+            if (donutWrapEl) {
+                const allCatsDesc = Object.keys(catTotals).filter(c => catTotals[c] > 0).sort((a, b) => catTotals[b] - catTotals[a]);
+                const donutTotal = allCatsDesc.reduce((sum, c) => sum + catTotals[c], 0);
+                const donutEntries = allCatsDesc.map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+                donutWrapEl.innerHTML = donutEntries.length
+                    ? buildBreakdownDonutSVG(donutEntries, donutTotal)
+                    : `<p class="insights-empty">No expenses yet this month.</p>`;
+            }
 
             const cutoffMs = now.getTime() - 60 * 86400000;
             const largeTx = txs
