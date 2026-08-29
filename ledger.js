@@ -84,6 +84,30 @@
         ];
         const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
 
+        // v195: accent-color presets (Setting > Accent Color). Unlike BG_THEMES above, these
+        // override --primary and its companion tokens (see the :root comment in index.html),
+        // i.e. the color of buttons, selected states, gradients and highlights app-wide.
+        //
+        // Curated down from an original 5-preset moodboard to these 4 — two were dropped/adjusted
+        // on purpose rather than offered as-is:
+        //   - "Amber Gold" was dropped entirely: --salary-color is already #d97706 (identical to
+        //     that preset's light-mode primary) and #f59e0b is already in MEMBER_COLORS above, so
+        //     turning the whole UI chrome gold would make the Salary category and any member using
+        //     that color swatch visually disappear into the buttons/nav.
+        //   - "Mint Teal" was hue-shifted from the original ~172° teal toward ~193° cyan (still
+        //     reads as a fresh teal, just pulled further from --income-color's ~160° green) so a
+        //     selected/active chip doesn't get misread as an income cue at a glance.
+        // Indigo, Purple and Slate needed no changes — they sit far enough from both the
+        // green/red income-expense colors and the gold salary color to be safe as-is. Indigo's
+        // values are the app's original hardcoded defaults, kept byte-for-byte as the baseline.
+        const PRIMARY_THEMES = [
+            { id: "indigo", name: "Indigo",  primary: "#6366f1", hover: "#4338ca", bgSubtle: "#eef2ff", borderSubtle: "#e0e7ff", deep: "#312e81", neuDark: "rgba(49,46,129,0.55)" },
+            { id: "teal",   name: "Teal",    primary: "#0e7490", hover: "#155e75", bgSubtle: "#ecfeff", borderSubtle: "#cffafe", deep: "#164e63", neuDark: "rgba(22,78,99,0.55)" },
+            { id: "purple", name: "Purple",  primary: "#7c3aed", hover: "#6d28d9", bgSubtle: "#f5f3ff", borderSubtle: "#ede9fe", deep: "#4c1d95", neuDark: "rgba(76,29,149,0.55)" },
+            { id: "slate",  name: "Slate",   primary: "#475569", hover: "#334155", bgSubtle: "#f1f5f9", borderSubtle: "#e2e8f0", deep: "#1e293b", neuDark: "rgba(30,41,59,0.55)" },
+        ];
+        const PRIMARY_THEME_STORAGE_KEY = "ledgerPrimaryTheme";
+
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
         // saved before this existed default to "Bank/Cash" wherever a group is read.
@@ -5238,8 +5262,10 @@
             const theme = BG_THEMES.find(t => t.id === themeId) || BG_THEMES[0];
             document.documentElement.style.setProperty("--bg-color", theme.bg);
             if (theme.neuDark) document.documentElement.style.setProperty("--neu-dark", theme.neuDark);
-            const metaThemeColor = document.querySelector('meta[name="theme-color"]');
-            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor);
+            // v195: the browser-chrome theme-color meta tag is now owned by the accent-color
+            // theme (applyPrimaryTheme, below) instead of the background theme — the accent
+            // color is the one the user actually sees in buttons, so it's the more accurate
+            // "brand color" for the status bar. See applyPrimaryTheme() for where it's set.
             if (save) {
                 try { localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
             }
@@ -5270,6 +5296,59 @@
             panel.style.display = isHidden ? "flex" : "none";
         }
 
+        // --- v195: Accent Color Theme (Setting page) ----------------------------------------
+        function getSavedPrimaryThemeId() {
+            try {
+                const saved = JSON.parse(localStorage.getItem(PRIMARY_THEME_STORAGE_KEY));
+                return (saved && saved.id) || "indigo";
+            } catch (e) { return "indigo"; }
+        }
+
+        // Applies a preset's --primary and companion tokens to the live page, plus the
+        // browser-chrome theme-color meta tag (see the note in applyBgTheme above for why that
+        // ownership moved here), and — unless save is false — persists it so both the next app
+        // launch and the no-flash inline snippet in <head> pick it up before first paint.
+        function applyPrimaryTheme(themeId, { save = true } = {}) {
+            const theme = PRIMARY_THEMES.find(t => t.id === themeId) || PRIMARY_THEMES[0];
+            const root = document.documentElement.style;
+            root.setProperty("--primary", theme.primary);
+            root.setProperty("--primary-hover", theme.hover);
+            root.setProperty("--primary-bg-subtle", theme.bgSubtle);
+            root.setProperty("--primary-border-subtle", theme.borderSubtle);
+            root.setProperty("--primary-deep", theme.deep);
+            root.setProperty("--neu-primary-dark", theme.neuDark);
+            const metaThemeColor = document.querySelector('meta[name="theme-color"]');
+            if (metaThemeColor) metaThemeColor.setAttribute("content", theme.primary);
+            if (save) {
+                try { localStorage.setItem(PRIMARY_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
+            }
+            return theme;
+        }
+
+        function buildPrimaryThemeSwatchGrid() {
+            const grid = document.getElementById("primaryThemeSwatchGrid");
+            if (!grid) return;
+            const selectedId = getSavedPrimaryThemeId();
+            grid.innerHTML = PRIMARY_THEMES.map(t => `
+                <span class="bg-theme-swatch-wrap">
+                    <span class="color-swatch${t.id === selectedId ? ' selected' : ''}" style="background:${t.primary};" data-click="selectPrimaryTheme" data-theme-id="${t.id}" title="${t.name}"></span>
+                    <span class="bg-theme-swatch-label">${t.name}</span>
+                </span>
+            `).join("");
+        }
+
+        function selectPrimaryTheme(el) {
+            applyPrimaryTheme(el.dataset.themeId);
+            document.querySelectorAll("#primaryThemeSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.themeId === el.dataset.themeId));
+        }
+
+        function togglePrimaryThemeSettings() {
+            const panel = document.getElementById("primaryThemeSettingsPanel");
+            const isHidden = panel.style.display === "none";
+            if (isHidden) buildPrimaryThemeSwatchGrid();
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+
         // v184: re-applies the saved theme the moment this script parses (this runs long before
         // bootstrap()'s async lock/DB work, since ledger.js is loaded via a plain <script src>
         // at the end of <body>, not gated on "load" or DB init). This is a deliberate SECOND
@@ -5283,6 +5362,7 @@
         // second time, later in the page's life, as a safety net. save:false so it never
         // rewrites localStorage with the value it just read from it.
         applyBgTheme(getSavedBgThemeId(), { save: false });
+        applyPrimaryTheme(getSavedPrimaryThemeId(), { save: false });
 
         function openMemberFormModal() {
             document.getElementById("editMemberId").value = "";
@@ -8570,7 +8650,7 @@
             // skipped automatically by option-menu-btn's click handling and by the typeahead
             // listener below (which only ever queries for ".option-menu-btn").
             const optionRowHTML = (opt) => `
-                <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:#e0e7ff;" : ""}">
+                <button type="button" class="option-menu-btn" data-click="selectAccountPickerOption" data-value="${escapeHtml(opt.value)}" style="display:flex; justify-content:space-between; align-items:center; ${opt.value === currentVal ? "background:var(--primary-border-subtle);" : ""}">
                     <span>${opt.textContent}</span>
                     ${opt.value === currentVal ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
                 </button>
@@ -11083,6 +11163,8 @@
             selectMemberColor: (el) => selectMemberColor(el),
             toggleBgThemeSettings: () => toggleBgThemeSettings(),
             selectBgTheme: (el) => selectBgTheme(el),
+            togglePrimaryThemeSettings: () => togglePrimaryThemeSettings(),
+            selectPrimaryTheme: (el) => selectPrimaryTheme(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),

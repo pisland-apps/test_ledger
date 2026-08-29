@@ -71,6 +71,14 @@
             --text-main: #0f172a;
             --text-muted: #64748b;
             --primary: #6366f1;
+            /* v195: accent-theme companion tokens — every chip/hover/gradient color that used
+               to be hardcoded indigo now reads from these, so switching --primary via
+               applyPrimaryTheme() (ledger.js) re-skins the whole app instead of leaving stray
+               indigo patches. Defaults below = the original Indigo look, byte-for-byte. */
+            --primary-hover: #4338ca;
+            --primary-bg-subtle: #eef2ff;
+            --primary-border-subtle: #e0e7ff;
+            --primary-deep: #312e81;
             --income-color: #10b981;
             --expense-color: #ef4444;
             --transfer-color: #3b82f6;
@@ -273,7 +281,7 @@
             cursor: pointer;
             transition: background-color 0.15s ease-out, color 0.15s ease-out;
         }
-        .text-btn:hover { background: #eef2ff; color: #4338ca; }
+        .text-btn:hover { background: var(--primary-bg-subtle); color: var(--primary-hover); }
 
         .actions-bar {
             display: grid;
@@ -758,7 +766,7 @@
             width: 38px;
             height: 38px;
             border-radius: 11px;
-            background: linear-gradient(135deg, var(--primary), #4338ca);
+            background: linear-gradient(135deg, var(--primary), var(--primary-hover));
             color: #fff;
             display: flex;
             align-items: center;
@@ -862,7 +870,7 @@
         .sidebar-item:hover:not(.active) { background: #f3f4f6; }
         .sidebar-item:active { background: #f1f5f9; }
         .sidebar-item.active {
-            background: #eef2ff;
+            background: var(--primary-bg-subtle);
             color: var(--primary);
             position: relative;
         }
@@ -1226,7 +1234,7 @@
         }
         .sidebar-member-item:hover:not(.active) { background: #f3f4f6; }
         .sidebar-member-item:active { background: #f1f5f9; }
-        .sidebar-member-item.active { background: #eef2ff; color: var(--primary); }
+        .sidebar-member-item.active { background: var(--primary-bg-subtle); color: var(--primary); }
         .sidebar-member-item .member-row-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         .sidebar-empty-hint { padding: 6px 20px 10px; font-size: 0.72rem; color: var(--text-muted); font-weight: 600; }
 
@@ -1248,10 +1256,10 @@
         }
         .sidebar-account-type-item:hover:not(.active) { background: #f3f4f6; }
         .sidebar-account-type-item:active { background: #f1f5f9; }
-        .sidebar-account-type-item.active { background: #eef2ff; color: var(--primary); font-weight: 700; }
+        .sidebar-account-type-item.active { background: var(--primary-bg-subtle); color: var(--primary); font-weight: 700; }
         #sidebarAccountTypeShortcuts {
             margin-left: 24px;
-            border-left: 2px solid #e0e7ff;
+            border-left: 2px solid var(--primary-border-subtle);
         }
 
         /* Color swatch picker (member form) */
@@ -1555,7 +1563,7 @@
             transition: box-shadow 0.1s ease, transform 0.1s ease;
         }
         .calc-btn:active {
-            background: #eef2ff;
+            background: var(--primary-bg-subtle);
             transform: scale(0.95);
             box-shadow: inset 2px 2px 5px var(--neu-dark), inset -2px -2px 4px var(--neu-light);
         }
@@ -1569,7 +1577,7 @@
         .split-row select.form-input { margin: 0; }
         .split-amt-line { display:flex; gap:6px; }
         .split-row-catline { display:flex; align-items:center; gap:8px; margin-top:10px; }
-        .split-cat-icon { flex:0 0 auto; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.05rem; background:#eef2ff; }
+        .split-cat-icon { flex:0 0 auto; width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:1.05rem; background:var(--primary-bg-subtle); }
         .split-row-catline button.account-picker-btn { flex:1 1 auto !important; width:auto !important; min-width:0; margin:0; }
         .split-remove-btn { flex:0 0 auto; width:32px; height:32px; border-radius:50%; border:none; background:#fee2e2; color:var(--expense-color); font-size:1.05rem; font-weight:800; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; line-height:1; }
         .split-remove-btn:active { opacity:0.8; }
@@ -1599,7 +1607,7 @@
             box-shadow: inset 2px 2px 4px var(--neu-dark), inset -1px -1px 3px var(--neu-light);
         }
         .calc-key-op {
-            background: #e0e7ff; color: var(--primary);
+            background: var(--primary-border-subtle); color: var(--primary);
             box-shadow: -2px -2px 5px rgba(255, 255, 255, 0.7), 2px 2px 5px rgba(129, 140, 248, 0.35);
         }
         .calc-key-op:active {
@@ -1790,7 +1798,7 @@
         /* ===== App Lock (PBKDF2 + AES-GCM) ===== */
         #lockOverlay {
             position: fixed; inset: 0; z-index: 9999;
-            background: linear-gradient(160deg, #4f46e5 0%, #312e81 100%);
+            background: linear-gradient(160deg, var(--primary) 0%, var(--primary-deep) 100%);
             display: flex; align-items: center; justify-content: center;
             padding: 24px;
         }
@@ -1990,6 +1998,29 @@
                         var m = document.querySelector('meta[name="theme-color"]');
                         if (m) m.setAttribute("content", saved.themeColor);
                     }
+                }
+            } catch (e) {}
+        })();
+    </script>
+    <!-- v195: same no-flash pre-paint trick as the background-theme block above, but for the
+         accent-color theme (--primary and its companion tokens). This one also owns the
+         browser-chrome theme-color meta tag, since the accent color is the more prominent
+         brand color the user actually sees in buttons — it applies last so it wins over
+         whatever the background block above set. -->
+    <script>
+        (function () {
+            try {
+                var saved = JSON.parse(localStorage.getItem("ledgerPrimaryTheme"));
+                if (saved && saved.primary) {
+                    var root = document.documentElement.style;
+                    root.setProperty("--primary", saved.primary);
+                    root.setProperty("--primary-hover", saved.hover);
+                    root.setProperty("--primary-bg-subtle", saved.bgSubtle);
+                    root.setProperty("--primary-border-subtle", saved.borderSubtle);
+                    root.setProperty("--primary-deep", saved.deep);
+                    root.setProperty("--neu-primary-dark", saved.neuDark);
+                    var m = document.querySelector('meta[name="theme-color"]');
+                    if (m) m.setAttribute("content", saved.primary);
                 }
             } catch (e) {}
         })();
@@ -2345,7 +2376,7 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
             </div>
         </div>
-        <div id="ledgerCurrentBalanceBanner" class="net-savings-banner" style="display:none; background:#eef2ff;">
+        <div id="ledgerCurrentBalanceBanner" class="net-savings-banner" style="display:none; background:var(--primary-bg-subtle);">
             <span id="ledgerCurrentBalanceLabel">Current Balance</span>: <span id="ledgerCurrentBalanceValue">0.00</span>
         </div>
         <div id="ledgerLinkedAccountBanner" style="display:none; cursor:pointer; font-size:0.78rem; font-weight:700; color:#92400e; background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:8px 12px; margin:-6px 0 14px; text-align:center;" data-click="navigateToLinkedAccountFromLedgerHeader">
@@ -2420,7 +2451,7 @@
                 <div id="fundActivityMeta" style="display:flex; flex-wrap:wrap; gap:10px; font-size:0.72rem; color:var(--text-muted); font-weight:600;"></div>
             </div>
         </div>
-        <div class="net-savings-banner" style="background:#eef2ff;">
+        <div class="net-savings-banner" style="background:var(--primary-bg-subtle);">
             Current Value: <span id="fundActivityBalanceValue">0.00</span>
         </div>
         <div class="ledger-container" id="fundActivityList"></div>
@@ -2437,7 +2468,7 @@
                 <p id="currencyActivityMeta" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;"></p>
             </div>
         </div>
-        <div class="net-savings-banner" style="background:#eef2ff;">
+        <div class="net-savings-banner" style="background:var(--primary-bg-subtle);">
             Current Balance: <span id="currencyActivityBalanceValue">0.00</span>
         </div>
         <div class="ledger-container" id="currencyActivityList"></div>
@@ -2753,7 +2784,7 @@
 
         <!-- v148: shown only after reaching this page via the dashboard report card's "Total"
              row on a month-based tile (This Month/Last Month) — see savingsFilterMonth. -->
-        <div id="savingsMonthScopeBadge" style="display:none; align-items:center; justify-content:space-between; gap:8px; background:#f5f3ff; border:1.5px solid var(--primary); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:0.78rem; font-weight:700; color:var(--primary);">
+        <div id="savingsMonthScopeBadge" style="display:none; align-items:center; justify-content:space-between; gap:8px; background:var(--primary-bg-subtle); border:1.5px solid var(--primary); border-radius:10px; padding:8px 12px; margin-bottom:12px; font-size:0.78rem; font-weight:700; color:var(--primary);">
             <span id="savingsMonthScopeBadgeText"></span>
             <button type="button" class="trash-btn" data-click="clearSavingsMonthScope" style="padding:2px 8px; font-size:0.7rem;">Clear</button>
         </div>
@@ -2777,7 +2808,7 @@
             </div>
         </div>
 
-        <div class="statement-card" style="border: 2px solid var(--primary); background: #f5f3ff;">
+        <div class="statement-card" style="border: 2px solid var(--primary); background: var(--primary-bg-subtle);">
             <div style="display:flex; justify-content:space-between; font-weight:800; font-size:1.1rem;">
                 <span id="savingsSurplusLabel">Surplus Margin:</span>
                 <span id="savingsSurplusValue">0.00</span>
@@ -2828,7 +2859,7 @@
                     <span class="stat-title" style="color:#166534;">Portfolio Value</span>
                     <div class="stat-amount" id="portfolioValueTotal" style="color:#15803d;">0.00</div>
                 </div>
-                <div class="stat-box" style="background:#f5f3ff; border:1px solid #ddd6fe;">
+                <div class="stat-box" style="background:var(--primary-bg-subtle); border:1px solid var(--primary-border-subtle);">
                     <span class="stat-title" style="color:#5b21b6;">Total Invested</span>
                     <div class="stat-amount" id="portfolioInvestedTotal" style="color:#6d28d9;">0.00</div>
                 </div>
@@ -2925,6 +2956,14 @@
             <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the page background and the tint of the chrome shadows (FAB, calculator, nav bar) to match. Cards, glass panels and data colors stay the same.</p>
                 <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="togglePrimaryThemeSettings">
+                <span>🎯 <strong>Accent Color</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div id="primaryThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the color of buttons, selected states and highlights app-wide. Chosen to stay clear of the green/red income &amp; expense colors and the gold Salary category color.</p>
+                <div class="color-swatch-grid" id="primaryThemeSwatchGrid"></div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
                 <span>👪 <strong>Manage Members</strong></span>
@@ -3626,7 +3665,7 @@
             <div style="padding:20px;">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
                     <span id="txQuickViewDesc" style="font-weight:800; font-size:1rem;"></span>
-                    <button type="button" data-click="openTxOptionsMenu" title="More options" style="background:#eef2ff; border:none; width:34px; height:34px; border-radius:8px; font-weight:900; cursor:pointer; font-size:1.1rem; color:var(--primary);">⋮</button>
+                    <button type="button" data-click="openTxOptionsMenu" title="More options" style="background:var(--primary-bg-subtle); border:none; width:34px; height:34px; border-radius:8px; font-weight:900; cursor:pointer; font-size:1.1rem; color:var(--primary);">⋮</button>
                 </div>
                 <div id="txQuickViewDetails" style="font-size:0.85rem; line-height:2; color:var(--text-main); margin-bottom:16px;"></div>
                 <button type="button" id="txQuickViewCheckedBtn" data-click="toggleTxCheckedFromQuickView" class="submit-btn" style="margin-top:0;"></button>
