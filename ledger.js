@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v198";
+        const APP_VERSION = "v199";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -84,7 +84,7 @@
             primaryChipBg: "#f5f3ff",
             cardShadow: "0 1px 3px rgba(0,0,0,0.06)",
             hardwareTrackBg: "#f4ede4", hardwareTrackBorder: "#dcd1c4", hardwareFillStart: "#e3cbb3", hardwareFillEnd: "#c5a88a",
-            primary: "#6366f1", incomeColor: "#10b981", expenseColor: "#ef4444", transferColor: "#3b82f6", salaryColor: "#d97706",
+            primary: "#6366f1", incomeColor: "#15803d", expenseColor: "#b91c1c", transferColor: "#3b82f6", salaryColor: "#d97706",
             colorScheme: "light",
             themeColor: "#4f46e5",
         };
@@ -121,10 +121,14 @@
                 cardShadow: "none",
                 hardwareTrackBg: "#2a231c", hardwareTrackBorder: "#46392c",
                 hardwareFillStart: "#6b5642", hardwareFillEnd: "#4a3a2a",
-                // v195: softened/desaturated data colors — full-saturation red/green/indigo on a
-                // near-black background causes halation (glow/"vibration") and eye strain; these
-                // are the standard higher-lightness, lower-saturation dark-mode equivalents.
-                primary: "#818cf8", incomeColor: "#34d399", expenseColor: "#f87171",
+                // v198: previously softened/desaturated (#34d399/#f87171) to avoid halation on a
+                // near-black background, but that meant the Financial Report Card (which hardcoded
+                // its own #15803d/#b91c1c, ignoring this theme override entirely) showed a
+                // different, more saturated green/red than every other income/expense figure in
+                // the app (transaction amounts, account balances). Now that the Report Card reads
+                // these same vars (see index.html), unify on its colors instead of re-introducing
+                // a second override — one income/expense pair for the whole app, every theme.
+                primary: "#818cf8", incomeColor: "#15803d", expenseColor: "#b91c1c",
                 transferColor: "#60a5fa", salaryColor: "#fbbf24",
                 // v195: switches native form-control chrome (select dropdown lists, date/time
                 // picker icons, checkboxes) to the browser's own dark rendering — see the :root
