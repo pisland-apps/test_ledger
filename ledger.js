@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v200";
+        const APP_VERSION = "v201";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -8099,6 +8099,7 @@
             const catSelect = document.getElementById("salaryCategory");
             catSelect.innerHTML = buildCategoryOptionsHTML("income", dynamicCategories.filter(c => c.type === "income").map(c => c.name));
             catSelect.value = "Salary";
+            syncAccountPickerButtonText("salaryCategory");
 
             populateSalaryAccountSelects(accounts);
             // Bank Account defaults to Default Receive Account, if one is set and still exists —

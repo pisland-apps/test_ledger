@@ -3986,7 +3986,10 @@
 
             <div class="form-row">
                 <label>Category</label>
-                <select id="salaryCategory" class="form-input"></select>
+                <button type="button" id="salaryCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryCategory" data-title="Select Category">
+                    <span id="salaryCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="salaryCategory" style="display:none;"></select>
             </div>
 
             <div class="form-row" id="salaryContribAccountRow" style="display:none;">
