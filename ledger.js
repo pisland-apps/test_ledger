@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v199";
+        const APP_VERSION = "v200";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -8664,7 +8664,7 @@
             `;
             document.getElementById("accountPickerList").innerHTML = Array.from(select.children).map(child => {
                 if (child.tagName === "OPTGROUP") {
-                    return `<div class="option-group-label">${escapeHtml(child.label)}</div>` + Array.from(child.children).map(optionRowHTML).join("");
+                    return `<div class="option-group-label" style="background:var(--card-bg); color:var(--text-muted);">${escapeHtml(child.label)}</div>` + Array.from(child.children).map(optionRowHTML).join("");
                 }
                 return optionRowHTML(child);
             }).join("");
