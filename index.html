@@ -140,7 +140,15 @@
             --glass-bg: rgba(255, 255, 255, 0.68);
             --glass-bg-strong: rgba(255, 255, 255, 0.82);
             --glass-bg-modal: rgba(255, 255, 255, 0.92); /* denser — modal-sheets hold small form text */
-            --glass-border: rgba(255, 255, 255, 0.55);
+            /* v203: was rgba(255,255,255,0.55) — a white edge on a near-white glass card is
+               invisible, so light-theme modal-sheets/drawers had no visible border at all (only
+               the shadow, which is a similar navy tone to the dimmed backdrop behind it and so
+               barely reads either) — the card looked like it had vanished. A dark, low-alpha
+               border reads as a soft edge against both the white card and the dimmed backdrop,
+               the same way --border-color (#e2e8f0) already does for ordinary cards. Midnight's
+               own white glassBorder (ledger.js BG_THEMES) is unaffected and still correct there,
+               since a white edge against its near-black background has real contrast. */
+            --glass-border: rgba(15, 23, 42, 0.14);
         }
 
         * {

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v203";
+        const APP_VERSION = "v204";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -78,7 +78,12 @@
             borderColor: "#e2e8f0", neuLight: "rgba(255,255,255,0.85)", neuDark: "rgba(148,163,184,0.45)",
             neuPrimaryLight: "rgba(255,255,255,0.22)", neuPrimaryDark: "rgba(49,46,129,0.55)",
             glassBg: "rgba(255,255,255,0.68)", glassBgStrong: "rgba(255,255,255,0.82)",
-            glassBgModal: "rgba(255,255,255,0.92)", glassBorder: "rgba(255,255,255,0.55)",
+            // v203: was rgba(255,255,255,0.55) — invisible against a near-white glass card, so
+            // every light preset's modal-sheet/drawer had no visible border, only a low-contrast
+            // shadow the same navy tone as the dimmed backdrop behind it. See the matching
+            // comment on :root's --glass-border in index.html for the full story. Midnight's own
+            // white glassBorder override (below) still stands — it has real contrast there.
+            glassBgModal: "rgba(255,255,255,0.92)", glassBorder: "rgba(15,23,42,0.14)",
             hoverBg: "#f3f4f6", pressBg: "#f1f5f9", activeBg: "#eef2ff", activeBorder: "#e0e7ff", chipBg: "#e2e8f0",
             incomeChipBg: "#f0fdf4", incomeChipBorder: "#bbf7d0", expenseChipBg: "#fef2f2", expenseChipBorder: "#fecaca",
             primaryChipBg: "#f5f3ff",
