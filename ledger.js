@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v204";
+        const APP_VERSION = "v205";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -100,7 +100,11 @@
             themeColor: "#4f46e5",
         };
         const BG_THEMES = [
-            { id: "default",    name: "Slate",       bg: "#f8fafc", neuDark: "rgba(148,163,184,0.45)", themeColor: "#4f46e5" },
+            // v205: relabeled "Default" — was "Slate", but that name now belongs to the new dark
+            // preset below (id "slate") which matches the reference swatch's actual slate-gray
+            // tone much more closely than this pale off-white ever did. Same id ("default"), so
+            // no saved preference or stored theme snapshot is affected — display label only.
+            { id: "default",    name: "Default",      bg: "#f8fafc", neuDark: "rgba(148,163,184,0.45)", themeColor: "#4f46e5" },
             { id: "sand",       name: "Sand",         bg: "#faf5ec", neuDark: "rgba(180,150,110,0.40)", themeColor: "#b9863f" },
             { id: "mint",       name: "Mint",         bg: "#f1faf6", neuDark: "rgba(110,170,140,0.35)", themeColor: "#3f9d76" },
             { id: "lavender",   name: "Lavender",     bg: "#f6f4fc", neuDark: "rgba(150,130,190,0.35)", themeColor: "#7c6bc4" },
@@ -112,6 +116,37 @@
             { id: "rosegold",   name: "Rose Gold",    bg: "#fdf2f5", neuDark: "rgba(200,150,165,0.35)", themeColor: "#c97a95" },
             { id: "cloud",      name: "Cloud Gray",   bg: "#f5f5f6", neuDark: "rgba(150,150,155,0.40)", themeColor: "#6b7280" },
             { id: "butter",     name: "Butter",       bg: "#fdfaf0", neuDark: "rgba(200,180,110,0.35)", themeColor: "#c9a63f" },
+            { id: "indigo",     name: "Indigo",       bg: "#eef1fd", neuDark: "rgba(99,102,241,0.40)", themeColor: "#4f46e5" },
+            { id: "teal",       name: "Teal",         bg: "#eefaf8", neuDark: "rgba(20,166,151,0.35)", themeColor: "#0d9488" },
+            { id: "purple",     name: "Purple",       bg: "#f7f0fd", neuDark: "rgba(168,85,247,0.35)", themeColor: "#9333ea" },
+            {
+                // v205: second full dark preset (alongside 暗夜描边/midnight below) — cooler,
+                // blue-gray slate tone rather than near-black, per the reference Indigo/Teal/
+                // Purple/Slate swatch set. Mirrors every key midnight overrides (see its comments
+                // just below) since a full dark preset must supply all of them itself — any key
+                // it left out would fall back to THEME_DEFAULTS' *light* value (e.g. a white
+                // modal-sheet on a dark page) instead of resetting cleanly.
+                id: "slate", name: "Slate",
+                bg: "#0f172a", cardBg: "#1e293b", textMain: "#e2e8f0", textMuted: "#94a3b8",
+                borderColor: "rgba(255,255,255,0.12)",
+                neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
+                neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
+                glassBg: "rgba(30,41,59,0.72)", glassBgStrong: "rgba(30,41,59,0.85)",
+                glassBgModal: "#1e293b", glassBorder: "rgba(255,255,255,0.12)", modalSheetBorder: "#64748b",
+                hoverBg: "rgba(255,255,255,0.06)", pressBg: "rgba(255,255,255,0.10)",
+                activeBg: "rgba(99,102,241,0.18)", activeBorder: "rgba(129,140,248,0.35)", chipBg: "rgba(255,255,255,0.08)",
+                incomeChipBg: "rgba(52,211,153,0.15)", incomeChipBorder: "rgba(52,211,153,0.35)",
+                expenseChipBg: "rgba(248,113,113,0.15)", expenseChipBorder: "rgba(248,113,113,0.35)",
+                primaryChipBg: "rgba(129,140,248,0.15)",
+                cardShadow: "none",
+                hardwareTrackBg: "#2a231c", hardwareTrackBorder: "#46392c",
+                hardwareFillStart: "#6b5642", hardwareFillEnd: "#4a3a2a",
+                dropdownOptionBg: "#293548",
+                primary: "#818cf8", incomeColor: "#34d399", expenseColor: "#f87171",
+                transferColor: "#60a5fa", salaryColor: "#fbbf24",
+                colorScheme: "dark",
+                themeColor: "#0f172a",
+            },
             {
                 id: "midnight", name: "暗夜描边",
                 bg: "#0a0a0f", cardBg: "#15151d", textMain: "#e8eaf0", textMuted: "#8b93a8",
