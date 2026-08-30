@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v202";
+        const APP_VERSION = "v203";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -139,6 +139,15 @@
             },
         ];
         const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
+        // v202: separate slot that only ever holds the most recent *light* preset's full
+        // snapshot (never midnight). Auto mode needs this so the head <script>'s no-flash
+        // snippet can resolve "system says light" correctly on relaunch, even while
+        // BG_THEME_STORAGE_KEY itself currently holds the dark snapshot (e.g. app was last
+        // closed at night).
+        const BG_THEME_LIGHT_SNAPSHOT_KEY = "ledgerBgThemeLightSnapshot";
+        const BG_THEME_AUTO_KEY = "ledgerBgThemeAuto";
+        const BG_THEME_AUTO_LIGHT_KEY = "ledgerBgThemeAutoLightId";
+        const BG_THEME_DARK_ID = "midnight"; // the only dark preset currently offered
 
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
@@ -5322,9 +5331,48 @@
             const metaThemeColor = document.querySelector('meta[name="theme-color"]');
             if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor || THEME_DEFAULTS.themeColor);
             if (save) {
-                try { localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme)); } catch (e) {}
+                try {
+                    localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme));
+                    // v202: mirror every non-dark pick into its own slot — see the key's comment
+                    // above for why Auto mode needs this kept separate from the "current" slot.
+                    if (theme.id !== BG_THEME_DARK_ID) localStorage.setItem(BG_THEME_LIGHT_SNAPSHOT_KEY, JSON.stringify(theme));
+                } catch (e) {}
             }
             return theme;
+        }
+
+        // --- v202: Auto (follow system day/night) for Background Theme ---------------------
+        // Piggybacks on the OS's own light/dark switch (prefers-color-scheme) instead of a
+        // fixed clock — mirrors how the phone's own auto day/night toggle works. Only "midnight"
+        // (暗夜描边) is treated as the dark side; whichever light preset was active when Auto was
+        // turned on (or last manually picked while system-light) is remembered as the light side.
+        function isBgThemeAutoEnabled() {
+            return localStorage.getItem(BG_THEME_AUTO_KEY) === "1";
+        }
+        function getAutoLightThemeId() {
+            return localStorage.getItem(BG_THEME_AUTO_LIGHT_KEY) || "default";
+        }
+        function setAutoLightThemeId(id) {
+            try { localStorage.setItem(BG_THEME_AUTO_LIGHT_KEY, id); } catch (e) {}
+        }
+        function systemPrefersDarkTheme() {
+            return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
+        }
+        function resolveAutoBgThemeId() {
+            return systemPrefersDarkTheme() ? BG_THEME_DARK_ID : getAutoLightThemeId();
+        }
+        function applyAutoBgTheme() {
+            applyBgTheme(resolveAutoBgThemeId());
+        }
+        function setBgThemeAutoEnabled(enabled) {
+            try { localStorage.setItem(BG_THEME_AUTO_KEY, enabled ? "1" : "0"); } catch (e) {}
+            if (enabled) {
+                // Remember whatever's active right now (unless it's already midnight) as the
+                // light side, so switching Auto on doesn't silently discard the user's pick.
+                const currentId = getSavedBgThemeId();
+                if (currentId !== BG_THEME_DARK_ID) setAutoLightThemeId(currentId);
+                applyAutoBgTheme();
+            }
         }
 
         function buildBgThemeSwatchGrid() {
@@ -5337,11 +5385,24 @@
                     <span class="bg-theme-swatch-label">${t.name}</span>
                 </span>
             `).join("");
+            const autoToggle = document.getElementById("bgThemeAutoToggle");
+            if (autoToggle) autoToggle.checked = isBgThemeAutoEnabled();
         }
 
         function selectBgTheme(el) {
+            // Manually tapping a swatch is a deliberate override — turn Auto back off so it
+            // doesn't immediately flip the pick back at the next day/night change.
+            setBgThemeAutoEnabled(false);
+            const autoToggle = document.getElementById("bgThemeAutoToggle");
+            if (autoToggle) autoToggle.checked = false;
             applyBgTheme(el.dataset.themeId);
             document.querySelectorAll("#bgThemeSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.themeId === el.dataset.themeId));
+        }
+
+        function handleBgThemeAutoToggleChange() {
+            const autoToggle = document.getElementById("bgThemeAutoToggle");
+            setBgThemeAutoEnabled(!!(autoToggle && autoToggle.checked));
+            buildBgThemeSwatchGrid();
         }
 
         function toggleBgThemeSettings() {
@@ -5363,7 +5424,30 @@
         // that environment, this line re-runs the exact same, already-proven-correct code path a
         // second time, later in the page's life, as a safety net. save:false so it never
         // rewrites localStorage with the value it just read from it.
-        applyBgTheme(getSavedBgThemeId(), { save: false });
+        // v202: if Auto (follow system) is on, resolve day/night from the OS right now instead
+        // of blindly replaying the last saved snapshot — the OS's state may well have changed
+        // since the app was last open, and that's the entire point of Auto.
+        if (isBgThemeAutoEnabled()) {
+            applyAutoBgTheme();
+        } else {
+            applyBgTheme(getSavedBgThemeId(), { save: false });
+        }
+
+        // v202: keeps Auto mode tracking the OS live for as long as this tab/PWA stays open,
+        // not just once at launch — e.g. sunset triggering the OS's own auto dark mode while the
+        // app is sitting open in the background. addListener is the pre-2020 Safari fallback for
+        // browsers whose MediaQueryList doesn't support addEventListener yet.
+        const bgThemeSystemQuery = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)");
+        if (bgThemeSystemQuery) {
+            const handleBgThemeSystemChange = () => {
+                if (!isBgThemeAutoEnabled()) return;
+                applyAutoBgTheme();
+                const panel = document.getElementById("bgThemeSettingsPanel");
+                if (panel && panel.style.display !== "none") buildBgThemeSwatchGrid();
+            };
+            if (bgThemeSystemQuery.addEventListener) bgThemeSystemQuery.addEventListener("change", handleBgThemeSystemChange);
+            else if (bgThemeSystemQuery.addListener) bgThemeSystemQuery.addListener(handleBgThemeSystemChange);
+        }
 
         function openMemberFormModal() {
             document.getElementById("editMemberId").value = "";
@@ -11314,6 +11398,7 @@
             handleSalaryCurrencyChange: () => handleSalaryCurrencyChange(),
             changeReportCardPeriod1: (el) => changeReportCardPeriod(1, el.value),
             changeReportCardPeriod2: (el) => changeReportCardPeriod(2, el.value),
+            handleBgThemeAutoToggleChange: () => handleBgThemeAutoToggleChange(),
         };
 
         const INPUT_ACTIONS = {

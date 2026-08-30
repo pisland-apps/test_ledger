@@ -2067,10 +2067,47 @@
          colors), not just --bg-color/--neu-dark, so a saved full dark preset (e.g. 暗夜描边)
          doesn't flash the light card/text/chip colors for a frame before ledger.js's own
          applyBgTheme() re-runs. -->
+    <!-- v202: if Auto (follow system) is on, resolve the current OS day/night state right here
+         too, instead of just replaying whatever was saved last time the app ran — otherwise an
+         OS flip that happened while the PWA was fully closed wouldn't show up until ledger.js's
+         own re-apply later in <body>, flashing the stale look for a frame first. The dark preset
+         (暗夜描边) is duplicated here as MIDNIGHT_THEME since BG_THEMES itself only lives in
+         ledger.js; the light side reuses whatever light snapshot applyBgTheme() last mirrored
+         into ledgerBgThemeLightSnapshot. -->
     <script>
         (function () {
             try {
+                var MIDNIGHT_THEME = {
+                    id: "midnight", bg: "#0a0a0f", cardBg: "#15151d", textMain: "#e8eaf0", textMuted: "#8b93a8",
+                    borderColor: "rgba(255,255,255,0.14)",
+                    neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
+                    neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
+                    glassBg: "rgba(20,20,28,0.72)", glassBgStrong: "rgba(20,20,28,0.85)",
+                    glassBgModal: "rgba(24,24,32,0.95)", glassBorder: "rgba(255,255,255,0.12)",
+                    hoverBg: "rgba(255,255,255,0.06)", pressBg: "rgba(255,255,255,0.10)",
+                    activeBg: "rgba(99,102,241,0.18)", activeBorder: "rgba(129,140,248,0.35)", chipBg: "rgba(255,255,255,0.08)",
+                    incomeChipBg: "rgba(52,211,153,0.15)", incomeChipBorder: "rgba(52,211,153,0.35)",
+                    expenseChipBg: "rgba(248,113,113,0.15)", expenseChipBorder: "rgba(248,113,113,0.35)",
+                    primaryChipBg: "rgba(129,140,248,0.15)",
+                    cardShadow: "none",
+                    hardwareTrackBg: "#2a231c", hardwareTrackBorder: "#46392c",
+                    hardwareFillStart: "#6b5642", hardwareFillEnd: "#4a3a2a",
+                    dropdownOptionBg: "#28282f",
+                    primary: "#818cf8", incomeColor: "#34d399", expenseColor: "#f87171",
+                    transferColor: "#60a5fa", salaryColor: "#fbbf24",
+                    colorScheme: "dark", themeColor: "#0a0a0f",
+                };
+                var isAuto = localStorage.getItem("ledgerBgThemeAuto") === "1";
+                var systemPrefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
                 var saved = JSON.parse(localStorage.getItem("ledgerBgTheme"));
+                if (isAuto) {
+                    if (systemPrefersDark) {
+                        saved = MIDNIGHT_THEME;
+                    } else {
+                        var lightSnapshot = JSON.parse(localStorage.getItem("ledgerBgThemeLightSnapshot"));
+                        if (lightSnapshot && lightSnapshot.bg) saved = lightSnapshot;
+                    }
+                }
                 if (saved && saved.bg) {
                     var varMap = {
                         bg: "--bg-color", cardBg: "--card-bg", textMain: "--text-main", textMuted: "--text-muted",
@@ -3031,6 +3068,16 @@
             </div>
             <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the page background and the tint of the chrome shadows (FAB, calculator, nav bar) to match. Cards, glass panels and data colors stay the same.</p>
+                <!-- v202: mirrors the OS's own day/night auto-switch — toggling this on tracks
+                     prefers-color-scheme live, flipping between 暗夜描边 at night and whichever
+                     light preset was active beforehand. Tapping any swatch below turns it back off. -->
+                <div class="toggle-switch-row" style="margin-top:0;">
+                    <span class="toggle-switch-label">🌗 Auto (follow system day/night)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="bgThemeAutoToggle" data-change="handleBgThemeAutoToggleChange">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
                 <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
