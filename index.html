@@ -115,6 +115,18 @@
             --hardware-track-bg: #f4ede4; --hardware-track-border: #dcd1c4;
             --hardware-fill-start: #e3cbb3; --hardware-fill-end: #c5a88a;
 
+            /* v198: native <select> dropdown popup rows (see select option rule below) previously
+               used --card-bg, which reads as a flat near-black slab against 暗夜描边's near-black
+               page — noticeably darker/flatter than the app's own inputs and the custom picker's
+               option rows (both layer --chip-bg's translucent highlight on top of --card-bg,
+               giving them a visibly lighter, softer tone). This is a separate solid color rather
+               than --chip-bg itself because <option> elements can't reliably composite an rgba()
+               background over an unknown native popup canvas — this is that same blended result
+               pre-computed as one flat hex so it renders identically without relying on
+               compositing. Light presets default it to the same white as --card-bg (no visible
+               change there); only 暗夜描边 overrides it. */
+            --dropdown-option-bg: #ffffff;
+
             /* --- v156: decorative-only design tokens (neumorphism + glass) ---
                Scoped to chrome/controls (FAB, calculator keys, nav bar, modal/sheet
                backgrounds) — never applied to data-bearing surfaces (ledger rows, report
@@ -1603,7 +1615,7 @@
            Entry's Member/Scheme/Currency, and Global Currency Settings' base-currency dropdown
            all render their expanded list in the current theme instead of native white. */
         select, option { color-scheme: inherit; }
-        select option { background-color: var(--card-bg); color: var(--text-main); }
+        select option { background-color: var(--dropdown-option-bg); color: var(--text-main); }
 
         /* v195: the browser's own autofill styling (e.g. Chrome recognizing a field like
            #txDesc/#txNotes as a "name" field once it has a saved suggestion for it) paints its
@@ -1687,7 +1699,7 @@
            openAccountPicker(). Inert (no data-click), so it's never mistaken for a tappable
            row and is automatically skipped by the type-ahead listener, which only ever
            queries ".option-menu-btn". */
-        .option-group-label { font-size:0.72rem; font-weight:800; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted); padding:10px 4px 2px; }
+        .option-group-label { font-size:0.72rem; font-weight:800; text-transform:uppercase; letter-spacing:0.03em; color:var(--text-muted); padding:10px 4px 2px; background:var(--card-bg); }
         /* v99: custom Account/Category picker — replaces the native <select> popup for
            srcAccount/destAccount/txCategory (v142 added Category to this same picker), whose
            expanded option-list font size Android Chrome renders using its own system size
@@ -2074,6 +2086,7 @@
                         cardShadow: "--card-shadow",
                         hardwareTrackBg: "--hardware-track-bg", hardwareTrackBorder: "--hardware-track-border",
                         hardwareFillStart: "--hardware-fill-start", hardwareFillEnd: "--hardware-fill-end",
+                        dropdownOptionBg: "--dropdown-option-bg",
                         primary: "--primary", incomeColor: "--income-color", expenseColor: "--expense-color",
                         transferColor: "--transfer-color", salaryColor: "--salary-color",
                         colorScheme: "color-scheme"
@@ -3923,13 +3936,19 @@
                     <h3 style="font-weight:800;">💰 Salary Entry</h3>
                     <p style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">Record Gross Salary → Net Bank + EPF/CPF Split</p>
                 </div>
-                <select id="salaryCurrency" class="form-input" data-change="handleSalaryCurrencyChange" style="flex:0 0 auto; width:auto; min-width:74px; height:34px; padding:4px 6px; font-size:0.8rem; margin-right:4px;"></select>
+                <button type="button" id="salaryCurrencyBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryCurrency" data-title="Select Currency" style="flex:0 0 auto; width:auto; min-width:74px; height:34px; padding:4px 8px; font-size:0.8rem; margin-right:4px;">
+                    <span id="salaryCurrencyBtnText">MYR</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="salaryCurrency" data-change="handleSalaryCurrencyChange" style="display:none;"></select>
                 <button data-click="closeModal" data-modal="salaryModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
             </div>
 
             <div class="form-row">
                 <label>Member</label>
-                <select id="salaryMemberSelect" class="form-input" data-change="handleSalaryMemberChange">
+                <button type="button" id="salaryMemberSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryMemberSelect" data-title="Select Member">
+                    <span id="salaryMemberSelectBtnText">All Members (show every account)</span><span class="account-picker-chevron">▾</span>
+                </button>
+                <select id="salaryMemberSelect" data-change="handleSalaryMemberChange" style="display:none;">
                     <option value="all">All Members (show every account)</option>
                 </select>
             </div>
@@ -3941,7 +3960,10 @@
                 </div>
                 <div>
                     <label>Scheme</label>
-                    <select id="salaryScheme" class="form-input" data-change="handleSalarySchemeChange">
+                    <button type="button" id="salarySchemeBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="salaryScheme" data-title="Select Scheme">
+                        <span id="salarySchemeBtnText">None (plain salary)</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="salaryScheme" data-change="handleSalarySchemeChange" style="display:none;">
                         <option value="none">None (plain salary)</option>
                         <option value="epf">EPF (Malaysia)</option>
                         <option value="cpf">CPF (Singapore)</option>

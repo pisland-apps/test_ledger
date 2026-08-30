@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v197";
+        const APP_VERSION = "v198";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -84,6 +84,7 @@
             primaryChipBg: "#f5f3ff",
             cardShadow: "0 1px 3px rgba(0,0,0,0.06)",
             hardwareTrackBg: "#f4ede4", hardwareTrackBorder: "#dcd1c4", hardwareFillStart: "#e3cbb3", hardwareFillEnd: "#c5a88a",
+            dropdownOptionBg: "#ffffff",
             primary: "#6366f1", incomeColor: "#10b981", expenseColor: "#ef4444", transferColor: "#3b82f6", salaryColor: "#d97706",
             colorScheme: "light",
             themeColor: "#4f46e5",
@@ -121,6 +122,9 @@
                 cardShadow: "none",
                 hardwareTrackBg: "#2a231c", hardwareTrackBorder: "#46392c",
                 hardwareFillStart: "#6b5642", hardwareFillEnd: "#4a3a2a",
+                // v198: lighter than --card-bg, matching the blended tone of the app's own
+                // input fields (--chip-bg over --card-bg) — see the :root comment above.
+                dropdownOptionBg: "#28282f",
                 // v195: softened/desaturated data colors — full-saturation red/green/indigo on a
                 // near-black background causes halation (glow/"vibration") and eye strain; these
                 // are the standard higher-lightness, lower-saturation dark-mode equivalents.
@@ -5305,6 +5309,7 @@
             cardShadow: "--card-shadow",
             hardwareTrackBg: "--hardware-track-bg", hardwareTrackBorder: "--hardware-track-border",
             hardwareFillStart: "--hardware-fill-start", hardwareFillEnd: "--hardware-fill-end",
+            dropdownOptionBg: "--dropdown-option-bg",
             primary: "--primary", incomeColor: "--income-color", expenseColor: "--expense-color",
             transferColor: "--transfer-color", salaryColor: "--salary-color",
             colorScheme: "color-scheme",
@@ -8072,8 +8077,10 @@
             // nudged toward that member's own accounts). With 2+ members "All Members" remains the
             // safer default since guessing which one just got paid isn't possible.
             memberSelect.value = membersCache.length === 1 ? membersCache[0].id : "all";
+            syncAccountPickerButtonText("salaryMemberSelect");
 
             document.getElementById("salaryScheme").value = "none";
+            syncAccountPickerButtonText("salaryScheme");
             document.getElementById("salaryGross").value = "";
             document.getElementById("salaryEEAmount").value = "";
             document.getElementById("salaryERAmount").value = "";
@@ -8087,6 +8094,7 @@
             const currSelect = document.getElementById("salaryCurrency");
             currSelect.innerHTML = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
             currSelect.value = baseCurrency;
+            syncAccountPickerButtonText("salaryCurrency");
 
             const catSelect = document.getElementById("salaryCategory");
             catSelect.innerHTML = buildCategoryOptionsHTML("income", dynamicCategories.filter(c => c.type === "income").map(c => c.name));
@@ -8218,7 +8226,10 @@
 
             const currSelect = document.getElementById("salaryCurrency");
             const schemeCurrency = isEpf ? "MYR" : isCpf ? "SGD" : null;
-            if (schemeCurrency && fxRates[schemeCurrency] !== undefined) currSelect.value = schemeCurrency;
+            if (schemeCurrency && fxRates[schemeCurrency] !== undefined) {
+                currSelect.value = schemeCurrency;
+                syncAccountPickerButtonText("salaryCurrency");
+            }
 
             if (hasScheme) {
                 const memberId = document.getElementById("salaryMemberSelect").value;
@@ -8713,7 +8724,7 @@
                 const type = (typeEl && typeEl.value === "income") ? "income" : "expense";
                 const catName = select.value;
                 iconEl.textContent = catName ? getCategoryIcon(catName, type) : "🏷️";
-                iconEl.style.background = catName ? getCategoryAvatarColor(catName) : "#eef2ff";
+                iconEl.style.background = catName ? getCategoryAvatarColor(catName) : "var(--active-bg)";
             }
         }
 
