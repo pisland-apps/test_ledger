@@ -140,15 +140,21 @@
             --glass-bg: rgba(255, 255, 255, 0.68);
             --glass-bg-strong: rgba(255, 255, 255, 0.82);
             --glass-bg-modal: rgba(255, 255, 255, 0.92); /* denser — modal-sheets hold small form text */
-            /* v203: was rgba(255,255,255,0.55) — a white edge on a near-white glass card is
-               invisible, so light-theme modal-sheets/drawers had no visible border at all (only
-               the shadow, which is a similar navy tone to the dimmed backdrop behind it and so
-               barely reads either) — the card looked like it had vanished. A dark, low-alpha
-               border reads as a soft edge against both the white card and the dimmed backdrop,
-               the same way --border-color (#e2e8f0) already does for ordinary cards. Midnight's
-               own white glassBorder (ledger.js BG_THEMES) is unaffected and still correct there,
-               since a white edge against its near-black background has real contrast. */
-            --glass-border: rgba(15, 23, 42, 0.14);
+            /* v204: v203's rgba(15,23,42,0.14) still wasn't enough — on real devices/compressed
+               screenshots a 1px, 14%-alpha line all but disappears, so the card still read as
+               blended into the backdrop. Doubled the alpha for a clearly visible edge instead of
+               a barely-there one. Midnight's own white glassBorder (ledger.js BG_THEMES) is
+               unaffected and still correct there, since a white edge against its near-black
+               background already has plenty of contrast. */
+            --glass-border: rgba(15, 23, 42, 0.32);
+            /* v204: the modal-sheet's box-shadow used to be a single hardcoded value shared by
+               every theme. On light themes that shadow is the same navy hue as the dimmed
+               backdrop behind it (--modal a translucent rgba(15,23,42,0.4) layer), so the two
+               blend into each other and the shadow adds almost no visible separation — border
+               alone wasn't reliably enough either. Made it a theme var with a bolder, two-layer
+               shadow as a second, independent way to see the card's edge; midnight overrides it
+               below with something more suited to a near-black page. */
+            --modal-shadow: 0 16px 40px rgba(15, 23, 42, 0.35), 0 2px 10px rgba(15, 23, 42, 0.18);
         }
 
         * {
@@ -1580,7 +1586,7 @@
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
             border: 1px solid var(--glass-border);
-            box-shadow: 0 20px 50px rgba(15, 23, 42, 0.28);
+            box-shadow: var(--modal-shadow);
             width: 100%;
             max-width: 450px;
             border-radius: 18px;
@@ -2104,6 +2110,7 @@
                     primary: "#818cf8", incomeColor: "#34d399", expenseColor: "#f87171",
                     transferColor: "#60a5fa", salaryColor: "#fbbf24",
                     colorScheme: "dark", themeColor: "#0a0a0f",
+                    modalShadow: "0 20px 50px rgba(0,0,0,0.5)",
                 };
                 var isAuto = localStorage.getItem("ledgerBgThemeAuto") === "1";
                 var systemPrefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -2134,7 +2141,8 @@
                         dropdownOptionBg: "--dropdown-option-bg",
                         primary: "--primary", incomeColor: "--income-color", expenseColor: "--expense-color",
                         transferColor: "--transfer-color", salaryColor: "--salary-color",
-                        colorScheme: "color-scheme"
+                        colorScheme: "color-scheme",
+                        modalShadow: "--modal-shadow"
                     };
                     var root = document.documentElement.style;
                     for (var key in varMap) { if (saved[key]) root.setProperty(varMap[key], saved[key]); }
