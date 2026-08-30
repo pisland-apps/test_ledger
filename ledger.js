@@ -2655,12 +2655,32 @@
             return months;
         }
 
+        // Builds the path for a bar rect whose TOP corners only are rounded (bottom stays
+        // square-cornered against the baseline) — reads as a nicer "pill" top than a uniformly
+        // rounded <rect> once bars get wider, without floating the bar off the axis line. Clamps
+        // the radius down for very short bars (e.g. the minimum-visible-height floor below) so a
+        // 3px-tall bar still renders as a rounded blob instead of a self-intersecting path.
+        function topRoundedBarPath(x, y, width, height, r) {
+            const rr = Math.max(0, Math.min(r, width / 2, height));
+            if (rr <= 0.05) return `M${x},${y} h${width} v${height} h${-width} Z`;
+            return `M${x},${y + height} V${y + rr} Q${x},${y} ${x + rr},${y} H${x + width - rr} Q${x + width},${y} ${x + width},${y + rr} V${y + height} Z`;
+        }
+
         // Grouped (paired) bar chart, no external chart library, styled to match this app's
         // other hand-drawn SVG charts (buildBreakdownBarSVG/buildBreakdownDonutSVG above) rather
         // than copying any other app's exact look. A light horizontal gridline + axis label every
         // ~1/4 of the scale, an income/expense legend up top, and a muted "no data" label under
         // any month with nothing logged (rather than just leaving it blank, which reads as a
         // rendering gap rather than "no transactions that month").
+        //
+        // v212: bars now tile edge-to-edge across the whole 12-month width (a single small,
+        // uniform gap between every pair of bars — inside a month AND between neighbouring
+        // months — instead of a narrow pair of bars floating in the middle of a wide, mostly-empty
+        // month column). Bars are also wider and every non-zero value gets a minimum visible
+        // height, so a small expense (e.g. RM10 next to a RM3,000 income bar) still shows up as a
+        // sliver instead of vanishing into the baseline. Each bar carries data-* attributes read
+        // by showMonthlyTrendTooltip()/hideMonthlyTrendTooltip() (wired below) for the hover
+        // tooltip — no external chart library needed for that either.
         function buildMonthlyTrendBarSVG(months) {
             const w = 680, h = 260, padLeft = 46, padRight = 10, padTop = 34, padBottom = 26;
             const plotW = w - padLeft - padRight, plotH = h - padTop - padBottom;
@@ -2684,19 +2704,23 @@
                 `;
             }
             const groupW = plotW / 12;
-            const barW = Math.min(14, groupW / 2 - 4);
+            const gap = 1.5; // same hairline gap used both between the two bars in a month AND between one month's bars and the next's — no wide dead zone marking where a month "ends"
+            const barW = groupW / 2 - gap;
+            const minVisibleH = 3; // any logged (>0) amount still shows a sliver even when tiny next to the tallest bar on the chart
             let barsSVG = "";
             months.forEach((mo, i) => {
                 const groupX = padLeft + i * groupW;
-                const incH = (plotH * mo.income) / axisMax;
-                const expH = (plotH * mo.expense) / axisMax;
-                const incX = groupX + groupW / 2 - barW - 1;
-                const expX = groupX + groupW / 2 + 1;
+                const incX = groupX + gap / 2;
+                const expX = incX + barW + gap;
                 if (mo.income > 0) {
-                    barsSVG += `<rect x="${incX.toFixed(1)}" y="${(padTop + plotH - incH).toFixed(1)}" width="${barW.toFixed(1)}" height="${incH.toFixed(1)}" rx="2" fill="#22c55e"></rect>`;
+                    const incH = Math.max(minVisibleH, (plotH * mo.income) / axisMax);
+                    const incY = padTop + plotH - incH;
+                    barsSVG += `<path d="${topRoundedBarPath(incX, incY, barW, incH, 3)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()"></path>`;
                 }
                 if (mo.expense > 0) {
-                    barsSVG += `<rect x="${expX.toFixed(1)}" y="${(padTop + plotH - expH).toFixed(1)}" width="${barW.toFixed(1)}" height="${expH.toFixed(1)}" rx="2" fill="#ef4444"></rect>`;
+                    const expH = Math.max(minVisibleH, (plotH * mo.expense) / axisMax);
+                    const expY = padTop + plotH - expH;
+                    barsSVG += `<path d="${topRoundedBarPath(expX, expY, barW, expH, 3)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()"></path>`;
                 }
                 barsSVG += `<text x="${(groupX + groupW / 2).toFixed(1)}" y="${h - 6}" font-size="9" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
             });
@@ -2712,6 +2736,41 @@
                     ${barsSVG}
                 </svg>
             `;
+        }
+
+        // Hover tooltip for the Monthly Trend chart's bars (wired via onmousemove/onmouseleave
+        // set directly on each <path> in buildMonthlyTrendBarSVG — simplest option for markup
+        // that's inserted via innerHTML rather than mounted through a framework). Positioned
+        // relative to #monthlyTrendChartWrap (must be position:relative — see index.html), and
+        // nudged left once the cursor is past ~70% of the wrap's width so the tooltip doesn't run
+        // off the right edge of the card.
+        function showMonthlyTrendTooltip(evt, el) {
+            const wrap = document.getElementById("monthlyTrendChartWrap");
+            const tip = document.getElementById("monthlyTrendTooltip");
+            if (!wrap || !tip) return;
+            const wrapRect = wrap.getBoundingClientRect();
+            const x = evt.clientX - wrapRect.left;
+            const y = evt.clientY - wrapRect.top;
+            const label = el.getAttribute("data-label");
+            const type = el.getAttribute("data-type");
+            const val = parseFloat(el.getAttribute("data-val"));
+            const swatch = type === "Income" ? "#22c55e" : "#ef4444";
+            tip.innerHTML = `<div style="font-weight:700; margin-bottom:2px;">${escapeHtml(label)} ${escapeHtml(monthlyTrendYear)}</div>
+                <div style="display:flex; align-items:center; gap:5px;">
+                    <span style="width:8px; height:8px; border-radius:2px; background:${swatch}; display:inline-block;"></span>
+                    <span style="color:var(--text-muted);">${escapeHtml(type)}</span>
+                    <span style="font-weight:700; margin-left:4px;">${formatCurrency(val, baseCurrency)}</span>
+                </div>`;
+            const nearRightEdge = x > wrapRect.width * 0.7;
+            tip.style.left = nearRightEdge ? "" : `${x + 12}px`;
+            tip.style.right = nearRightEdge ? `${wrapRect.width - x + 12}px` : "";
+            tip.style.top = `${Math.max(0, y - 38)}px`;
+            tip.style.display = "block";
+        }
+
+        function hideMonthlyTrendTooltip() {
+            const tip = document.getElementById("monthlyTrendTooltip");
+            if (tip) tip.style.display = "none";
         }
 
         // Compact axis-label formatting (1,200 / 12K / 1.2M) — plain-language style matching the
