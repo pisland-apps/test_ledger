@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v201";
+        const APP_VERSION = "v202";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2519,7 +2519,7 @@
             document.getElementById(`reportCardExpense${cardNum}`).textContent = `-${formatCurrency(expense, baseCurrency)}`;
             const totalEl = document.getElementById(`reportCardTotal${cardNum}`);
             totalEl.textContent = formatCurrency(total, baseCurrency);
-            totalEl.style.color = total >= 0 ? "#15803d" : "#b91c1c";
+            totalEl.style.color = total >= 0 ? "var(--income-color)" : "var(--expense-color)";
         }
 
         function renderReportCards(txs, accounts) {
@@ -5001,7 +5001,7 @@
                 if (a.propertyType) bits.push(escapeHtml(a.propertyType));
                 const held = formatHoldingPeriod(a.holdingStartDate);
                 if (held) bits.push(`Held ${held}`);
-                const typeLine = bits.length ? `<br><span style="font-size:0.7rem; color:#166534; font-weight:600;">🏷️ ${bits.join(" · ")}</span>` : "";
+                const typeLine = bits.length ? `<br><span style="font-size:0.7rem; color:var(--income-color); font-weight:600;">🏷️ ${bits.join(" · ")}</span>` : "";
                 return refLine + typeLine + realEstateTenureLine(a);
             }
             if (group === "Real Estate" && a.tenureType) {
