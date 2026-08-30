@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v205";
+        const APP_VERSION = "v207";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -93,6 +93,11 @@
             incomeChipBg: "#f0fdf4", incomeChipBorder: "#bbf7d0", expenseChipBg: "#fef2f2", expenseChipBorder: "#fecaca",
             primaryChipBg: "#f5f3ff",
             cardShadow: "0 1px 3px rgba(0,0,0,0.06)",
+            // v207: "light source from above" — top edge of every card can be brighter than the
+            // sides/bottom. Defaults to the same value as borderColor (no visible change for
+            // light presets); midnight/slate below override it to something brighter than their
+            // own borderColor.
+            cardTopBorderColor: "#e2e8f0",
             hardwareTrackBg: "#f4ede4", hardwareTrackBorder: "#dcd1c4", hardwareFillStart: "#e3cbb3", hardwareFillEnd: "#c5a88a",
             dropdownOptionBg: "#ffffff",
             primary: "#6366f1", incomeColor: "#10b981", expenseColor: "#ef4444", transferColor: "#3b82f6", salaryColor: "#d97706",
@@ -129,6 +134,9 @@
                 id: "slate", name: "Slate",
                 bg: "#0f172a", cardBg: "#1e293b", textMain: "#e2e8f0", textMuted: "#94a3b8",
                 borderColor: "rgba(255,255,255,0.12)",
+                // v207: top edge brighter than the sides/bottom above — "light source from
+                // above", see the :root --card-top-border comment in index.html.
+                cardTopBorderColor: "rgba(255,255,255,0.20)",
                 neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
                 neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
                 glassBg: "rgba(30,41,59,0.72)", glassBgStrong: "rgba(30,41,59,0.85)",
@@ -151,6 +159,9 @@
                 id: "midnight", name: "暗夜描边",
                 bg: "#0a0a0f", cardBg: "#15151d", textMain: "#e8eaf0", textMuted: "#8b93a8",
                 borderColor: "rgba(255,255,255,0.14)",
+                // v207: top edge brighter than the sides/bottom above — see the matching comment
+                // on the "slate" entry above.
+                cardTopBorderColor: "rgba(255,255,255,0.22)",
                 neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
                 neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
                 glassBg: "rgba(20,20,28,0.72)", glassBgStrong: "rgba(20,20,28,0.85)",
@@ -194,7 +205,15 @@
         const BG_THEME_LIGHT_SNAPSHOT_KEY = "ledgerBgThemeLightSnapshot";
         const BG_THEME_AUTO_KEY = "ledgerBgThemeAuto";
         const BG_THEME_AUTO_LIGHT_KEY = "ledgerBgThemeAutoLightId";
-        const BG_THEME_DARK_ID = "midnight"; // the only dark preset currently offered
+        // v206: was `const BG_THEME_DARK_ID = "midnight";` (a single hardcoded id) back when
+        // 暗夜描边 was the only dark preset — now that "slate" is also a full dark preset, Auto
+        // needs to know which *of the two* to land on, and that pick needs to be changeable any
+        // time (not just while setting Auto up), mirroring how the light side already remembers
+        // "whichever light preset was last active" — see BG_THEME_AUTO_DARK_KEY and
+        // getAutoDarkThemeId()/setAutoDarkThemeId() below.
+        const BG_THEME_DARK_IDS = ["midnight", "slate"];
+        function isDarkBgThemeId(id) { return BG_THEME_DARK_IDS.indexOf(id) !== -1; }
+        const BG_THEME_AUTO_DARK_KEY = "ledgerBgThemeAutoDarkId";
 
         // Account grouping (v35) — every account belongs to one of these, used to sort/section
         // both the full Accounts page and a member's account list (group, then name). Accounts
@@ -5364,6 +5383,7 @@
             expenseChipBg: "--expense-chip-bg", expenseChipBorder: "--expense-chip-border",
             primaryChipBg: "--primary-chip-bg",
             cardShadow: "--card-shadow",
+            cardTopBorderColor: "--card-top-border",
             hardwareTrackBg: "--hardware-track-bg", hardwareTrackBorder: "--hardware-track-border",
             hardwareFillStart: "--hardware-fill-start", hardwareFillEnd: "--hardware-fill-end",
             dropdownOptionBg: "--dropdown-option-bg",
@@ -5381,9 +5401,17 @@
             if (save) {
                 try {
                     localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme));
-                    // v202: mirror every non-dark pick into its own slot — see the key's comment
-                    // above for why Auto mode needs this kept separate from the "current" slot.
-                    if (theme.id !== BG_THEME_DARK_ID) localStorage.setItem(BG_THEME_LIGHT_SNAPSHOT_KEY, JSON.stringify(theme));
+                    // v206: mirrors every pick into its matching Auto-side slot — light snapshot
+                    // or dark id — regardless of whether Auto is on right now. That's what lets
+                    // tapping any swatch, any time, set what Auto lands on next time day/night
+                    // flips to that side, instead of only being settable while Auto is being
+                    // turned on (see setBgThemeAutoEnabled() below, which only runs at that one
+                    // moment — this runs on every single pick).
+                    if (isDarkBgThemeId(theme.id)) {
+                        setAutoDarkThemeId(theme.id);
+                    } else {
+                        localStorage.setItem(BG_THEME_LIGHT_SNAPSHOT_KEY, JSON.stringify(theme));
+                    }
                 } catch (e) {}
             }
             return theme;
@@ -5391,9 +5419,10 @@
 
         // --- v202: Auto (follow system day/night) for Background Theme ---------------------
         // Piggybacks on the OS's own light/dark switch (prefers-color-scheme) instead of a
-        // fixed clock — mirrors how the phone's own auto day/night toggle works. Only "midnight"
-        // (暗夜描边) is treated as the dark side; whichever light preset was active when Auto was
-        // turned on (or last manually picked while system-light) is remembered as the light side.
+        // fixed clock — mirrors how the phone's own auto day/night toggle works. v206: either
+        // dark preset (暗夜描边 or Slate) can be the dark side now — whichever was tapped most
+        // recently — and whichever light preset was active when Auto was turned on (or last
+        // manually picked while system-light) is remembered as the light side.
         function isBgThemeAutoEnabled() {
             return localStorage.getItem(BG_THEME_AUTO_KEY) === "1";
         }
@@ -5403,11 +5432,21 @@
         function setAutoLightThemeId(id) {
             try { localStorage.setItem(BG_THEME_AUTO_LIGHT_KEY, id); } catch (e) {}
         }
+        // v206: mirrors getAutoLightThemeId()/setAutoLightThemeId() above for the dark side —
+        // falls back to "midnight" (暗夜描边) if nothing's been picked yet, or if a stored value
+        // somehow doesn't name a current dark preset.
+        function getAutoDarkThemeId() {
+            const id = localStorage.getItem(BG_THEME_AUTO_DARK_KEY);
+            return isDarkBgThemeId(id) ? id : "midnight";
+        }
+        function setAutoDarkThemeId(id) {
+            try { localStorage.setItem(BG_THEME_AUTO_DARK_KEY, id); } catch (e) {}
+        }
         function systemPrefersDarkTheme() {
             return !!(window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches);
         }
         function resolveAutoBgThemeId() {
-            return systemPrefersDarkTheme() ? BG_THEME_DARK_ID : getAutoLightThemeId();
+            return systemPrefersDarkTheme() ? getAutoDarkThemeId() : getAutoLightThemeId();
         }
         function applyAutoBgTheme() {
             applyBgTheme(resolveAutoBgThemeId());
@@ -5415,10 +5454,11 @@
         function setBgThemeAutoEnabled(enabled) {
             try { localStorage.setItem(BG_THEME_AUTO_KEY, enabled ? "1" : "0"); } catch (e) {}
             if (enabled) {
-                // Remember whatever's active right now (unless it's already midnight) as the
-                // light side, so switching Auto on doesn't silently discard the user's pick.
+                // Remember whatever's active right now as the matching side (light or dark) so
+                // switching Auto on doesn't silently discard the user's pick.
                 const currentId = getSavedBgThemeId();
-                if (currentId !== BG_THEME_DARK_ID) setAutoLightThemeId(currentId);
+                if (isDarkBgThemeId(currentId)) setAutoDarkThemeId(currentId);
+                else setAutoLightThemeId(currentId);
                 applyAutoBgTheme();
             }
         }
