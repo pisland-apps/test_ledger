@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v201";
+        const APP_VERSION = "v197";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -121,11 +121,9 @@
                 cardShadow: "none",
                 hardwareTrackBg: "#2a231c", hardwareTrackBorder: "#46392c",
                 hardwareFillStart: "#6b5642", hardwareFillEnd: "#4a3a2a",
-                // v200: this near-black theme softens/desaturates income & expense to a lighter
-                // mint-green / coral-salmon — full-saturation red/green on a near-black background
-                // causes halation (glow/"vibration") and is hard to read. The Financial Report Card
-                // reads these same vars (see index.html), so it now matches this pair too instead
-                // of hardcoding its own darker green/red.
+                // v195: softened/desaturated data colors — full-saturation red/green/indigo on a
+                // near-black background causes halation (glow/"vibration") and eye strain; these
+                // are the standard higher-lightness, lower-saturation dark-mode equivalents.
                 primary: "#818cf8", incomeColor: "#34d399", expenseColor: "#f87171",
                 transferColor: "#60a5fa", salaryColor: "#fbbf24",
                 // v195: switches native form-control chrome (select dropdown lists, date/time
@@ -2516,13 +2514,8 @@
             document.getElementById(`reportCardIncome${cardNum}`).textContent = formatCurrency(income, baseCurrency);
             document.getElementById(`reportCardExpense${cardNum}`).textContent = `-${formatCurrency(expense, baseCurrency)}`;
             const totalEl = document.getElementById(`reportCardTotal${cardNum}`);
-            // v201: use the same balance-style formatter as account/loan balances elsewhere
-            // (formatBalanceHTML) — negative renders parenthesized, e.g. (RM104.10), instead of a
-            // raw minus sign (RM-104.10). Also switched off the hardcoded #15803d/#b91c1c (missed
-            // when the rest of this card moved to var(--income-color)/var(--expense-color) — see
-            // index.html) so the Total figure's color tracks the same theme-driven pair too.
-            totalEl.innerHTML = formatBalanceHTML(total, baseCurrency);
-            totalEl.style.color = total >= 0 ? "var(--income-color)" : "";
+            totalEl.textContent = formatCurrency(total, baseCurrency);
+            totalEl.style.color = total >= 0 ? "#15803d" : "#b91c1c";
         }
 
         function renderReportCards(txs, accounts) {
@@ -8079,10 +8072,8 @@
             // nudged toward that member's own accounts). With 2+ members "All Members" remains the
             // safer default since guessing which one just got paid isn't possible.
             memberSelect.value = membersCache.length === 1 ? membersCache[0].id : "all";
-            syncAccountPickerButtonText("salaryMemberSelect");
 
             document.getElementById("salaryScheme").value = "none";
-            syncAccountPickerButtonText("salaryScheme");
             document.getElementById("salaryGross").value = "";
             document.getElementById("salaryEEAmount").value = "";
             document.getElementById("salaryERAmount").value = "";
@@ -8096,12 +8087,10 @@
             const currSelect = document.getElementById("salaryCurrency");
             currSelect.innerHTML = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
             currSelect.value = baseCurrency;
-            syncAccountPickerButtonText("salaryCurrency");
 
             const catSelect = document.getElementById("salaryCategory");
             catSelect.innerHTML = buildCategoryOptionsHTML("income", dynamicCategories.filter(c => c.type === "income").map(c => c.name));
             catSelect.value = "Salary";
-            syncAccountPickerButtonText("salaryCategory");
 
             populateSalaryAccountSelects(accounts);
             // Bank Account defaults to Default Receive Account, if one is set and still exists —
@@ -8229,10 +8218,7 @@
 
             const currSelect = document.getElementById("salaryCurrency");
             const schemeCurrency = isEpf ? "MYR" : isCpf ? "SGD" : null;
-            if (schemeCurrency && fxRates[schemeCurrency] !== undefined) {
-                currSelect.value = schemeCurrency;
-                syncAccountPickerButtonText("salaryCurrency");
-            }
+            if (schemeCurrency && fxRates[schemeCurrency] !== undefined) currSelect.value = schemeCurrency;
 
             if (hasScheme) {
                 const memberId = document.getElementById("salaryMemberSelect").value;
@@ -8723,11 +8709,8 @@
             // (txCategory / each split row's <rowId>_cat), so this is a no-op for Account pickers.
             const iconEl = document.getElementById(selectId + "Icon");
             if (iconEl) {
-                // salaryCategory is always populated from income categories only (see
-                // openSalaryEntryForm()), so it can't read txType (that belongs to the separate
-                // Income/Expense/Transfer form and may not even reflect "income" at this moment).
                 const typeEl = document.getElementById("txType");
-                const type = selectId === "salaryCategory" ? "income" : (typeEl && typeEl.value === "income") ? "income" : "expense";
+                const type = (typeEl && typeEl.value === "income") ? "income" : "expense";
                 const catName = select.value;
                 iconEl.textContent = catName ? getCategoryIcon(catName, type) : "🏷️";
                 iconEl.style.background = catName ? getCategoryAvatarColor(catName) : "#eef2ff";
