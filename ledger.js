@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v214";
+        const APP_VERSION = "v215";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2726,17 +2726,17 @@
                 if (mo.income > 0) {
                     const incH = Math.max(minVisibleH, (plotH * mo.income) / axisMax);
                     const incY = padTop + plotH - incH;
-                    barsSVG += `<path d="${topRoundedBarPath(incX, incY, barW, incH, 3)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()" onclick="event.stopPropagation();showMonthlyTrendTooltip(event,this)"></path>`;
+                    barsSVG += `<path d="${topRoundedBarPath(incX, incY, barW, incH, 3)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
                 }
                 if (mo.expense > 0) {
                     const expH = Math.max(minVisibleH, (plotH * mo.expense) / axisMax);
                     const expY = padTop + plotH - expH;
-                    barsSVG += `<path d="${topRoundedBarPath(expX, expY, barW, expH, 3)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()" onclick="event.stopPropagation();showMonthlyTrendTooltip(event,this)"></path>`;
+                    barsSVG += `<path d="${topRoundedBarPath(expX, expY, barW, expH, 3)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
                 }
                 barsSVG += `<text x="${(groupX + groupW / 2).toFixed(1)}" y="${h - (isMobile ? 8 : 6)}" font-size="${monthFontSize}" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
             });
             return `
-                <svg viewBox="0 0 ${w} ${h}" style="width:100%; display:block;" onclick="hideMonthlyTrendTooltip()">
+                <svg viewBox="0 0 ${w} ${h}" style="width:100%; display:block;" data-click="hideMonthlyTrendTooltip">
                     <g>
                         <rect x="0" y="0" width="12" height="12" fill="#22c55e" rx="2" transform="translate(${padLeft}, 4)"></rect>
                         <text x="${padLeft + 16}" y="14" font-size="${legendFontSize}" fill="#334155">Income</text>
@@ -2749,12 +2749,16 @@
             `;
         }
 
-        // Hover tooltip for the Monthly Trend chart's bars (wired via onmousemove/onmouseleave
-        // set directly on each <path> in buildMonthlyTrendBarSVG — simplest option for markup
-        // that's inserted via innerHTML rather than mounted through a framework). Positioned
-        // relative to #monthlyTrendChartWrap (must be position:relative — see index.html), and
-        // nudged left once the cursor is past ~70% of the wrap's width so the tooltip doesn't run
-        // off the right edge of the card.
+        // Hover tooltip for the Monthly Trend chart's bars — shown/hidden via the delegated
+        // document "mousemove" listener (desktop hover) and the "monthlyTrendBarTap" /
+        // "hideMonthlyTrendTooltip" CLICK_ACTIONS entries (mobile tap), NOT inline event
+        // attributes on the <path> elements — this app's CSP has no 'unsafe-inline' script-src,
+        // so onmousemove="..." markup would be silently ignored by the browser. Positioned
+        // relative to #monthlyTrendChartWrap's parent (must be position:relative — see
+        // index.html; the tooltip lives as a SIBLING of the wrap, not nested inside it, since
+        // the wrap's innerHTML gets fully replaced on every re-render and would otherwise wipe
+        // the tooltip element out), and nudged left once the cursor is past ~70% of the wrap's
+        // width so the tooltip doesn't run off the right edge of the card.
         function showMonthlyTrendTooltip(evt, el) {
             const wrap = document.getElementById("monthlyTrendChartWrap");
             const tip = document.getElementById("monthlyTrendTooltip");
@@ -11592,6 +11596,8 @@
         const CLICK_ACTIONS = {
             openSidebar: () => openSidebar(),
             closeSidebar: () => closeSidebar(),
+            monthlyTrendBarTap: (el, e) => { e.stopPropagation(); showMonthlyTrendTooltip(e, el); },
+            hideMonthlyTrendTooltip: () => hideMonthlyTrendTooltip(),
             openInsightsDrawer: () => openInsightsDrawer(),
             closeInsightsDrawer: () => closeInsightsDrawer(),
             sidebarGo: (el) => sidebarGo(el),
@@ -11811,6 +11817,19 @@
             if (!el) return;
             const action = INPUT_ACTIONS[el.dataset.input];
             if (action) action(el, e);
+        });
+
+        // Monthly Trend chart hover tooltip (desktop) — delegated the same way as
+        // click/change/input above rather than inline onmousemove, since the CSP here has no
+        // 'unsafe-inline'. mousemove fires constantly while the mouse is anywhere on the page,
+        // but the closest() check is cheap and this only actually does anything while a
+        // .mtrend-bar element is under the cursor, so it's fine to leave attached at the
+        // document level. Mobile/touch doesn't fire mousemove, which is why bars ALSO carry
+        // data-click="monthlyTrendBarTap" above for tap support.
+        document.addEventListener("mousemove", (e) => {
+            const bar = e.target.closest(".mtrend-bar");
+            if (bar) showMonthlyTrendTooltip(e, bar);
+            else hideMonthlyTrendTooltip();
         });
 
         // v83: number inputs (Amount, Interest Rate, Tenure, etc.) silently change value when the
