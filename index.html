@@ -139,21 +139,27 @@
             --neu-primary-dark: rgba(49, 46, 129, 0.55);    /* shadow on colored (--primary) surfaces */
             --glass-bg: rgba(255, 255, 255, 0.68);
             --glass-bg-strong: rgba(255, 255, 255, 0.82);
-            --glass-bg-modal: rgba(255, 255, 255, 0.92); /* denser — modal-sheets hold small form text */
-            /* v204: v203's rgba(15,23,42,0.14) still wasn't enough — on real devices/compressed
-               screenshots a 1px, 14%-alpha line all but disappears, so the card still read as
-               blended into the backdrop. Doubled the alpha for a clearly visible edge instead of
-               a barely-there one. Midnight's own white glassBorder (ledger.js BG_THEMES) is
-               unaffected and still correct there, since a white edge against its near-black
-               background already has plenty of contrast. */
-            --glass-border: rgba(15, 23, 42, 0.32);
+            /* v205: root cause found — accountPickerModal (Select Category/Account) opens
+               STACKED on top of an already-open modal (e.g. the transaction-entry sheet), not
+               directly over the app page. Its dimmed backdrop-filter blur then samples an
+               already near-flat-white sheet — blurring a flat color changes nothing — so no
+               amount of border/shadow alpha tuning on the SECOND sheet could ever separate it
+               from the first (v203/v204 both confirmed this on real devices). Going fully
+               opaque removes the dependency on backdrop rendering entirely: the card's own
+               color now provides the contrast by itself, regardless of what's behind it or
+               whether backdrop-filter/blur even renders on a given browser engine. */
+            --glass-bg-modal: #fdfdfe;
+            /* v205: solid, non-alpha border for the same reason — alpha-blended borders (v203's
+               0.14, v204's 0.32) depend on what's rendered behind them, which is exactly what's
+               unreliable in the stacked-modal case above. A flat, fully-opaque color always
+               reads the same regardless of backdrop. Midnight's own white glassBorder (ledger.js
+               BG_THEMES) is unaffected — it was never the problem case. */
+            --glass-border: #94a3b8;
             /* v204: the modal-sheet's box-shadow used to be a single hardcoded value shared by
                every theme. On light themes that shadow is the same navy hue as the dimmed
-               backdrop behind it (--modal a translucent rgba(15,23,42,0.4) layer), so the two
-               blend into each other and the shadow adds almost no visible separation — border
-               alone wasn't reliably enough either. Made it a theme var with a bolder, two-layer
-               shadow as a second, independent way to see the card's edge; midnight overrides it
-               below with something more suited to a near-black page. */
+               backdrop behind it, so the two blended into each other. Made it a theme var with a
+               bolder, two-layer shadow as a second, independent way to see the card's edge;
+               midnight overrides it below with something more suited to a near-black page. */
             --modal-shadow: 0 16px 40px rgba(15, 23, 42, 0.35), 0 2px 10px rgba(15, 23, 42, 0.18);
         }
 
@@ -1568,7 +1574,7 @@
             display: none;
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(15, 23, 42, 0.4);
+            background: rgba(15, 23, 42, 0.5);
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
             align-items: center;
@@ -1578,14 +1584,20 @@
         }
         .modal.active { display: flex; }
         .modal-sheet {
-            /* v156: frosted-glass sheet — translucent instead of flat white, so the dimmed/
-               blurred backdrop reads through very faintly around form fields. Kept at 0.92
-               opacity (well above the drawer's 0.82) since modal-sheets hold dense form/report
-               content that needs to stay crisp and readable. */
+            /* v205: was translucent frosted-glass (rgba white) so the dimmed/blurred backdrop
+               would read through faintly. That depended on backdrop-filter actually rendering
+               something to read through — which breaks down when this sheet is stacked on top
+               of ANOTHER already-open modal (its "backdrop" is then just that first modal's own
+               flat near-white sheet; blurring a flat color changes nothing, so no separation was
+               possible no matter the border/shadow alpha — see the v205 comment on --glass-bg-
+               modal/--glass-border in :root above). Now solid, so the card is self-evidently
+               visible regardless of what's behind it or whether backdrop-filter renders at all
+               on a given engine. backdrop-filter is kept for the cosmetic saturation boost on
+               the sliver of backdrop still visible past the (now opaque) sheet's own edges. */
             background: var(--glass-bg-modal);
             backdrop-filter: blur(20px) saturate(180%);
             -webkit-backdrop-filter: blur(20px) saturate(180%);
-            border: 1px solid var(--glass-border);
+            border: 1.5px solid var(--glass-border);
             box-shadow: var(--modal-shadow);
             width: 100%;
             max-width: 450px;

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v205";
+        const APP_VERSION = "v206";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -78,11 +78,14 @@
             borderColor: "#e2e8f0", neuLight: "rgba(255,255,255,0.85)", neuDark: "rgba(148,163,184,0.45)",
             neuPrimaryLight: "rgba(255,255,255,0.22)", neuPrimaryDark: "rgba(49,46,129,0.55)",
             glassBg: "rgba(255,255,255,0.68)", glassBgStrong: "rgba(255,255,255,0.82)",
-            // v204: v203's rgba(255,255,255,0.55)->rgba(15,23,42,0.14) border tweak still wasn't
-            // visible enough on real devices — doubled the alpha, and added a theme-aware
-            // modalShadow below as a second, independent way to see the card's edge (see the
-            // matching comment on :root's --glass-border/--modal-shadow in index.html).
-            glassBgModal: "rgba(255,255,255,0.92)", glassBorder: "rgba(15,23,42,0.32)",
+            // v205: root cause found — accountPickerModal opens STACKED on top of an already-
+            // open modal (e.g. the transaction-entry sheet), not directly over the app page. Its
+            // dim+blur then samples an already near-flat-white sheet — blurring a flat color
+            // changes nothing — so no border/shadow alpha tuning on the translucent SECOND sheet
+            // could ever separate it (v203/v204 both confirmed this on real devices/stacked
+            // modals). Both are now solid/opaque so contrast no longer depends on backdrop
+            // rendering at all. See the matching :root comment in index.html.
+            glassBgModal: "#fdfdfe", glassBorder: "#94a3b8",
             modalShadow: "0 16px 40px rgba(15,23,42,0.35), 0 2px 10px rgba(15,23,42,0.18)",
             hoverBg: "#f3f4f6", pressBg: "#f1f5f9", activeBg: "#eef2ff", activeBorder: "#e0e7ff", chipBg: "#e2e8f0",
             incomeChipBg: "#f0fdf4", incomeChipBorder: "#bbf7d0", expenseChipBg: "#fef2f2", expenseChipBorder: "#fecaca",
