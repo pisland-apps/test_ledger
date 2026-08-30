@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v212";
+        const APP_VERSION = "v213";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2681,8 +2681,19 @@
         // sliver instead of vanishing into the baseline. Each bar carries data-* attributes read
         // by showMonthlyTrendTooltip()/hideMonthlyTrendTooltip() (wired below) for the hover
         // tooltip — no external chart library needed for that either.
-        function buildMonthlyTrendBarSVG(months) {
-            const w = 680, h = 260, padLeft = 46, padRight = 10, padTop = 34, padBottom = 26;
+        function buildMonthlyTrendBarSVG(months, isMobile) {
+            // On a narrow phone screen the SVG's viewBox gets scaled down to fit the card width,
+            // so a font-size that reads fine on desktop (where the viewBox is barely scaled at
+            // all) can shrink to a few real pixels on mobile and become unreadable. Rather than
+            // just scaling the same layout down, mobile gets its own taller, wider-margined
+            // layout with meaningfully larger font sizes and one fewer gridline (less clutter at
+            // a smaller size) so the *rendered* text stays legible regardless of screen width.
+            const w = isMobile ? 480 : 680;
+            const h = isMobile ? 300 : 260;
+            const padLeft = isMobile ? 54 : 46, padRight = 10, padTop = isMobile ? 40 : 34, padBottom = isMobile ? 34 : 26;
+            const axisFontSize = isMobile ? 13 : 9;
+            const monthFontSize = isMobile ? 13 : 9;
+            const legendFontSize = isMobile ? 14 : 10;
             const plotW = w - padLeft - padRight, plotH = h - padTop - padBottom;
             const maxVal = Math.max(...months.map(mo => Math.max(mo.income, mo.expense)), 0.01);
             // Round the axis ceiling up to a "nice" number (1/2/5 × a power of ten) so gridline
@@ -2693,14 +2704,14 @@
             for (const step of niceSteps) {
                 if (maxVal <= magnitude * step) { axisMax = magnitude * step; break; }
             }
-            const gridlineCount = 4;
+            const gridlineCount = isMobile ? 3 : 4;
             let gridlinesSVG = "";
             for (let i = 0; i <= gridlineCount; i++) {
                 const val = (axisMax / gridlineCount) * i;
                 const y = padTop + plotH - (plotH * val) / axisMax;
                 gridlinesSVG += `
                     <line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${w - padRight}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"></line>
-                    <text x="${padLeft - 8}" y="${(y + 3).toFixed(1)}" font-size="9" text-anchor="end" fill="#94a3b8">${formatCompactAxisNumber(val)}</text>
+                    <text x="${padLeft - 8}" y="${(y + 3).toFixed(1)}" font-size="${axisFontSize}" text-anchor="end" fill="#94a3b8">${formatCompactAxisNumber(val)}</text>
                 `;
             }
             const groupW = plotW / 12;
@@ -2715,22 +2726,22 @@
                 if (mo.income > 0) {
                     const incH = Math.max(minVisibleH, (plotH * mo.income) / axisMax);
                     const incY = padTop + plotH - incH;
-                    barsSVG += `<path d="${topRoundedBarPath(incX, incY, barW, incH, 3)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()"></path>`;
+                    barsSVG += `<path d="${topRoundedBarPath(incX, incY, barW, incH, 3)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()" onclick="event.stopPropagation();showMonthlyTrendTooltip(event,this)"></path>`;
                 }
                 if (mo.expense > 0) {
                     const expH = Math.max(minVisibleH, (plotH * mo.expense) / axisMax);
                     const expY = padTop + plotH - expH;
-                    barsSVG += `<path d="${topRoundedBarPath(expX, expY, barW, expH, 3)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()"></path>`;
+                    barsSVG += `<path d="${topRoundedBarPath(expX, expY, barW, expH, 3)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" onmousemove="showMonthlyTrendTooltip(event,this)" onmouseleave="hideMonthlyTrendTooltip()" onclick="event.stopPropagation();showMonthlyTrendTooltip(event,this)"></path>`;
                 }
-                barsSVG += `<text x="${(groupX + groupW / 2).toFixed(1)}" y="${h - 6}" font-size="9" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
+                barsSVG += `<text x="${(groupX + groupW / 2).toFixed(1)}" y="${h - (isMobile ? 8 : 6)}" font-size="${monthFontSize}" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
             });
             return `
-                <svg viewBox="0 0 ${w} ${h}" style="width:100%; display:block;">
+                <svg viewBox="0 0 ${w} ${h}" style="width:100%; display:block;" onclick="hideMonthlyTrendTooltip()">
                     <g>
                         <rect x="0" y="0" width="12" height="12" fill="#22c55e" rx="2" transform="translate(${padLeft}, 4)"></rect>
-                        <text x="${padLeft + 16}" y="14" font-size="10" fill="#334155">Income</text>
-                        <rect x="0" y="0" width="12" height="12" fill="#ef4444" rx="2" transform="translate(${padLeft + 66}, 4)"></rect>
-                        <text x="${padLeft + 82}" y="14" font-size="10" fill="#334155">Expense</text>
+                        <text x="${padLeft + 16}" y="14" font-size="${legendFontSize}" fill="#334155">Income</text>
+                        <rect x="0" y="0" width="12" height="12" fill="#ef4444" rx="2" transform="translate(${padLeft + (isMobile ? 78 : 66)}, 4)"></rect>
+                        <text x="${padLeft + (isMobile ? 94 : 82)}" y="14" font-size="${legendFontSize}" fill="#334155">Expense</text>
                     </g>
                     ${gridlinesSVG}
                     ${barsSVG}
@@ -2787,8 +2798,12 @@
             const year = parseInt(document.getElementById("monthlyTrendYearSelect").value, 10);
             const months = computeMonthlyTrendData(txs, accounts, year);
             const hasAnyData = months.some(mo => mo.income > 0 || mo.expense > 0);
+            // Re-checked on every render (not cached) since rotating the phone or resizing a
+            // desktop window between renders should switch layouts, not stick to whichever one
+            // was true on first paint.
+            const isMobile = window.innerWidth <= 480;
             document.getElementById("monthlyTrendChartWrap").innerHTML = hasAnyData
-                ? buildMonthlyTrendBarSVG(months)
+                ? buildMonthlyTrendBarSVG(months, isMobile)
                 : '<p style="font-size:0.75rem; text-align:center; color:var(--text-muted); padding: 40px 0;">No transactions logged for this year yet.</p>';
         }
 
