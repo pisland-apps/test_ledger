@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v208";
+        const APP_VERSION = "v209";
         const APP_VERSION_DATE = "2026-08-30";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -136,12 +136,13 @@
                 borderColor: "rgba(255,255,255,0.12)",
                 // v207: top edge brighter than the sides/bottom above — "light source from
                 // above", see the :root --card-top-border comment in index.html.
-                // v208: bumped 0.20 → 0.25 — slate's cardBg (#1e293b) is already noticeably
-                // lighter than midnight's (#15151d), so the same border alpha produced a smaller
-                // brightness gap against its own card (a weaker "lit" effect) even though the
-                // border itself was never close to actual white. 0.25 restores roughly the same
-                // border-vs-card contrast ratio that midnight gets at 0.22.
-                cardTopBorderColor: "rgba(255,255,255,0.25)",
+                // v209: reverted to plain/uniform (matches borderColor exactly, same as before
+                // v207's card-top-highlight was introduced) per user request — keeping the
+                // override key rather than removing it, since removing it would fall back to
+                // THEME_DEFAULTS' *light* cardTopBorderColor (#e2e8f0), which would render as a
+                // bright, wrong-toned edge on this dark preset. midnight below keeps the v207
+                // highlight.
+                cardTopBorderColor: "rgba(255,255,255,0.12)",
                 neuLight: "rgba(255,255,255,0.04)", neuDark: "rgba(0,0,0,0.55)",
                 neuPrimaryLight: "rgba(255,255,255,0.10)", neuPrimaryDark: "rgba(0,0,0,0.5)",
                 glassBg: "rgba(30,41,59,0.72)", glassBgStrong: "rgba(30,41,59,0.85)",
