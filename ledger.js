@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v220";
+        const APP_VERSION = "v221";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2398,11 +2398,13 @@
             const txs = await readAllDB(STORES.TRANSACTIONS);
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const groups = {}; // normalized note -> { label, total, count, dates: [] }
+            let categoryTxType = "expense"; // fallback; overwritten below by whichever type this category's transactions actually are
             txs.forEach(t => {
                 if (t.cat !== activeCategoryView) return;
                 const d = new Date(t.date);
                 if (categoryDrillYear !== "all" && d.getFullYear().toString() !== categoryDrillYear) return;
                 if (categoryDrillMonth !== "all" && d.getMonth().toString() !== categoryDrillMonth) return;
+                categoryTxType = t.type === "income" ? "income" : "expense";
                 const noteRaw = (t.desc || "").trim();
                 const key = noteRaw ? noteRaw.toLowerCase() : "\u0000no-note";
                 if (!groups[key]) groups[key] = { label: noteRaw || "(No description)", total: 0, count: 0, dates: [] };
@@ -2415,16 +2417,22 @@
             const icon = getCategoryIcon(activeCategoryView);
             document.getElementById("noteSummaryModalTitle").textContent = `${icon} ${activeCategoryView} — Description Summary`;
 
+            // Accent colour follows this category's actual transaction type (income vs expense) —
+            // see the handwritten-journal styling on #noteSummaryModal in index.html — rather than
+            // hard-coding red the way the reference screenshot's expense-only summary does, since
+            // this same modal is also reached from income categories.
+            const accentColor = categoryTxType === "income" ? "var(--income-color)" : "var(--expense-color)";
+
             document.getElementById("noteSummaryModalList").innerHTML = entries.length === 0
                 ? `<p style="font-size:0.8rem; text-align:center; color:var(--text-muted);">No transactions to group here.</p>`
                 : entries.map(g => {
                     const datesHTML = g.dates.slice().sort().reverse().map(dt => `<div style="padding-left:2px;">• ${escapeHtml(dt)}</div>`).join("");
                     const countSuffix = g.count > 1 ? ` (x${g.count})` : "";
                     return `
-                        <div style="background:var(--bg-color); border:1px solid var(--border-color); border-left:4px solid var(--primary); border-radius:10px; padding:12px 14px; margin-bottom:12px;">
+                        <div class="note-summary-entry" style="border:1px solid var(--border-color); border-left:4px solid ${accentColor}; border-radius:10px; padding:12px 14px; margin-bottom:12px;">
                             <div style="display:flex; justify-content:space-between; align-items:baseline; gap:10px;">
                                 <strong style="font-size:0.95rem;">${escapeHtml(g.label)}${countSuffix}</strong>
-                                <span style="font-weight:800; color:var(--text-main); white-space:nowrap;">${formatCurrency(g.total, baseCurrency)}</span>
+                                <span class="note-summary-amount" style="color:${accentColor}; white-space:nowrap;">${formatCurrency(g.total, baseCurrency)}</span>
                             </div>
                             <div style="font-size:0.72rem; color:var(--text-muted); margin-top:6px;">
                                 📅 Dates:

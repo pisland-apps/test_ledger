@@ -164,6 +164,26 @@
             --modal-sheet-border: #94a3b8;
         }
 
+        /* v221: self-hosted "Kalam" (OFL-licensed, files under ./fonts/) — used ONLY by the
+           Description Summary modal below (#noteSummaryModal), giving it the handwritten-journal
+           look/feel requested, without touching this app's normal sans-serif everywhere else.
+           Self-hosted rather than a Google Fonts <link> because this app's CSP is
+           `font-src 'self'` (deliberately offline-first, no third-party font requests). */
+        @font-face {
+            font-family: "Kalam";
+            font-style: normal;
+            font-weight: 400;
+            font-display: swap;
+            src: url("./fonts/kalam-400.woff2") format("woff2");
+        }
+        @font-face {
+            font-family: "Kalam";
+            font-style: normal;
+            font-weight: 700;
+            font-display: swap;
+            src: url("./fonts/kalam-700.woff2") format("woff2");
+        }
+
         * {
             box-sizing: border-box;
             margin: 0;
@@ -171,6 +191,28 @@
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             /* Prevents double-tap zoom delay on mobile devices */
             touch-action: manipulation;
+        }
+
+        /* Scoped to this one modal by ID, so nothing else in the app inherits the handwritten
+           look — see the @font-face comment above for why. */
+        #noteSummaryModal, #noteSummaryModal * {
+            font-family: "Kalam", cursive;
+        }
+        #noteSummaryModal .modal-sheet {
+            background: #f4ede4; /* warm "paper" tint instead of the app's plain white card */
+        }
+        #noteSummaryModal .note-summary-entry {
+            background: #fffaf3;
+            /* Only the non-accent sides — border-left carries the dynamic
+               income/expense accent colour set inline per entry (see openNoteSummaryModal
+               in ledger.js) and must NOT be overridden here. */
+            border-top-color: #e8d9c5 !important;
+            border-right-color: #e8d9c5 !important;
+            border-bottom-color: #e8d9c5 !important;
+        }
+        #noteSummaryModal .note-summary-amount {
+            font-weight: 700;
+            font-size: 1.15rem;
         }
 
         body {
