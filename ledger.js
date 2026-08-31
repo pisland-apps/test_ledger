@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v218";
+        const APP_VERSION = "v219";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -3231,7 +3231,11 @@
         function openAccountFormModal() {
             populateNewAccountCurrencySelect(baseCurrency);
             resetAccountForm();
-            renderAccountMemberCheckboxes([]);
+            // Same "only one member configured, so there's nothing to actually pick" default
+            // already used for the Salary Contribution member select (see handleSalaryMemberChange
+            // caller) — skips a pointless extra tap on solo-user setups. Anyone with 2+ members
+            // still starts unchecked, same as before.
+            renderAccountMemberCheckboxes(membersCache.length === 1 ? [membersCache[0].id] : []);
             openModal("accountsModal");
         }
 
@@ -3614,7 +3618,11 @@
 
             document.getElementById("multiOpeningRows").innerHTML = "";
             document.getElementById("fdOpeningRows").innerHTML = "";
-            renderAccountMemberCheckboxes([]);
+            // Same "only one member configured" default as openAccountFormModal — this is what
+            // actually runs for "Cancel Edit" (form stays open, reverts to blank/create state)
+            // and every other resetAccountForm() caller; openAccountFormModal's own call further
+            // below just re-applies the identical default, which is harmless but redundant.
+            renderAccountMemberCheckboxes(membersCache.length === 1 ? [membersCache[0].id] : []);
 
             // Credit Card (v127): explicit reset — setAccountTypeUI("normal") below hides
             // #ccWrap but doesn't touch its own field values, so without this a Credit Limit
@@ -6115,14 +6123,18 @@
         // accounts only), one row per distinct joint-owned account group, and — only if any exist
         // — a final "Unassigned" row so the breakdown always ties out to the grand total above it.
         function renderMemberNetWorthRows(accounts, nativeBalances) {
+            const section = document.getElementById("memberNetWorthSection");
+            // With only 0 or 1 members configured, this breakdown is either empty or a pointless
+            // re-statement of the "Portfolio Net Worth" figure already shown above it — hide the
+            // whole section (header + collapse toggle + rows) rather than show a single row that
+            // just repeats the grand total. Re-appears automatically the moment a second member
+            // is added, since this re-renders on every dashboard load via afterMembersChanged().
+            if (section) section.classList.toggle("hidden", membersCache.length <= 1);
+            if (membersCache.length <= 1) return;
+
             const wrap = document.getElementById("memberNetWorthRows");
             if (!wrap) return;
             applyMemberNetWorthCollapseState();
-
-            if (membersCache.length === 0) {
-                wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem;">No members yet — add one via Sidebar ▸ Manage Members to break this down by person.</p>`;
-                return;
-            }
 
             let html = "";
             membersCache.forEach(m => {
