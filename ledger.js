@@ -10093,6 +10093,27 @@
                 const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
                 return new Date(year, month, Math.min(day, lastDayOfMonth));
             }
+            // v230: balance for a "normal" (single-currency, non-multi/fd/unittrust) account as of
+            // a given cutoff date — same signed math as applyToAccountBalance() inside
+            // computeAccountBalances() above, just re-filtered to only transactions dated on or
+            // before the cutoff. Used to tell "billed as of the last statement close" apart from
+            // "everything ever posted to the account" (see ccReminderHTML below for why that
+            // distinction matters).
+            function ccBalanceAsOf(a, cutoffStr) {
+                let bal = a.initialBalance || 0;
+                txs.forEach(t => {
+                    if (!t.date || t.date > cutoffStr) return;
+                    if (t.type === "expense" && t.src === a.id) {
+                        bal -= (t.manualFxRate && t.currency !== a.currency) ? t.amount * t.manualFxRate : convertCurrency(t.amount, t.currency, a.currency);
+                    } else if (t.type === "income" && t.src === a.id) {
+                        bal += (t.manualFxRate && t.currency !== a.currency) ? t.amount * t.manualFxRate : convertCurrency(t.amount, t.currency, a.currency);
+                    } else if (t.type === "transfer") {
+                        if (t.src === a.id) bal -= convertCurrency(t.amount, t.currency, a.currency);
+                        if (t.dest === a.id) bal += (t.destAmount != null) ? t.destAmount : convertCurrency(t.amount, t.currency, a.currency);
+                    }
+                });
+                return bal;
+            }
             let ccReminderHTML = "";
             accounts.filter(a => a.type === "creditcard" && a.paymentDueDay).forEach(a => {
                 const amountDue = Math.max(0, -(nativeBalances[a.id] || 0));
@@ -10107,17 +10128,37 @@
                 const upcoming = ccDueDateFor(anchor.getFullYear(), anchor.getMonth() + 1, a.paymentDueDay);
                 const daysUntilUpcoming = Math.round((upcoming - todayDate) / MS_PER_DAY);
 
+                // v230: how much of the current balance was actually billed by `anchor`'s
+                // statement (and therefore genuinely overdue), vs. freshly added afterwards and
+                // not yet due. Without statementDay set there's no way to draw that line, so it
+                // falls back to the old "whole balance" behavior.
+                let billedDebt = amountDue;
+                if (a.statementDay) {
+                    // The statement that produced `anchor`'s due date is the most recent
+                    // statementDay occurrence on or before that due date — same month as the due
+                    // date when statementDay comes first (e.g. closes day 3, due day 23), or the
+                    // prior month when the due date falls before statementDay within the month
+                    // (e.g. closes day 25, due day 10 of the following month).
+                    let closeDate = ccDueDateFor(anchor.getFullYear(), anchor.getMonth(), a.statementDay);
+                    if (closeDate > anchor) closeDate = ccDueDateFor(anchor.getFullYear(), anchor.getMonth() - 1, a.statementDay);
+                    const closeStr = localDateStr(closeDate);
+                    billedDebt = Math.max(0, -ccBalanceAsOf(a, closeStr));
+                }
+                const overdueAmount = Math.min(amountDue, billedDebt);
+
                 let overdue, daysOverdue, dueDateStr, dueToday;
                 if (daysSinceAnchor === 0) {
-                    overdue = false; dueToday = true; dueDateStr = anchor.toISOString().slice(0, 10);
+                    overdue = false; dueToday = true; dueDateStr = localDateStr(anchor);
                 } else if (daysUntilUpcoming <= 7) {
-                    overdue = false; dueToday = (daysUntilUpcoming === 0); dueDateStr = upcoming.toISOString().slice(0, 10);
+                    overdue = false; dueToday = (daysUntilUpcoming === 0); dueDateStr = localDateStr(upcoming);
                 } else {
-                    overdue = true; daysOverdue = daysSinceAnchor; dueDateStr = anchor.toISOString().slice(0, 10);
+                    if (overdueAmount <= 0.005) return; // nothing was billed by the last due date — new spending isn't due yet, and we're outside the 1-week advance window for the next one
+                    overdue = true; daysOverdue = daysSinceAnchor; dueDateStr = localDateStr(anchor);
                 }
                 const daysAway = overdue ? null : (dueToday ? 0 : daysUntilUpcoming);
                 if (!overdue && !dueToday && daysAway > 7) return; // outside the 1-week advance window
 
+                const displayAmount = overdue ? overdueAmount : amountDue;
                 const bg = overdue ? "#fee2e2" : "#fef3c7";
                 const border = overdue ? "#fecaca" : "#fde68a";
                 const textCol = overdue ? "#b91c1c" : "#92400e";
@@ -10126,7 +10167,7 @@
                     : (dueToday ? `due today` : `due in ${daysAway} day${daysAway === 1 ? '' : 's'} (${dueDateStr})`);
                 ccReminderHTML += `
                     <div data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="cursor:pointer; background:${bg}; border:1px solid ${border}; color:${textCol}; border-radius:12px; padding:12px 14px; margin-bottom:8px; font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-                        <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(amountDue, a.currency)} on "${escapeHtml(accountOptionLabel(a, accounts))}" ${label}.</span>
+                        <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(displayAmount, a.currency)} on "${escapeHtml(accountOptionLabel(a, accounts))}" ${label}.</span>
                         <span style="font-size:1.1rem;">›</span>
                     </div>
                 `;
