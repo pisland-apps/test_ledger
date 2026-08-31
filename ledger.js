@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v226";
+        const APP_VERSION = "v227";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1819,6 +1819,22 @@
                 const orderSel = document.getElementById("dashboardWidgetOrderSelect");
                 if (orderSel) orderSel.value = dashboardWidgetOrder;
                 syncAccountPickerButtonText("dashboardWidgetOrderSelect");
+            }
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+
+        // v227: single toggle for the relocated Default Payment/Receive Account settings panel
+        // (Setting hub) — these used to live in a card at the top of the Accounts page; moved
+        // here since they're app-wide preferences, not something specific to browsing accounts.
+        // Re-populates both pickers from the accounts list each time the panel opens, same as
+        // toggleDashboardWidgetsSettings() does for its own select.
+        async function toggleDefaultAccountsSettings() {
+            const panel = document.getElementById("defaultAccountsSettingsPanel");
+            if (!panel) return;
+            const isHidden = panel.style.display === "none";
+            if (isHidden) {
+                await populateDefaultPaymentAccountSelect();
+                await populateDefaultReceiveAccountSelect();
             }
             panel.style.display = isHidden ? "flex" : "none";
         }
@@ -4023,8 +4039,6 @@
         }
 
         async function renderAccountsPage() {
-            await populateDefaultPaymentAccountSelect();
-            await populateDefaultReceiveAccountSelect();
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
             // Fetched once up front (not per-account inside the loop below) and grouped by
             // accountId, so each Unit Trust account row can list its individual fund holdings
@@ -4060,16 +4074,6 @@
             const hintEl = document.getElementById("accountsPageFilterHint");
             if (titleEl) titleEl.textContent = filter ? filter.label : "All Accounts";
             if (hintEl) hintEl.classList.toggle("hidden", !filter);
-
-            // v62: a sidebar shortcut (e.g. "Current Account") is meant to show only that one
-            // slice — the Default Payment Account selector is unrelated to any single group/
-            // sub-group, so it's hidden whenever a filter narrowed the list, not just shown
-            // unconditionally at the top of every Accounts view.
-            document.getElementById("defaultAccountsCard").classList.toggle("hidden", !!filter);
-            document.getElementById("defaultPaymentAccountSection").classList.toggle("hidden", !!filter);
-            document.getElementById("defaultPaymentAccountRow").classList.toggle("hidden", !!filter);
-            document.getElementById("defaultReceiveAccountSection").classList.toggle("hidden", !!filter);
-            document.getElementById("defaultReceiveAccountRow").classList.toggle("hidden", !!filter);
 
             let html = "";
             let lastGroup = null;
@@ -11912,6 +11916,7 @@
             selectMemberColor: (el) => selectMemberColor(el),
             toggleBgThemeSettings: () => toggleBgThemeSettings(),
             toggleDashboardWidgetsSettings: () => toggleDashboardWidgetsSettings(),
+            toggleDefaultAccountsSettings: () => toggleDefaultAccountsSettings(),
             selectBgTheme: (el) => selectBgTheme(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),

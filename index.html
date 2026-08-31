@@ -1692,18 +1692,6 @@
             -webkit-overflow-scrolling: touch; /* Butter-smooth scrolling on iOS/Android */
         }
         .form-row { margin-bottom: 12px; }
-        /* v163 美化方案 point 4: card wrapper for the two Default Account dropdowns — see markup
-           comment in index.html (#defaultAccountsCard) for why its visibility is toggled as a
-           whole rather than relying only on its children's existing hidden-toggles. */
-        .default-accounts-card {
-            background: var(--card-bg);
-            border: 1px solid var(--border-color);
-            border-top-color: var(--card-top-border); /* v207: light-from-above, see :root comment */
-            border-radius: 16px;
-            padding: 16px;
-            box-shadow: var(--card-shadow);
-            margin-bottom: 18px;
-        }
         .form-row-inline { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
         label { display: block; font-size: 0.75rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin-bottom: 4px; }
         /* Icon-beside-field rows (Account / Date / Description / Notes on the transaction form) —
@@ -2735,33 +2723,8 @@
             </div>
         </div>
 
-        <!-- v163 美化方案 point 4: both Default Account dropdowns wrapped in one card (was two
-             bare dropdowns sitting directly on the page background). Wrapper's own visibility is
-             toggled in renderAccountsPage() alongside the existing per-element toggles below, so
-             it collapses to nothing (not an empty white box) whenever a sidebar filter narrows
-             the list to one group/sub-group. -->
-        <div class="default-accounts-card" id="defaultAccountsCard">
-            <div class="section-header" id="defaultPaymentAccountSection" style="margin-top:0;">
-                <span class="section-title">Default Payment Account</span>
-            </div>
-            <div class="form-row" id="defaultPaymentAccountRow" style="margin-bottom:18px;">
-                <button type="button" id="defaultPaymentAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultPaymentAccountSelect" data-title="Default Payment Account">
-                    <span id="defaultPaymentAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                </button>
-                <select id="defaultPaymentAccountSelect" style="display:none;" data-change="saveDefaultPaymentAccount"></select>
-            </div>
-
-            <div class="section-header" id="defaultReceiveAccountSection">
-                <span class="section-title">Default Receive Account</span>
-            </div>
-            <div class="form-row" id="defaultReceiveAccountRow" style="margin-bottom:0;">
-                <button type="button" id="defaultReceiveAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultReceiveAccountSelect" data-title="Default Receive Account">
-                    <span id="defaultReceiveAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                </button>
-                <select id="defaultReceiveAccountSelect" style="display:none;" data-change="saveDefaultReceiveAccount"></select>
-            </div>
-        </div>
-
+        <!-- v227: Default Payment/Receive Account pickers moved to Sidebar → Settings (see
+             #defaultAccountsSettingsPanel in page-datasecurity) — removed from here. -->
         <div class="section-header">
             <span class="section-title" id="accountsPageListTitle">All Accounts</span>
         </div>
@@ -3344,6 +3307,26 @@
                         </button>
                         <select id="recentTxCountSelect" style="display:none;" data-change="handleRecentTxSettingChange"></select>
                     </div>
+                </div>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="toggleDefaultAccountsSettings">
+                <span>💰 <strong>Default Accounts</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div id="defaultAccountsSettingsPanel" style="display:none; flex-direction:column; gap:14px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <div class="form-row" style="margin-bottom:0;">
+                    <label>Default Payment Account</label>
+                    <button type="button" id="defaultPaymentAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultPaymentAccountSelect" data-title="Default Payment Account">
+                        <span id="defaultPaymentAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="defaultPaymentAccountSelect" style="display:none;" data-change="saveDefaultPaymentAccount"></select>
+                </div>
+                <div class="form-row" style="margin-bottom:0;">
+                    <label>Default Receive Account</label>
+                    <button type="button" id="defaultReceiveAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultReceiveAccountSelect" data-title="Default Receive Account">
+                        <span id="defaultReceiveAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="defaultReceiveAccountSelect" style="display:none;" data-change="saveDefaultReceiveAccount"></select>
                 </div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
