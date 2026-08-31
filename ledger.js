@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v222";
+        const APP_VERSION = "v223";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -271,6 +271,14 @@
         // { group: "Investment", subgroup: "Fixed Deposit", label: "Fixed Deposit" }. null shows
         // every account, same as opening the page from "Financial Accounts" directly.
         let accountsPageTypeFilter = null;
+        // v222 fix: where the Accounts page's "← Back" (and hardware/gesture back) should
+        // return to. Every pre-v222 entry point (sidebar, dashboard, delete-account flow)
+        // only ever meant "back to Dashboard", so this defaulted implicitly via a hardcoded
+        // navigateToWorkspace() call. v222's Net Worth Statement rows route through the same
+        // navigateToAccountsPage() (via sidebarFilterAccountsByType) and got stranded on that
+        // same hardcoded target instead of returning to Net Worth Statement. See
+        // navigateToAccountsPage()/handleAccountsBackClick() below.
+        let accountsPageBackTarget = "workspace"; // "workspace" | "networth-statement"
         // v62: which accounts' fund/currency/FD-placement subrows are expanded on the Accounts
         // page — collapsed by default (empty Set) so an account with many holdings doesn't push
         // the rest of the list down. v64: keys are "<filter>__<accountId>" (see
@@ -1589,10 +1597,14 @@
                 navigateToDataSecurityPage();
             } else if (!memberPage.classList.contains("hidden")) {
                 navigateToWorkspace();
+            } else if (!accountsPage.classList.contains("hidden")) {
+                // v222 fix: was bucketed with the plain-navigateToWorkspace() group below,
+                // which ignored where Accounts was actually opened from (e.g. Net Worth
+                // Statement) — same gap as the on-screen "← Back" button, fixed the same way.
+                handleAccountsBackClick();
             } else if (
                 !savingsPage.classList.contains("hidden") ||
                 !networthStatementPage.classList.contains("hidden") ||
-                !accountsPage.classList.contains("hidden") ||
                 !categoriesPage.classList.contains("hidden") ||
                 !backupPage.classList.contains("hidden") ||
                 !autolockPage.classList.contains("hidden") ||
@@ -2907,14 +2919,25 @@
             window.scrollTo(0, workspaceScrollY);
         }
 
-        async function navigateToAccountsPage(typeFilter) {
+        async function navigateToAccountsPage(typeFilter, backTarget) {
             closeSidebar();
+            // v222 fix: caller now says where Back should return to; defaults to "workspace"
+            // to match every pre-v222 caller (sidebar, dashboard, delete-account flow).
+            accountsPageBackTarget = backTarget || "workspace";
             workspaceScrollY = window.scrollY;
             accountsPageTypeFilter = typeFilter || null;
             showPage("page-accounts");
             window.scrollTo(0, 0);
             pushVirtualState("accounts");
             await renderAccountsPage();
+        }
+
+        // v222 fix: Accounts page's "← Back" button target — previously hardcoded to
+        // navigateToWorkspace(), which stranded users on the Dashboard when Accounts was
+        // opened from the new Net Worth Statement page instead of the sidebar/dashboard.
+        function handleAccountsBackClick() {
+            if (accountsPageBackTarget === "networth-statement") navigateToNetWorthStatementPage();
+            else navigateToWorkspace();
         }
 
         // Clears the Accounts page's type filter (if any) and re-renders — wired to the "Show
@@ -6081,7 +6104,12 @@
         // Wired to each shortcut above — opens the Accounts page filtered to just that
         // group/sub-group instead of the full list.
         function sidebarFilterAccountsByType(el) {
-            navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label });
+            // v222 fix: this same handler is now wired to both the sidebar's type shortcuts
+            // (want "back to Dashboard") and the Net Worth Statement page's rows (want "back
+            // to Net Worth Statement") — tell them apart by which markup called it, since both
+            // share this one data-click action.
+            const backTarget = el.classList.contains("statement-row") ? "networth-statement" : "workspace";
+            navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label }, backTarget);
         }
 
         // --- FILTERED NET WORTH HELPERS (shared by the dashboard's per-member rows and the
@@ -11806,6 +11834,7 @@
             reportCardClickTotal: (el) => reportCardClickTotal(el),
             clearSavingsMonthScope: () => clearSavingsMonthScope(),
             navigateToAccountsPage: () => navigateToAccountsPage(),
+            handleAccountsBackClick: () => handleAccountsBackClick(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
             navigateToBackupPage: () => navigateToBackupPage(),
             handleBackupBackClick: () => handleBackupBackClick(),
