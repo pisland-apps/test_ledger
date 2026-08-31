@@ -2779,6 +2779,30 @@
         <button class="fab-btn" data-click="openCategoryFormModal" aria-label="Add category" title="Add category">+</button>
     </div>
 
+    <!-- ================= PAGE: TRANSACTION TEMPLATES (v227) ================= -->
+    <div id="page-templates" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Transaction Templates</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Reusable presets for the ⭐ picker on Add Income/Expense</p>
+            </div>
+        </div>
+
+        <div class="section-header" style="margin-top:0;">
+            <span class="section-title">🟢 Income Templates</span>
+        </div>
+        <div class="config-list" id="templatesPageIncomeList"></div>
+
+        <div class="section-header">
+            <span class="section-title">🔴 Expense Templates</span>
+        </div>
+        <div class="config-list" id="templatesPageExpenseList" style="padding-bottom:88px;"></div>
+
+        <button class="fab-btn" data-click="openTemplateFormModal" aria-label="Add template" title="Add template">+</button>
+    </div>
+
+
     <!-- ================= PAGE 6: BACKUP & RESTORE ================= -->
     <div id="page-backup" class="page hidden">
         <div class="nav-header">
@@ -3337,6 +3361,10 @@
                 <span>🏷️ <strong>Manage Categories</strong></span>
                 <span style="color:var(--text-muted);">›</span>
             </div>
+            <div class="config-item" style="cursor:pointer;" data-click="navigateToTemplatesPage">
+                <span>🧾 <strong>Transaction Templates</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="backup">
                 <span>💾 <strong>Backup &amp; Restore</strong></span>
                 <span style="color:var(--text-muted);">›</span>
@@ -3765,6 +3793,87 @@
         </div>
     </div>
 
+    </div>
+
+    <!-- MODAL: Add/Edit Transaction Template (v227) -->
+    <div class="modal" id="templateModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;" id="templateModalTitle">Add Template</h3>
+                <button data-click="closeModal" data-modal="templateModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div>
+                <input type="hidden" id="tplEditId" value="">
+                <input type="hidden" id="tplType" value="expense">
+
+                <div class="form-row">
+                    <label>Type</label>
+                    <div style="display:flex; gap:6px;">
+                        <button type="button" id="tplTypeBtnIncome" data-click="setTemplateFormTypeUI" data-type="income" class="submit-btn" style="margin-top:0; flex:1; background:var(--chip-bg); color:var(--text-main); font-size:0.8rem; padding:10px 4px;">🟢 Income</button>
+                        <button type="button" id="tplTypeBtnExpense" data-click="setTemplateFormTypeUI" data-type="expense" class="submit-btn" style="margin-top:0; flex:1; font-size:0.8rem; padding:10px 4px;">🔴 Expense</button>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <label>Template Name</label>
+                    <input type="text" id="tplName" placeholder="e.g. Home Internet, Salary" required>
+                </div>
+
+                <div class="form-row-inline" style="grid-template-columns: 2fr 1fr;">
+                    <div>
+                        <label>Amount</label>
+                        <input type="number" id="tplAmount" step="0.01" inputmode="decimal" placeholder="0.00">
+                    </div>
+                    <div>
+                        <label>Currency</label>
+                        <select id="tplCurrency" class="form-input"></select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <label>Category</label>
+                    <button type="button" id="tplCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="tplCategory" data-title="Select Category">
+                        <span id="tplCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="tplCategory" style="display:none;"></select>
+                </div>
+
+                <div class="form-row">
+                    <label>Account</label>
+                    <button type="button" id="tplAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="tplAccount" data-title="Select Account">
+                        <span id="tplAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="tplAccount" style="display:none;"></select>
+                </div>
+
+                <div class="form-row">
+                    <label>To / Payee <span style="text-transform:none; font-weight:600; color:var(--text-muted);">(optional)</span></label>
+                    <input type="text" id="tplDesc" placeholder="e.g. UMobile Home 5G">
+                </div>
+
+                <div class="form-row">
+                    <label>Notes <span style="text-transform:none; font-weight:600; color:var(--text-muted);">(optional)</span></label>
+                    <input type="text" id="tplNotes" placeholder="Notes (Optional)">
+                </div>
+
+                <button type="button" data-click="handleSaveTemplateMobile" class="submit-btn" id="tplSubmitBtn">Save Template</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Select a Transaction Template (v227) — opened via the ⭐ button in the Add/Edit
+         Transaction modal header (#txTemplateStarBtn). Picking a row fills the still-open
+         transaction form; nothing is saved here. -->
+    <div class="modal" id="templatePickerModal">
+        <div class="modal-sheet" style="padding:0; display:flex; flex-direction:column; overflow:hidden; max-height:75vh;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; padding:20px 20px 12px; flex-shrink:0; border-bottom:1px solid var(--border-color);">
+                <h3 style="font-weight: 800;">Select a Transaction Template</h3>
+                <button data-click="closeTemplatePicker" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div id="templatePickerList" style="flex:1 1 auto; min-height:0; overflow-y:auto; padding:8px 12px 16px;"></div>
+        </div>
+    </div>
+
     <!-- MODAL: Transaction Creator / Editor (Hybrid) -->
     <!-- v124: restructured as a flex column with a fixed header/footer around a scrolling
          middle — same fix as attachmentViewerModal (v123) applied here too. Previously the whole
@@ -3778,6 +3887,7 @@
         <div class="modal-sheet" style="padding:0; display:flex; flex-direction:column; overflow:hidden;">
             <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:20px 20px 12px; flex-shrink:0; border-bottom:1px solid var(--border-color);">
                 <h3 id="txModalTitle" style="font-weight: 800; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Log Ledger Item</h3>
+                <button type="button" id="txTemplateStarBtn" data-click="openTemplatePicker" title="Use a transaction template" style="background:none; border:none; font-size:1.35rem; padding:6px; flex:0 0 auto; line-height:1; display:flex;">⭐</button>
                 <select id="txCurrency" class="form-input" data-change="recalcTxFdMaturity" style="flex:0 0 auto; width:auto; min-width:80px; height:34px; padding:4px 8px; font-size:0.8rem;"></select>
                 <button data-click="closeModal" data-modal="txModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px; flex:0 0 auto;">&times;</button>
             </div>

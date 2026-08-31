@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v227";
+        const APP_VERSION = "v228";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -51,12 +51,14 @@
         const DB_NAME = "EnterpriseMultiCurrencyLedgerDB_v4";
         // v121: DB_VERSION 5→6 adds the ATTACHMENTS store (multi-attachment receipts —
         // images and PDFs — replacing the old single inline `image` field on a transaction).
-        const DB_VERSION = 6;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments" };
+        // v227: DB_VERSION 6→7 adds the TEMPLATES store (reusable Income/Expense transaction
+        // templates — see openTemplateFormModal()/openTemplatePicker()).
+        const DB_VERSION = 7;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -1271,6 +1273,11 @@
         // Dynamic category registry
         let dynamicCategories = [];
 
+        // v227: in-memory registry of saved transaction templates (see openTemplateFormModal()/
+        // openTemplatePicker()), refreshed by syncAndLoadTemplates() at bootstrap and after every
+        // add/edit/delete/reorder — same pattern as dynamicCategories above.
+        let dynamicTemplates = [];
+
         // User-chosen category pre-selected whenever a NEW Income / Expense entry is opened
         // (never applied when editing an existing transaction). Stored in the SETTINGS store,
         // "" / null means "no default — leave the dropdown at its first option" as before.
@@ -1572,6 +1579,7 @@
             const networthStatementPage = document.getElementById("page-networth-statement");
             const accountsPage = document.getElementById("page-accounts");
             const categoriesPage = document.getElementById("page-categories");
+            const templatesPage = document.getElementById("page-templates");
             const backupPage = document.getElementById("page-backup");
             const autolockPage = document.getElementById("page-autolock");
             const databasePage = document.getElementById("page-database");
@@ -1606,6 +1614,7 @@
                 !savingsPage.classList.contains("hidden") ||
                 !networthStatementPage.classList.contains("hidden") ||
                 !categoriesPage.classList.contains("hidden") ||
+                !templatesPage.classList.contains("hidden") ||
                 !backupPage.classList.contains("hidden") ||
                 !autolockPage.classList.contains("hidden") ||
                 !databasePage.classList.contains("hidden") ||
@@ -1658,6 +1667,11 @@
                         // keep a lightweight {id, name, mime, thumb, size} reference in their own
                         // `attachments` array; the actual file bytes live only here.
                         database.createObjectStore(STORES.ATTACHMENTS, { keyPath: "id" });
+                    }
+                    if (!database.objectStoreNames.contains(STORES.TEMPLATES)) {
+                        // v227: one record per saved transaction template (id, type, name, amount,
+                        // currency, cat, accountId, desc, notes, order) — see openTemplateFormModal().
+                        database.createObjectStore(STORES.TEMPLATES, { keyPath: "id" });
                     }
                 };
                 request.onerror = (e) => reject(e.target.error);
@@ -2186,7 +2200,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -2210,6 +2224,7 @@
                 case "page-currencyactivity": return document.getElementById("currencyActivityTitle")?.textContent || "Currency Activity";
                 case "page-accounts": return "Financial Accounts";
                 case "page-categories": return "Categories";
+                case "page-templates": return "Transaction Templates";
                 case "page-backup": return "Export & Import";
                 case "page-autolock": return "Auto-Lock Settings";
                 case "page-database": return "Database";
@@ -7000,6 +7015,265 @@
             dynamicCategories = customCats.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         }
 
+        // --- TRANSACTION TEMPLATES SYSTEM (v227) ---
+        // Reusable Income/Expense presets — same fields as a normal Add/Edit Transaction entry
+        // (minus Date, which always defaults to today when a template is applied) — see
+        // openTemplateFormModal() (add/edit) and openTemplatePicker() (the ⭐ picker inside the
+        // transaction form itself).
+        async function syncAndLoadTemplates() {
+            const tpls = await readAllDB(STORES.TEMPLATES);
+            // Sorted by explicit `order` (see moveTemplate()) then name, so a freshly-created
+            // template with no order yet (undefined) falls to the end rather than the front.
+            dynamicTemplates = tpls.sort((a, b) => (a.order ?? 999999) - (b.order ?? 999999) || a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        }
+
+        async function navigateToTemplatesPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-templates");
+            window.scrollTo(0, 0);
+            pushVirtualState("templates");
+            await renderTemplatesPage();
+        }
+
+        // Renders the Income/Expense template lists on page-templates — same row shape (icon +
+        // name + ✏️/🗑) as renderCategoriesPage(), plus ⬆️/⬇️ reorder buttons (no drag library
+        // needed; each tap swaps this template's `order` with its neighbor's — see moveTemplate()).
+        async function renderTemplatesPage() {
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const rowHtml = (t, list, idx) => {
+                const acc = accounts.find(a => a.id === t.accountId);
+                const catIcon = t.cat ? getCategoryIcon(t.cat, t.type) : "🏷️";
+                return `
+                    <div class="config-item">
+                        <span class="category-display-badge">
+                            <span>${catIcon}</span>
+                            <span style="display:flex; flex-direction:column;">
+                                <strong>${escapeHtml(t.name)}</strong>
+                                <span style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">${formatCurrency(t.amount || 0, t.currency)} · ${acc ? escapeHtml(acc.name) : "(no account)"}</span>
+                            </span>
+                        </span>
+                        <div style="display:flex; align-items:center;">
+                            <button type="button" class="trash-btn" data-click="moveTemplate" data-id="${escapeHtml(t.id)}" data-dir="up" title="Move up"${idx === 0 ? ' disabled style="opacity:0.25;"' : ""}>⬆️</button>
+                            <button type="button" class="trash-btn" data-click="moveTemplate" data-id="${escapeHtml(t.id)}" data-dir="down" title="Move down"${idx === list.length - 1 ? ' disabled style="opacity:0.25;"' : ""}>⬇️</button>
+                            <button type="button" class="trash-btn" data-click="editTemplate" data-id="${escapeHtml(t.id)}" title="Edit template">✏️</button>
+                            <button type="button" class="trash-btn" data-click="removeTemplate" data-id="${escapeHtml(t.id)}" title="Delete template">🗑</button>
+                        </div>
+                    </div>`;
+            };
+            const incomeList = dynamicTemplates.filter(t => t.type === "income");
+            const expenseList = dynamicTemplates.filter(t => t.type === "expense");
+            document.getElementById("templatesPageIncomeList").innerHTML = incomeList.map((t, i) => rowHtml(t, incomeList, i)).join("")
+                || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No income templates yet.</p>`;
+            document.getElementById("templatesPageExpenseList").innerHTML = expenseList.map((t, i) => rowHtml(t, expenseList, i)).join("")
+                || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No expense templates yet.</p>`;
+        }
+
+        // Swaps this template's `order` with its immediate neighbor (within the same Income/
+        // Expense list) and persists both — a no-op past either end of the list.
+        async function moveTemplate(id, dir) {
+            const t = dynamicTemplates.find(x => x.id === id);
+            if (!t) return;
+            const list = dynamicTemplates.filter(x => x.type === t.type);
+            const idx = list.findIndex(x => x.id === id);
+            const swapIdx = dir === "up" ? idx - 1 : idx + 1;
+            if (swapIdx < 0 || swapIdx >= list.length) return;
+            const other = list[swapIdx];
+            // Every template is guaranteed an `order` by handleSaveTemplateMobile() at creation
+            // time, so both sides of the swap are always real numbers here.
+            const tOrder = t.order, otherOrder = other.order;
+            await writeDB(STORES.TEMPLATES, { ...t, order: otherOrder });
+            await writeDB(STORES.TEMPLATES, { ...other, order: tOrder });
+            await syncAndLoadTemplates();
+            await renderTemplatesPage();
+        }
+
+        // Opens the Add/Edit Template modal in "add" mode — used by the "+" FAB on the Templates
+        // page. Defaults to Expense (the more common case) with today's currency/account
+        // conventions left blank for the user to fill in, same spirit as openCategoryFormModal().
+        async function openTemplateFormModal() {
+            document.getElementById("templateModalTitle").textContent = "Add Template";
+            document.getElementById("tplSubmitBtn").textContent = "Save Template";
+            document.getElementById("tplEditId").value = "";
+            document.getElementById("tplName").value = "";
+            document.getElementById("tplAmount").value = "";
+            document.getElementById("tplDesc").value = "";
+            document.getElementById("tplNotes").value = "";
+            setTemplateFormTypeUI("expense");
+            await populateTemplateFormAccountAndCurrency();
+            populateTemplateFormCategorySelect();
+            document.getElementById("tplCategory").value = "";
+            document.getElementById("tplAccount").value = "";
+            syncAccountPickerButtonText("tplCategory");
+            syncAccountPickerButtonText("tplAccount");
+            openModal("templateModal");
+        }
+
+        // Opens the same modal pre-filled to edit an existing template.
+        async function editTemplate(id) {
+            const t = dynamicTemplates.find(x => x.id === id);
+            if (!t) return;
+            document.getElementById("templateModalTitle").textContent = "Edit Template";
+            document.getElementById("tplSubmitBtn").textContent = "Save Changes";
+            document.getElementById("tplEditId").value = t.id;
+            document.getElementById("tplName").value = t.name;
+            document.getElementById("tplAmount").value = t.amount != null ? t.amount : "";
+            document.getElementById("tplDesc").value = t.desc || "";
+            document.getElementById("tplNotes").value = t.notes || "";
+            setTemplateFormTypeUI(t.type);
+            await populateTemplateFormAccountAndCurrency();
+            populateTemplateFormCategorySelect();
+            document.getElementById("tplCurrency").value = t.currency || baseCurrency;
+            document.getElementById("tplCategory").value = t.cat || "";
+            document.getElementById("tplAccount").value = t.accountId || "";
+            syncAccountPickerButtonText("tplCategory");
+            syncAccountPickerButtonText("tplAccount");
+            openModal("templateModal");
+        }
+
+        // Flips the Income/Expense toggle buttons and re-populates the Category select for the
+        // newly-selected type — mirrors setAccountTypeUI()'s toggle-button styling pattern.
+        function setTemplateFormTypeUI(type) {
+            document.getElementById("tplType").value = type;
+            const incBtn = document.getElementById("tplTypeBtnIncome");
+            const expBtn = document.getElementById("tplTypeBtnExpense");
+            [incBtn, expBtn].forEach(b => { b.style.background = "var(--chip-bg)"; b.style.color = "var(--text-main)"; });
+            const activeBtn = type === "income" ? incBtn : expBtn;
+            activeBtn.style.background = "var(--primary)"; activeBtn.style.color = "#fff";
+            populateTemplateFormCategorySelect();
+            document.getElementById("tplCategory").value = "";
+            syncAccountPickerButtonText("tplCategory");
+        }
+
+        function populateTemplateFormCategorySelect() {
+            const type = document.getElementById("tplType").value;
+            const names = dynamicCategories.filter(c => c.type === type).map(c => c.name);
+            document.getElementById("tplCategory").innerHTML = buildCategoryOptionsHTML(type, names);
+        }
+
+        async function populateTemplateFormAccountAndCurrency() {
+            const currSelect = document.getElementById("tplCurrency");
+            currSelect.innerHTML = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+            currSelect.value = baseCurrency;
+            const accSelect = document.getElementById("tplAccount");
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const sorted = sortAccountsByGroupThenName(accounts);
+            accSelect.innerHTML = sorted.map(a => {
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : a.type === "creditcard" ? "💳 " : "";
+                const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
+                return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}</option>`;
+            }).join("");
+        }
+
+        async function handleSaveTemplateMobile() {
+            const name = document.getElementById("tplName").value.trim();
+            if (!name) { alert("Please enter a template name first!"); return; }
+            const amount = parseFloat(document.getElementById("tplAmount").value);
+            const accountId = document.getElementById("tplAccount").value;
+            if (!accountId) { alert("Please select an account for this template."); return; }
+
+            const editId = document.getElementById("tplEditId").value;
+            const record = {
+                id: editId || ("tpl_" + Date.now()),
+                type: document.getElementById("tplType").value,
+                name,
+                amount: isNaN(amount) ? 0 : amount,
+                currency: document.getElementById("tplCurrency").value,
+                cat: document.getElementById("tplCategory").value,
+                accountId,
+                desc: document.getElementById("tplDesc").value.trim(),
+                notes: document.getElementById("tplNotes").value.trim(),
+                // A brand-new template goes to the end of its type's list; editing an existing
+                // one keeps its current position.
+                order: editId ? (dynamicTemplates.find(t => t.id === editId)?.order ?? Date.now()) : Date.now(),
+            };
+            try {
+                await writeDB(STORES.TEMPLATES, record);
+            } catch (err) {
+                alert("Could not save template: " + (err && err.message ? err.message : err));
+                return;
+            }
+            await syncAndLoadTemplates();
+            closeModal("templateModal");
+            if (!document.getElementById("page-templates").classList.contains("hidden")) {
+                await renderTemplatesPage();
+            }
+        }
+
+        async function removeTemplate(id) {
+            const ok = await customConfirm("Delete this template? This won't affect any transactions already created from it.");
+            if (!ok) return;
+            try {
+                await deleteDB(STORES.TEMPLATES, id);
+            } catch (err) {
+                alert("Could not delete template: " + (err && err.message ? err.message : err));
+                return;
+            }
+            await syncAndLoadTemplates();
+            await renderTemplatesPage();
+        }
+
+        // Opens the "Select a transaction template" picker from the ⭐ button in the Add/Edit
+        // Transaction modal header (see index.html #txModal) — filtered to whichever Income/
+        // Expense type the transaction form is currently set to; hidden entirely for Transfers
+        // (see toggleTemplateStarVisibility()). Tapping a row applies its fields into the
+        // still-open transaction form (see applyTemplateToTxForm()) without saving anything —
+        // the user still reviews and taps Save/Cancel exactly as on a normal entry.
+        function openTemplatePicker() {
+            const type = document.getElementById("txType").value;
+            const list = dynamicTemplates.filter(t => t.type === type);
+            const listEl = document.getElementById("templatePickerList");
+            listEl.innerHTML = list.length ? list.map(t => `
+                <button type="button" class="option-menu-btn" data-click="selectTemplateFromPicker" data-id="${escapeHtml(t.id)}" style="display:flex; justify-content:space-between; align-items:center;">
+                    <span>${t.cat ? getCategoryIcon(t.cat, t.type) : "🏷️"} ${escapeHtml(t.name)}</span>
+                    <span style="color:var(--text-muted); font-weight:700;">${formatCurrency(t.amount || 0, t.currency)}</span>
+                </button>
+            `).join("") : `<p style="color:var(--text-muted); padding:12px 4px; font-size:0.85rem;">No ${type} templates yet — add one from Sidebar → Settings → 🧾 Transaction Templates.</p>`;
+            openModal("templatePickerModal");
+        }
+
+        function closeTemplatePicker() {
+            closeModal("templatePickerModal");
+        }
+
+        // Fills the currently-open Add/Edit Transaction form's Amount/Currency/Category/Account/
+        // Description/Notes from the chosen template — Date and the FD/Transfer-only fields are
+        // left exactly as they were (a template never carries a placement date or FX terms).
+        function selectTemplateFromPicker(el) {
+            applyTemplateToTxForm(el.dataset.id);
+            closeTemplatePicker();
+        }
+
+        function applyTemplateToTxForm(templateId) {
+            const t = dynamicTemplates.find(x => x.id === templateId);
+            if (!t) return;
+            document.getElementById("txAmount").value = t.amount != null ? t.amount : "";
+            if (t.currency && fxRates[t.currency] !== undefined) {
+                document.getElementById("txCurrency").value = t.currency;
+            }
+            const catSelect = document.getElementById("txCategory");
+            if (t.cat && [...catSelect.options].some(o => o.value === t.cat)) {
+                catSelect.value = t.cat;
+                syncAccountPickerButtonText("txCategory");
+            }
+            const srcSelect = document.getElementById("srcAccount");
+            if (t.accountId && [...srcSelect.options].some(o => o.value === t.accountId)) {
+                srcSelect.value = t.accountId;
+                srcSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                syncAccountPickerButtonText("srcAccount");
+            }
+            if (t.desc) document.getElementById("txDesc").value = t.desc;
+            if (t.notes) document.getElementById("txNotes").value = t.notes;
+        }
+
+        // Shows/hides the ⭐ template-picker button in the transaction modal header — Income/
+        // Expense only, matching what openTemplatePicker() itself filters by (Transfers have no
+        // Category and don't fit the template shape). Called from openTransactionForm() every
+        // time the form is opened, for both new entries and edits.
+        function toggleTemplateStarVisibility(type) {
+            const btn = document.getElementById("txTemplateStarBtn");
+            if (btn) btn.style.display = (type === "income" || type === "expense") ? "flex" : "none";
+        }
+
         // Idempotent: inserts any DEFAULT_CATEGORIES entry not already present
         // (matched case-insensitively by name), so re-running on every launch is safe
         // and never overwrites a category the user has renamed or customised.
@@ -7285,6 +7559,7 @@
                 document.getElementById("txCategory").value = tx.cat || "";
                 document.getElementById("destAccRow").style.display = tx.type === "transfer" ? "flex" : "none";
                 document.getElementById("categoryRow").style.display = tx.type === "transfer" ? "none" : "flex";
+                toggleTemplateStarVisibility(tx.type);
 
                 document.getElementById("txModalTitle").textContent = "Edit Ledger Entry";
                 document.getElementById("txSubmitBtn").textContent = "Save Changes";
@@ -7342,6 +7617,7 @@
 
                 document.getElementById("destAccRow").style.display = type === "transfer" ? "flex" : "none";
                 document.getElementById("categoryRow").style.display = type === "transfer" ? "none" : "flex";
+                toggleTemplateStarVisibility(type);
 
                 // "To Account" is a single <select> shared across every time the transaction modal
                 // is opened. It's only reset here (not on every open) because without it, a value
@@ -11575,6 +11851,7 @@
             await syncAndLoadCategories();
             await ensureDefaultCategories();
             await migrateFdDescRefDedup();
+            await syncAndLoadTemplates();
 
             const accs = await readAllDB(STORES.ACCOUNTS);
             if(accs.length === 0) {
@@ -11635,6 +11912,8 @@
                 // own `attachments` arrays — without this, a restored backup's transactions
                 // would still list attachments, but tapping one would fail to load.
                 attachments: await readAllDB(STORES.ATTACHMENTS),
+                // v227: reusable Income/Expense transaction templates (see openTemplateFormModal()).
+                templates: await readAllDB(STORES.TEMPLATES),
                 // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
                 // defaultReceiveAccount, defaultIncomeCategory, defaultExpenseCategory, recentTx*
                 // widget filters, expandedAccountSubrows, plus baseCurrency/fxRates which are
@@ -11785,6 +12064,9 @@
                     if (db.objectStoreNames.contains(STORES.ATTACHMENTS)) {
                         await clearStoreDB(STORES.ATTACHMENTS);
                     }
+                    if (db.objectStoreNames.contains(STORES.TEMPLATES)) {
+                        await clearStoreDB(STORES.TEMPLATES);
+                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -11811,6 +12093,11 @@
                     // transaction's own `attachments[].id` refs keep resolving correctly.
                     if (bundle.attachments) {
                         for (const att of bundle.attachments) await writeDB(STORES.ATTACHMENTS, att);
+                    }
+                    // v227: reusable Income/Expense transaction templates — absent on older backups,
+                    // skipped entirely for those (same pattern as bundle.attachments above).
+                    if (bundle.templates) {
+                        for (const tpl of bundle.templates) await writeDB(STORES.TEMPLATES, tpl);
                     }
 
                     // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
@@ -11897,6 +12184,16 @@
             navigateToAccountsPage: () => navigateToAccountsPage(),
             handleAccountsBackClick: () => handleAccountsBackClick(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
+            navigateToTemplatesPage: () => navigateToTemplatesPage(),
+            openTemplateFormModal: () => openTemplateFormModal(),
+            editTemplate: (el) => editTemplate(el.dataset.id),
+            removeTemplate: (el) => removeTemplate(el.dataset.id),
+            moveTemplate: (el) => moveTemplate(el.dataset.id, el.dataset.dir),
+            handleSaveTemplateMobile: () => handleSaveTemplateMobile(),
+            setTemplateFormTypeUI: (el) => setTemplateFormTypeUI(el.dataset.type),
+            openTemplatePicker: () => openTemplatePicker(),
+            closeTemplatePicker: () => closeTemplatePicker(),
+            selectTemplateFromPicker: (el) => selectTemplateFromPicker(el),
             navigateToBackupPage: () => navigateToBackupPage(),
             handleBackupBackClick: () => handleBackupBackClick(),
             navigateToAllLedgerPage: () => navigateToAllLedgerPage(),
