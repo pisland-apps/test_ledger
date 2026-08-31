@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v217";
+        const APP_VERSION = "v212";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2616,13 +2616,25 @@
             renderReportCardTile(2, reportCardPeriod2, txs, accounts);
         }
 
-        // --- Monthly Trend chart (v211) ---
+        // --- Monthly Trend chart (v211, refined v212) ---
         // Grouped income/expense bars, one pair per month, for a single selected year — the
         // dashboard didn't previously have anything showing the shape of the year at a glance
         // (the report cards above summarise one period at a time; this shows all 12 side by
         // side). Reuses computeReportCardTotals' exact exclusion + refund-as-negative-expense
         // rules (via the same per-month date-range totalling) so the numbers already tie out to
         // every other income/expense figure on the dashboard — no separate accounting logic.
+        //
+        // v212 adds tap-to-reveal exact values and an "Auto-scale" outlier toggle, mirroring the
+        // donutState/toggleDonutSlice pattern already used for the breakdown donuts (see below):
+        // one small state object holds the last-rendered months + current view mode so a tap can
+        // re-render just the chart wrap, without re-querying transactions. Deliberately no
+        // hover tooltip (this app is used mostly on phones, where "hover" doesn't exist — tap
+        // does the same job on both touch and desktop) and no drag-to-zoom/brush-select (with
+        // only 12 bars a lightweight ledger doesn't need it, exact figures are already one tap
+        // away via the same mechanism, and a drag gesture on a scrolling mobile page is more
+        // likely to feel broken than useful).
+        let monthlyTrendState = { months: [], autoScale: false, activeBar: null };
+
         function populateMonthlyTrendYearOptions(txs) {
             const select = document.getElementById("monthlyTrendYearSelect");
             const currentYear = new Date().getFullYear();
@@ -2655,137 +2667,101 @@
             return months;
         }
 
-        // Builds the path for a bar rect whose TOP corners only are rounded (bottom stays
-        // square-cornered against the baseline) — reads as a nicer "pill" top than a uniformly
-        // rounded <rect> once bars get wider, without floating the bar off the axis line. Clamps
-        // the radius down for very short bars (e.g. the minimum-visible-height floor below) so a
-        // 3px-tall bar still renders as a rounded blob instead of a self-intersecting path.
-        function topRoundedBarPath(x, y, width, height, r) {
-            const rr = Math.max(0, Math.min(r, width / 2, height));
-            if (rr <= 0.05) return `M${x},${y} h${width} v${height} h${-width} Z`;
-            return `M${x},${y + height} V${y + rr} Q${x},${y} ${x + rr},${y} H${x + width - rr} Q${x + width},${y} ${x + width},${y + rr} V${y + height} Z`;
-        }
-
         // Grouped (paired) bar chart, no external chart library, styled to match this app's
         // other hand-drawn SVG charts (buildBreakdownBarSVG/buildBreakdownDonutSVG above) rather
         // than copying any other app's exact look. A light horizontal gridline + axis label every
-        // ~1/4 of the scale, an income/expense legend up top, and a muted "no data" label under
-        // any month with nothing logged (rather than just leaving it blank, which reads as a
-        // rendering gap rather than "no transactions that month").
+        // ~1/4 of the scale and an income/expense legend up top.
         //
-        // v212: bars now tile edge-to-edge across the whole 12-month width (a single small,
-        // uniform gap between every pair of bars — inside a month AND between neighbouring
-        // months — instead of a narrow pair of bars floating in the middle of a wide, mostly-empty
-        // month column). Bars are also wider and every non-zero value gets a minimum visible
-        // height, so a small expense (e.g. RM10 next to a RM3,000 income bar) still shows up as a
-        // sliver instead of vanishing into the baseline. Each bar carries data-* attributes read
-        // by showMonthlyTrendTooltip()/hideMonthlyTrendTooltip() (wired below) for the hover
-        // tooltip — no external chart library needed for that either.
-        function buildMonthlyTrendBarSVG(months, isMobile) {
-            // On a narrow phone screen the SVG's viewBox gets scaled down to fit the card width,
-            // so a font-size that reads fine on desktop (where the viewBox is barely scaled at
-            // all) can shrink to a few real pixels on mobile and become unreadable. Rather than
-            // just scaling the same layout down, mobile gets its own taller, wider-margined
-            // layout with meaningfully larger font sizes and one fewer gridline (less clutter at
-            // a smaller size) so the *rendered* text stays legible regardless of screen width.
-            const w = isMobile ? 480 : 680;
-            const h = isMobile ? 300 : 260;
-            const padLeft = isMobile ? 54 : 46, padRight = 10, padTop = isMobile ? 40 : 34, padBottom = isMobile ? 34 : 26;
-            const axisFontSize = isMobile ? 13 : 9;
-            const monthFontSize = isMobile ? 13 : 9;
-            const legendFontSize = isMobile ? 14 : 10;
+        // `autoScale`: when on, the axis ceiling is picked from the *second*-largest bar instead
+        // of the largest, giving the smaller months more vertical room. Any bar taller than that
+        // ceiling (normally just the one outlier) is drawn clipped at full height with a small
+        // notch cut into its top and its real value printed above it — so the outlier is still
+        // clearly present and fully readable, just not dominating the whole chart's scale.
+        //
+        // `activeBar`: the {index, type} of a tapped bar, or null. The tapped bar gets a dark
+        // outline and a small value callout above it (exact currency amount) — tap again to
+        // dismiss. Only one bar can be active at a time.
+        function buildMonthlyTrendBarSVG(months, activeBar, autoScale) {
+            const w = 680, h = 260, padLeft = 46, padRight = 10, padTop = 34, padBottom = 26;
             const plotW = w - padLeft - padRight, plotH = h - padTop - padBottom;
-            const maxVal = Math.max(...months.map(mo => Math.max(mo.income, mo.expense)), 0.01);
+            const allVals = [];
+            months.forEach(mo => allVals.push(mo.income, mo.expense));
+            const trueMax = Math.max(...allVals, 0.01);
+            let scaleBasis = trueMax;
+            if (autoScale) {
+                const sortedDesc = [...allVals].sort((a, b) => b - a);
+                scaleBasis = sortedDesc[1] > 0 ? sortedDesc[1] : trueMax;
+            }
             // Round the axis ceiling up to a "nice" number (1/2/5 × a power of ten) so gridline
             // labels read like 4,000/8,000 rather than an arbitrary max-value fraction.
-            const magnitude = Math.pow(10, Math.floor(Math.log10(maxVal || 1)));
+            const magnitude = Math.pow(10, Math.floor(Math.log10(scaleBasis || 1)));
             const niceSteps = [1, 2, 2.5, 5, 10];
             let axisMax = magnitude * 10;
             for (const step of niceSteps) {
-                if (maxVal <= magnitude * step) { axisMax = magnitude * step; break; }
+                if (scaleBasis <= magnitude * step) { axisMax = magnitude * step; break; }
             }
-            const gridlineCount = isMobile ? 3 : 4;
+            const gridlineCount = 4;
             let gridlinesSVG = "";
             for (let i = 0; i <= gridlineCount; i++) {
                 const val = (axisMax / gridlineCount) * i;
                 const y = padTop + plotH - (plotH * val) / axisMax;
                 gridlinesSVG += `
                     <line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${w - padRight}" y2="${y.toFixed(1)}" stroke="#e2e8f0" stroke-width="1"></line>
-                    <text x="${padLeft - 8}" y="${(y + 3).toFixed(1)}" font-size="${axisFontSize}" text-anchor="end" fill="#94a3b8">${formatCompactAxisNumber(val)}</text>
+                    <text x="${padLeft - 8}" y="${(y + 3).toFixed(1)}" font-size="9" text-anchor="end" fill="#94a3b8">${formatCompactAxisNumber(val)}</text>
                 `;
             }
             const groupW = plotW / 12;
-            const gap = 1.5; // same hairline gap used both between the two bars in a month AND between one month's bars and the next's — no wide dead zone marking where a month "ends"
-            const barW = groupW / 2 - gap;
-            const minVisibleH = 3; // any logged (>0) amount still shows a sliver even when tiny next to the tallest bar on the chart
-            let barsSVG = "";
+            const barW = Math.min(20, groupW / 2 - 3);
+            let barsSVG = "", calloutsSVG = "";
             months.forEach((mo, i) => {
                 const groupX = padLeft + i * groupW;
-                const incX = groupX + gap / 2;
-                const expX = incX + barW + gap;
-                if (mo.income > 0) {
-                    const incH = Math.max(minVisibleH, (plotH * mo.income) / axisMax);
-                    const incY = padTop + plotH - incH;
-                    barsSVG += `<path d="${topRoundedBarPath(incX, incY, barW, incH, 3)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
-                }
-                if (mo.expense > 0) {
-                    const expH = Math.max(minVisibleH, (plotH * mo.expense) / axisMax);
-                    const expY = padTop + plotH - expH;
-                    barsSVG += `<path d="${topRoundedBarPath(expX, expY, barW, expH, 3)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
-                }
-                barsSVG += `<text x="${(groupX + groupW / 2).toFixed(1)}" y="${h - (isMobile ? 8 : 6)}" font-size="${monthFontSize}" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
+                const incX = groupX + groupW / 2 - barW - 1;
+                const expX = groupX + groupW / 2 + 1;
+                [{ type: "income", val: mo.income, x: incX, color: "#22c55e" },
+                 { type: "expense", val: mo.expense, x: expX, color: "#ef4444" }].forEach(bar => {
+                    if (bar.val <= 0) return;
+                    const isClipped = bar.val > axisMax;
+                    const barH = isClipped ? plotH : (plotH * bar.val) / axisMax;
+                    const barY = padTop + plotH - barH;
+                    const isActive = activeBar && activeBar.index === i && activeBar.type === bar.type;
+                    const strokeAttrs = isActive ? `stroke="#0f172a" stroke-width="1.5"` : "";
+                    barsSVG += `<rect x="${bar.x.toFixed(1)}" y="${barY.toFixed(1)}" width="${barW.toFixed(1)}" height="${barH.toFixed(1)}" rx="1" fill="${bar.color}" ${strokeAttrs} style="cursor:pointer;" data-click="toggleTrendBar" data-index="${i}" data-type="${bar.type}"></rect>`;
+                    if (isClipped) {
+                        const cx = bar.x + barW / 2;
+                        barsSVG += `
+                            <path d="M ${(cx - 4).toFixed(1)} ${(padTop + 6).toFixed(1)} L ${cx.toFixed(1)} ${padTop.toFixed(1)} L ${(cx + 4).toFixed(1)} ${(padTop + 6).toFixed(1)}" stroke="#fff" stroke-width="1.5" fill="none"></path>
+                            <text x="${cx.toFixed(1)}" y="${(padTop - 5).toFixed(1)}" font-size="9" font-weight="700" text-anchor="middle" fill="${bar.color}">${formatCompactAxisNumber(bar.val)}</text>
+                        `;
+                    }
+                    if (isActive) {
+                        const cx = bar.x + barW / 2;
+                        const label = `${mo.label} ${bar.type === "income" ? "Income" : "Expense"}: ${formatCurrency(bar.val, baseCurrency)}`;
+                        const labelW = Math.min(190, 16 + label.length * 4.9);
+                        const labelX = Math.max(padLeft, Math.min(cx - labelW / 2, w - padRight - labelW));
+                        const labelY = Math.max(2, (isClipped ? padTop - 16 : barY) - 20);
+                        calloutsSVG += `
+                            <g>
+                                <rect x="${labelX.toFixed(1)}" y="${labelY.toFixed(1)}" width="${labelW.toFixed(1)}" height="17" rx="4" fill="#0f172a"></rect>
+                                <text x="${(labelX + labelW / 2).toFixed(1)}" y="${(labelY + 12).toFixed(1)}" font-size="9.5" font-weight="600" text-anchor="middle" fill="#fff">${escapeHtml(label)}</text>
+                            </g>
+                        `;
+                    }
+                });
+                barsSVG += `<text x="${(groupX + groupW / 2).toFixed(1)}" y="${h - 6}" font-size="9" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
             });
             return `
-                <svg viewBox="0 0 ${w} ${h}" style="width:100%; display:block;" data-click="hideMonthlyTrendTooltip">
+                <svg viewBox="0 0 ${w} ${h}" style="width:100%; display:block;">
                     <g>
                         <rect x="0" y="0" width="12" height="12" fill="#22c55e" rx="2" transform="translate(${padLeft}, 4)"></rect>
-                        <text x="${padLeft + 16}" y="14" font-size="${legendFontSize}" fill="#334155">Income</text>
-                        <rect x="0" y="0" width="12" height="12" fill="#ef4444" rx="2" transform="translate(${padLeft + (isMobile ? 78 : 66)}, 4)"></rect>
-                        <text x="${padLeft + (isMobile ? 94 : 82)}" y="14" font-size="${legendFontSize}" fill="#334155">Expense</text>
+                        <text x="${padLeft + 16}" y="14" font-size="10" fill="#334155">Income</text>
+                        <rect x="0" y="0" width="12" height="12" fill="#ef4444" rx="2" transform="translate(${padLeft + 66}, 4)"></rect>
+                        <text x="${padLeft + 82}" y="14" font-size="10" fill="#334155">Expense</text>
                     </g>
                     ${gridlinesSVG}
                     ${barsSVG}
+                    ${calloutsSVG}
                 </svg>
             `;
-        }
-
-        // Hover tooltip for the Monthly Trend chart's bars — shown/hidden via the delegated
-        // document "mousemove" listener (desktop hover) and the "monthlyTrendBarTap" /
-        // "hideMonthlyTrendTooltip" CLICK_ACTIONS entries (mobile tap), NOT inline event
-        // attributes on the <path> elements — this app's CSP has no 'unsafe-inline' script-src,
-        // so onmousemove="..." markup would be silently ignored by the browser. Positioned
-        // relative to #monthlyTrendChartWrap's parent (must be position:relative — see
-        // index.html; the tooltip lives as a SIBLING of the wrap, not nested inside it, since
-        // the wrap's innerHTML gets fully replaced on every re-render and would otherwise wipe
-        // the tooltip element out), and nudged left once the cursor is past ~70% of the wrap's
-        // width so the tooltip doesn't run off the right edge of the card.
-        function showMonthlyTrendTooltip(evt, el) {
-            const wrap = document.getElementById("monthlyTrendChartWrap");
-            const tip = document.getElementById("monthlyTrendTooltip");
-            if (!wrap || !tip) return;
-            const wrapRect = wrap.getBoundingClientRect();
-            const x = evt.clientX - wrapRect.left;
-            const y = evt.clientY - wrapRect.top;
-            const label = el.getAttribute("data-label");
-            const type = el.getAttribute("data-type");
-            const val = parseFloat(el.getAttribute("data-val"));
-            const swatch = type === "Income" ? "#22c55e" : "#ef4444";
-            tip.innerHTML = `<div style="font-weight:700; margin-bottom:2px;">${escapeHtml(label)} ${escapeHtml(monthlyTrendYear)}</div>
-                <div style="display:flex; align-items:center; gap:5px;">
-                    <span style="width:8px; height:8px; border-radius:2px; background:${swatch}; display:inline-block;"></span>
-                    <span style="color:var(--text-muted);">${escapeHtml(type)}</span>
-                    <span style="font-weight:700; margin-left:4px;">${formatCurrency(val, baseCurrency)}</span>
-                </div>`;
-            const nearRightEdge = x > wrapRect.width * 0.7;
-            tip.style.left = nearRightEdge ? "" : `${x + 12}px`;
-            tip.style.right = nearRightEdge ? `${wrapRect.width - x + 12}px` : "";
-            tip.style.top = `${Math.max(0, y - 38)}px`;
-            tip.style.display = "block";
-        }
-
-        function hideMonthlyTrendTooltip() {
-            const tip = document.getElementById("monthlyTrendTooltip");
-            if (tip) tip.style.display = "none";
         }
 
         // Compact axis-label formatting (1,200 / 12K / 1.2M) — plain-language style matching the
@@ -2801,14 +2777,32 @@
             populateMonthlyTrendYearOptions(txs);
             const year = parseInt(document.getElementById("monthlyTrendYearSelect").value, 10);
             const months = computeMonthlyTrendData(txs, accounts, year);
+            monthlyTrendState.months = months;
+            monthlyTrendState.activeBar = null; // a full data re-render invalidates any tapped bar's position
+            const btn = document.getElementById("monthlyTrendAutoScaleBtn");
+            if (btn) btn.classList.toggle("active", monthlyTrendState.autoScale);
             const hasAnyData = months.some(mo => mo.income > 0 || mo.expense > 0);
-            // Re-checked on every render (not cached) since rotating the phone or resizing a
-            // desktop window between renders should switch layouts, not stick to whichever one
-            // was true on first paint.
-            const isMobile = window.innerWidth <= 480;
             document.getElementById("monthlyTrendChartWrap").innerHTML = hasAnyData
-                ? buildMonthlyTrendBarSVG(months, isMobile)
+                ? buildMonthlyTrendBarSVG(months, null, monthlyTrendState.autoScale)
                 : '<p style="font-size:0.75rem; text-align:center; color:var(--text-muted); padding: 40px 0;">No transactions logged for this year yet.</p>';
+        }
+
+        function toggleTrendBar(el) {
+            const index = parseInt(el.dataset.index, 10);
+            const type = el.dataset.type;
+            const cur = monthlyTrendState.activeBar;
+            monthlyTrendState.activeBar = (cur && cur.index === index && cur.type === type) ? null : { index, type };
+            const wrap = document.getElementById("monthlyTrendChartWrap");
+            if (wrap) wrap.innerHTML = buildMonthlyTrendBarSVG(monthlyTrendState.months, monthlyTrendState.activeBar, monthlyTrendState.autoScale);
+        }
+
+        function toggleTrendAutoScale() {
+            monthlyTrendState.autoScale = !monthlyTrendState.autoScale;
+            monthlyTrendState.activeBar = null; // callout position depends on the scale it was tapped under
+            const btn = document.getElementById("monthlyTrendAutoScaleBtn");
+            if (btn) btn.classList.toggle("active", monthlyTrendState.autoScale);
+            const wrap = document.getElementById("monthlyTrendChartWrap");
+            if (wrap) wrap.innerHTML = buildMonthlyTrendBarSVG(monthlyTrendState.months, null, monthlyTrendState.autoScale);
         }
 
         async function changeMonthlyTrendYear(el) {
@@ -11596,8 +11590,6 @@
         const CLICK_ACTIONS = {
             openSidebar: () => openSidebar(),
             closeSidebar: () => closeSidebar(),
-            monthlyTrendBarTap: (el, e) => { e.stopPropagation(); showMonthlyTrendTooltip(e, el); },
-            hideMonthlyTrendTooltip: () => hideMonthlyTrendTooltip(),
             openInsightsDrawer: () => openInsightsDrawer(),
             closeInsightsDrawer: () => closeInsightsDrawer(),
             sidebarGo: (el) => sidebarGo(el),
@@ -11739,6 +11731,8 @@
             handleSaveSalaryRecord: () => handleSaveSalaryRecord(),
             printCurrentApp: () => printCurrentApp(),
             toggleDonutSlice: (el) => toggleDonutSlice(el),
+            toggleTrendBar: (el) => toggleTrendBar(el),
+            toggleTrendAutoScale: () => toggleTrendAutoScale(),
         };
 
         const CHANGE_ACTIONS = {
@@ -11817,19 +11811,6 @@
             if (!el) return;
             const action = INPUT_ACTIONS[el.dataset.input];
             if (action) action(el, e);
-        });
-
-        // Monthly Trend chart hover tooltip (desktop) — delegated the same way as
-        // click/change/input above rather than inline onmousemove, since the CSP here has no
-        // 'unsafe-inline'. mousemove fires constantly while the mouse is anywhere on the page,
-        // but the closest() check is cheap and this only actually does anything while a
-        // .mtrend-bar element is under the cursor, so it's fine to leave attached at the
-        // document level. Mobile/touch doesn't fire mousemove, which is why bars ALSO carry
-        // data-click="monthlyTrendBarTap" above for tap support.
-        document.addEventListener("mousemove", (e) => {
-            const bar = e.target.closest(".mtrend-bar");
-            if (bar) showMonthlyTrendTooltip(e, bar);
-            else hideMonthlyTrendTooltip();
         });
 
         // v83: number inputs (Amount, Interest Rate, Tenure, etc.) silently change value when the

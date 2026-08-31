@@ -4,7 +4,7 @@
 // files the Service Worker serves; APP_VERSION is just the display label in the corner of the
 // screen. They don't sync automatically (different files, different load times) — when you bump
 // one, bump the other too. See the matching reminder comment on APP_VERSION in ledger.js.
-const CACHE_NAME = "ledger-cache-v217";
+const CACHE_NAME = "ledger-cache-v212";
 // NOTE: deliberately does NOT include "./index.html" here. On hosts that
 // redirect /index.html -> / (e.g. Cloudflare Pages -- GitHub Pages doesn't do
 // this), caching that URL bakes in a redirected Response, and Chrome refuses
@@ -41,15 +41,8 @@ self.addEventListener("activate", (event) => {
     self.clients.claim();
 });
 
-// Fetch: network-first (falling back to cache) for the two files that actually change on every
-// deploy — the app shell ("./") and ledger.js — so a normal reload while online always picks up
-// whatever was just deployed, with zero manual cache-clearing. Cache-first for everything else
-// (icons, manifest, the vendored pdf.js files), since those essentially never change and
-// cache-first avoids a pointless network round-trip for them on every load. Either way, this is
-// what makes the app open even with no internet connection at all — network-first still falls
-// back to whatever's cached the instant the fetch fails.
-const NETWORK_FIRST_ASSETS = new Set(["./ledger.js"]);
-
+// Fetch: cache-first for app shell, falling back to network. This is what makes
+// the app open even with no internet connection at all.
 self.addEventListener("fetch", (event) => {
     if (event.request.method !== "GET") return;
 
@@ -61,34 +54,22 @@ self.addEventListener("fetch", (event) => {
     // load with net::ERR_FAILED) -- see README for the full story.
     if (event.request.mode === "navigate") {
         event.respondWith(
-            fetch("./", { redirect: "follow" })
-                .then((response) => {
-                    if (response.redirected) {
-                        // The host itself is redirecting "./" -- don't hand a
-                        // redirected Response to a navigation. Fall back to
-                        // whatever's cached (may be nothing on first-ever load).
-                        return caches.match("./");
-                    }
-                    const responseClone = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put("./", responseClone));
-                    return response;
-                })
-                .catch(() => caches.match("./"))
-        );
-        return;
-    }
-
-    const isNetworkFirst = [...NETWORK_FIRST_ASSETS].some((path) => event.request.url.endsWith(path.slice(1)));
-
-    if (isNetworkFirst) {
-        event.respondWith(
-            fetch(event.request)
-                .then((response) => {
-                    const responseClone = response.clone();
-                    caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
-                    return response;
-                })
-                .catch(() => caches.match(event.request))
+            caches.match("./").then((cached) => {
+                if (cached) return cached;
+                return fetch("./", { redirect: "follow" })
+                    .then((response) => {
+                        if (response.redirected) {
+                            // The host itself is redirecting "./" -- don't hand a
+                            // redirected Response to a navigation. Fall back to
+                            // whatever's cached (may be nothing on first-ever load).
+                            return caches.match("./");
+                        }
+                        const responseClone = response.clone();
+                        caches.open(CACHE_NAME).then((cache) => cache.put("./", responseClone));
+                        return response;
+                    })
+                    .catch(() => caches.match("./"));
+            })
         );
         return;
     }
