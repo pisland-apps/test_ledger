@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v223";
+        const APP_VERSION = "v224";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1705,6 +1705,10 @@
         let recentTxTypeFilter = "both"; // "both" | "income" | "expense"
         let recentTxAccountFilter = "all"; // "all" | accountId
         let recentTxCount = 5; // 1-14
+        // v224: which of the two Dashboard widgets (Accounts / Recent Transactions) renders
+        // first — configured from Setting > Dashboard Widgets, applied via
+        // applyDashboardWidgetOrder(). Persisted via SETTINGS like the filters above.
+        let dashboardWidgetOrder = "accounts-first"; // "accounts-first" | "recenttx-first"
 
         // Dashboard "Accounts" widget settings (v75) — persisted via SETTINGS store, loaded in
         // bootstrap(). Mirrors the Recent Transactions widget above, but instead of a type/account
@@ -1799,10 +1803,44 @@
             }).join("");
         }
 
-        function toggleRecentTxSettings() {
-            const panel = document.getElementById("recentTxSettingsPanel");
+        // v224: single toggle for the relocated Dashboard Widgets settings panel (Setting hub) —
+        // replaces the two separate inline "⚙ Settings" buttons that used to sit directly on the
+        // Dashboard's Accounts/Recent Transactions widgets. Syncs the order <select> to the
+        // current setting each time the panel opens, same as toggleBgThemeSettings() does for
+        // its swatch grid.
+        function toggleDashboardWidgetsSettings() {
+            const panel = document.getElementById("dashboardWidgetsSettingsPanel");
             if (!panel) return;
-            panel.style.display = panel.style.display === "none" ? "flex" : "none";
+            const isHidden = panel.style.display === "none";
+            if (isHidden) {
+                const orderSel = document.getElementById("dashboardWidgetOrderSelect");
+                if (orderSel) orderSel.value = dashboardWidgetOrder;
+            }
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+
+        // v224: persists the chosen Dashboard widget order and re-renders so it takes effect
+        // immediately, even though the Dashboard itself isn't the visible page right now.
+        async function handleDashboardWidgetOrderChange() {
+            const sel = document.getElementById("dashboardWidgetOrderSelect");
+            dashboardWidgetOrder = (sel && sel.value === "recenttx-first") ? "recenttx-first" : "accounts-first";
+            await writeDB(STORES.SETTINGS, { key: "dashboardWidgetOrder", value: dashboardWidgetOrder });
+            applyDashboardWidgetOrder();
+        }
+
+        // v224: physically reorders the two dashboard widget containers to match
+        // dashboardWidgetOrder. insertBefore(X, Y) always places X immediately ahead of Y
+        // regardless of their current order, so this is safe to call on every renderApp() —
+        // idempotent, no "already in the right place" check needed.
+        function applyDashboardWidgetOrder() {
+            const accountsWidget = document.getElementById("dashboardAccountsWidget");
+            const recentTxWidget = document.getElementById("dashboardRecentTxWidget");
+            if (!accountsWidget || !recentTxWidget || !accountsWidget.parentNode) return;
+            if (dashboardWidgetOrder === "recenttx-first") {
+                accountsWidget.parentNode.insertBefore(recentTxWidget, accountsWidget);
+            } else {
+                accountsWidget.parentNode.insertBefore(accountsWidget, recentTxWidget);
+            }
         }
 
         // v181: Desktop "Insights" right rail (only visible at 1400px+, see the matching CSS).
@@ -1909,12 +1947,6 @@
             }
         }
 
-        function togglePinnedAccountsSettings() {
-            const panel = document.getElementById("pinnedAccountsSettingsPanel");
-            if (!panel) return;
-            panel.style.display = panel.style.display === "none" ? "flex" : "none";
-        }
-
         // Builds one account-picker <select> per configured slot (1..pinnedAccountCount), each
         // pre-selected to whichever account is currently pinned there — mirrors the reference
         // screenshot's "Number of items shown" + one numbered dropdown per slot layout.
@@ -1975,7 +2007,7 @@
                 .filter(Boolean);
 
             if (rows.length === 0) {
-                list.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No accounts pinned yet — tap ⚙ Settings above to choose some.</p>`;
+                list.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No accounts pinned yet — go to Setting &gt; Dashboard Widgets to choose some.</p>`;
                 return;
             }
 
@@ -9692,6 +9724,7 @@
             renderMemberNetWorthRows(accounts, nativeBalances);
             renderPinnedAccountsWidget(accounts, nativeBalances);
             renderRecentTransactionsWidget(accounts, txs);
+            applyDashboardWidgetOrder();
             renderDesktopInsightsRail(accounts, txs);
 
             // --- Fixed Deposit maturity reminders ---
@@ -11498,6 +11531,9 @@
             const storedRecentTxCount = await readKeyDB("settings", "recentTxCount");
             if (storedRecentTxCount) recentTxCount = storedRecentTxCount.value || 5;
 
+            const storedDashboardWidgetOrder = await readKeyDB("settings", "dashboardWidgetOrder");
+            if (storedDashboardWidgetOrder) dashboardWidgetOrder = storedDashboardWidgetOrder.value === "recenttx-first" ? "recenttx-first" : "accounts-first";
+
             const storedPinnedCount = await readKeyDB("settings", "pinnedAccountCount");
             if (storedPinnedCount) pinnedAccountCount = storedPinnedCount.value || 5;
 
@@ -11776,6 +11812,7 @@
                                 case "recentTxTypeFilter": recentTxTypeFilter = rec.value || "both"; break;
                                 case "recentTxAccountFilter": recentTxAccountFilter = rec.value || "all"; break;
                                 case "recentTxCount": recentTxCount = rec.value || 5; break;
+                                case "dashboardWidgetOrder": dashboardWidgetOrder = rec.value === "recenttx-first" ? "recenttx-first" : "accounts-first"; break;
                                 case "pinnedAccountCount": pinnedAccountCount = rec.value || 5; break;
                                 case "pinnedAccountIds": pinnedAccountIds = Array.isArray(rec.value) ? rec.value : []; break;
                                 case "memberNetWorthCollapsed": memberNetWorthCollapsed = !!rec.value; break;
@@ -11851,11 +11888,10 @@
             deleteMemberFromForm: () => deleteMemberFromForm(),
             editMember: (el) => editMember(el.dataset.id),
             openAddAccountForMember: () => openAddAccountForMember(),
-            toggleRecentTxSettings: () => toggleRecentTxSettings(),
-            togglePinnedAccountsSettings: () => togglePinnedAccountsSettings(),
             toggleMemberNetWorthCollapse: () => toggleMemberNetWorthCollapse(),
             selectMemberColor: (el) => selectMemberColor(el),
             toggleBgThemeSettings: () => toggleBgThemeSettings(),
+            toggleDashboardWidgetsSettings: () => toggleDashboardWidgetsSettings(),
             selectBgTheme: (el) => selectBgTheme(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
@@ -11987,6 +12023,7 @@
             toggleTxTransferFx: () => toggleTxTransferFx(),
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
             handlePinnedAccountCountChange: () => handlePinnedAccountCountChange(),
+            handleDashboardWidgetOrderChange: () => handleDashboardWidgetOrderChange(),
             handlePinnedAccountSlotChange: (el) => handlePinnedAccountSlotChange(el),
             ledgerYearSelectChange: () => ledgerYearSelectChange(),
             handleAccGroupChange: () => handleAccGroupChange(),
