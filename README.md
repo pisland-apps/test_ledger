@@ -49,13 +49,27 @@ directly from the `ledger.js` that's currently running, so it can't tell
 you whether the *browser* is actually running that latest `ledger.js` or a
 stale cached copy.
 
-**If the badge shows a version that doesn't match what you just deployed,
-that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's
-Service Worker/cache in devtools — not a signal that the deploy itself
-failed.** The Service Worker is deliberately cache-first for offline
-support, so a browser tab that was already open (or opened again quickly)
-can keep serving the old `ledger.js` until the new `CACHE_NAME` causes the
-old cache to be dropped and re-fetched.
+**As of v217, `"./"` and `ledger.js` are served network-first (falling back
+to cache only when offline) — see `NETWORK_FIRST_ASSETS` in `sw.js` — so a
+normal reload while online should pick up a new deploy without any manual
+cache-clearing.** Icons, `manifest.json`, and the vendored `lib/pdf.*`
+files stay cache-first, since they essentially never change and there's no
+reason to hit the network for them every load.
+
+The one case that still needs a couple of extra reloads is the **version
+transition that first introduces this network-first behavior** (i.e.
+going from a pre-v217 Service Worker to v217+): whichever Service Worker
+is still in control of the tab is the one whose fetch handler runs, so if
+the *old*, cache-first SW hasn't finished installing/activating the new
+one yet, a reload can still be served by the old logic. `skipWaiting()` +
+`clients.claim()` (in `sw.js`'s `install`/`activate` handlers, present
+since the original v211 scaffold) mean this resolves itself within a
+reload or two, with no need to close tabs or clear site data — just
+reload again if the badge still doesn't match right after a deploy.
+
+If the badge *still* doesn't match after a couple of reloads, hard-refresh
+(Ctrl/Cmd+Shift+R) or clear the site's Service Worker/cache in devtools —
+that remains the fallback, just no longer the expected default.
 
 ## Security notes
 
