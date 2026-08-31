@@ -1782,16 +1782,11 @@
                 return !info || t.id === info.repId;
             });
 
-            // v231: dates alone tie for every transaction entered on the same day, so without a
-            // secondary key the browser's sort was free to leave same-day rows in whatever order
-            // they happened to come out of IndexedDB. Breaking the tie on id (ascending) makes the
-            // ordering explicit and guaranteed: within a day, the transaction entered first sits on
-            // top and the one entered most recently sits at the bottom of that day's group.
-            filtered = [...filtered].sort((a, b) => {
-                const dateDiff = new Date(b.date) - new Date(a.date);
-                if (dateDiff !== 0) return dateDiff;
-                return a.id - b.id;
-            }).slice(0, recentTxCount);
+            // v231: date-only sort left same-day ties in original (ascending-id/insertion) order,
+            // so the latest-added transaction on today's date sank to the bottom of its date group
+            // instead of showing first. Tie-break by id descending (autoIncrement = insertion order)
+            // so the most recently added same-day transaction is always shown first.
+            filtered = [...filtered].sort((a, b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id)).slice(0, recentTxCount);
 
             if (filtered.length === 0) {
                 list.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No matching transactions yet.</p>`;
@@ -4574,7 +4569,8 @@
             document.getElementById("fundActivityTitle").textContent = `${fund.name} Activity`;
 
             const allTxs = await readAllDB(STORES.TRANSACTIONS);
-            const fundTxs = allTxs.filter(t => t.fundId === fundId).sort((a, b) => new Date(b.date) - new Date(a.date));
+            // v231: same same-day tie-break fix as Dashboard/Transactions — see comment there.
+            const fundTxs = allTxs.filter(t => t.fundId === fundId).sort((a, b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id));
 
             const value = (fund.units || 0) * (fund.currentNav || 0);
             document.getElementById("fundActivityBalanceValue").innerHTML = formatBalanceHTML(value, fund.currency);
@@ -4672,7 +4668,8 @@
                     const info = getSplitGroupInfo(t, txs);
                     return !info || t.id === info.repId;
                 })
-                .sort((a, b) => new Date(b.date) - new Date(a.date));
+                // v231: same same-day tie-break fix as Dashboard/Transactions — see comment there.
+                .sort((a, b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id));
 
             const html = relevantTxs.map(t => {
                 let col, sgn;
@@ -10549,7 +10546,9 @@
             // views now always show full history too, exactly like the account view already does.
             const showFullHistoryForThisView = showFullAccountHistory || activeCategoryView !== "all" || directTypeView !== "all" || isPortfolioAllView;
 
-            txs.sort((a,b) => new Date(b.date) - new Date(a.date)).forEach(t => {
+            // v231: same same-day tie-break fix as the Dashboard Recent Transactions widget above —
+            // see the comment there.
+            txs.sort((a,b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id)).forEach(t => {
                 const tBase = convertTxAmountToBase(t, accounts);
                 // Multi-Currency account view (v55): skip building any per-transaction row here
                 // — see isMultiCurrencyAccountView above, this account's own list is replaced
