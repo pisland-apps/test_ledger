@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v228";
+        const APP_VERSION = "v231";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1782,7 +1782,16 @@
                 return !info || t.id === info.repId;
             });
 
-            filtered = [...filtered].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, recentTxCount);
+            // v231: dates alone tie for every transaction entered on the same day, so without a
+            // secondary key the browser's sort was free to leave same-day rows in whatever order
+            // they happened to come out of IndexedDB. Breaking the tie on id (ascending) makes the
+            // ordering explicit and guaranteed: within a day, the transaction entered first sits on
+            // top and the one entered most recently sits at the bottom of that day's group.
+            filtered = [...filtered].sort((a, b) => {
+                const dateDiff = new Date(b.date) - new Date(a.date);
+                if (dateDiff !== 0) return dateDiff;
+                return a.id - b.id;
+            }).slice(0, recentTxCount);
 
             if (filtered.length === 0) {
                 list.innerHTML = `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No matching transactions yet.</p>`;
