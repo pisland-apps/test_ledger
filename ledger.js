@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v219";
+        const APP_VERSION = "v220";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1287,6 +1287,19 @@
         // 12 of that year's months side by side (an "All Years" option wouldn't fit the same
         // chart shape). Stored in SETTINGS like the report card periods above.
         let monthlyTrendYear = new Date().getFullYear().toString();
+
+        // v220: "Auto-scale" — rescales the Monthly Trend axis to the SECOND-highest bar value
+        // (across income+expense, all months) instead of the tallest one, so one outlier month
+        // (e.g. a big FD payout) doesn't flatten every other month's bar down near zero. The
+        // single bar(s) that then exceed the axis get visually clipped at full plot height with a
+        // small notch mark (see clipNotchSVG in buildMonthlyTrendBarSVG) rather than a floating
+        // text label with their real value printed above them — that label idea reads fine on a
+        // wide desktop chart but collides with the legend/other bars once the same layout is
+        // squeezed onto a phone screen. The existing hover/tap tooltip already shows a bar's real
+        // value regardless of its clipped rendered height (it reads from data-val, not from pixel
+        // height), so tapping a clipped bar is how you see the true number on any screen size —
+        // one mechanism instead of two, and it already works on mobile since v215.
+        let monthlyTrendAutoScale = false;
 
         // Built-in starter categories (auto-provisioned if missing; user can still
         // rename/remove via the Categories manager same as any custom category).
@@ -2681,7 +2694,20 @@
         // sliver instead of vanishing into the baseline. Each bar carries data-* attributes read
         // by showMonthlyTrendTooltip()/hideMonthlyTrendTooltip() (wired below) for the hover
         // tooltip — no external chart library needed for that either.
-        function buildMonthlyTrendBarSVG(months, isMobile) {
+        // Small "scale break" mark (two short parallel diagonal ticks) drawn near the top of any
+        // bar that's been clipped by Auto-scale — the standard chart convention for "this bar
+        // keeps going, the axis just stops here". Centered horizontally on the bar; y is the
+        // bar's rendered top edge (= padTop, since a clipped bar always fills the full plot
+        // height). White strokes read against both the green/red bar fills used here.
+        function clipNotchSVG(x, y, barW) {
+            const midX = x + barW / 2;
+            return `
+                <line x1="${(midX - 3.5).toFixed(1)}" y1="${(y + 8).toFixed(1)}" x2="${(midX + 1.5).toFixed(1)}" y2="${(y + 2).toFixed(1)}" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></line>
+                <line x1="${(midX - 0.5).toFixed(1)}" y1="${(y + 11).toFixed(1)}" x2="${(midX + 4.5).toFixed(1)}" y2="${(y + 5).toFixed(1)}" stroke="#ffffff" stroke-width="1.5" stroke-linecap="round"></line>
+            `;
+        }
+
+        function buildMonthlyTrendBarSVG(months, isMobile, autoScale) {
             // On a narrow phone screen the SVG's viewBox gets scaled down to fit the card width,
             // so a font-size that reads fine on desktop (where the viewBox is barely scaled at
             // all) can shrink to a few real pixels on mobile and become unreadable. Rather than
@@ -2695,14 +2721,20 @@
             const monthFontSize = isMobile ? 13 : 9;
             const legendFontSize = isMobile ? 14 : 10;
             const plotW = w - padLeft - padRight, plotH = h - padTop - padBottom;
-            const maxVal = Math.max(...months.map(mo => Math.max(mo.income, mo.expense)), 0.01);
+            // All bar values (both series, every month), used to find the true max and, for
+            // Auto-scale, the second-highest value — the single value that decides the axis once
+            // the tallest bar is set aside. With 0 or 1 non-zero values there's nothing to rescale
+            // against, so Auto-scale just falls back to the normal max in that case.
+            const allVals = months.flatMap(mo => [mo.income, mo.expense]).filter(v => v > 0).sort((a, b) => b - a);
+            const trueMax = Math.max(allVals[0] || 0, 0.01);
+            const scaleBasis = (autoScale && allVals.length > 1) ? allVals[1] : trueMax;
             // Round the axis ceiling up to a "nice" number (1/2/5 × a power of ten) so gridline
             // labels read like 4,000/8,000 rather than an arbitrary max-value fraction.
-            const magnitude = Math.pow(10, Math.floor(Math.log10(maxVal || 1)));
+            const magnitude = Math.pow(10, Math.floor(Math.log10(scaleBasis || 1)));
             const niceSteps = [1, 2, 2.5, 5, 10];
             let axisMax = magnitude * 10;
             for (const step of niceSteps) {
-                if (maxVal <= magnitude * step) { axisMax = magnitude * step; break; }
+                if (scaleBasis <= magnitude * step) { axisMax = magnitude * step; break; }
             }
             const gridlineCount = isMobile ? 3 : 4;
             let gridlinesSVG = "";
@@ -2719,19 +2751,24 @@
             const barW = groupW / 2 - gap;
             const minVisibleH = 3; // any logged (>0) amount still shows a sliver even when tiny next to the tallest bar on the chart
             let barsSVG = "";
+            let notchesSVG = ""; // drawn after all bars so a clipped bar's notch never sits under its taller neighbour
             months.forEach((mo, i) => {
                 const groupX = padLeft + i * groupW;
                 const incX = groupX + gap / 2;
                 const expX = incX + barW + gap;
                 if (mo.income > 0) {
-                    const incH = Math.max(minVisibleH, (plotH * mo.income) / axisMax);
+                    const clipped = mo.income > axisMax;
+                    const incH = clipped ? plotH : Math.max(minVisibleH, (plotH * mo.income) / axisMax);
                     const incY = padTop + plotH - incH;
                     barsSVG += `<path d="${topRoundedBarPath(incX, incY, barW, incH, 3)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
+                    if (clipped) notchesSVG += clipNotchSVG(incX, incY, barW);
                 }
                 if (mo.expense > 0) {
-                    const expH = Math.max(minVisibleH, (plotH * mo.expense) / axisMax);
+                    const clipped = mo.expense > axisMax;
+                    const expH = clipped ? plotH : Math.max(minVisibleH, (plotH * mo.expense) / axisMax);
                     const expY = padTop + plotH - expH;
                     barsSVG += `<path d="${topRoundedBarPath(expX, expY, barW, expH, 3)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
+                    if (clipped) notchesSVG += clipNotchSVG(expX, expY, barW);
                 }
                 barsSVG += `<text x="${(groupX + groupW / 2).toFixed(1)}" y="${h - (isMobile ? 8 : 6)}" font-size="${monthFontSize}" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
             });
@@ -2745,6 +2782,7 @@
                     </g>
                     ${gridlinesSVG}
                     ${barsSVG}
+                    ${notchesSVG}
                 </svg>
             `;
         }
@@ -2807,13 +2845,25 @@
             // was true on first paint.
             const isMobile = window.innerWidth <= 480;
             document.getElementById("monthlyTrendChartWrap").innerHTML = hasAnyData
-                ? buildMonthlyTrendBarSVG(months, isMobile)
+                ? buildMonthlyTrendBarSVG(months, isMobile, monthlyTrendAutoScale)
                 : '<p style="font-size:0.75rem; text-align:center; color:var(--text-muted); padding: 40px 0;">No transactions logged for this year yet.</p>';
+            const toggleBtn = document.getElementById("monthlyTrendAutoScaleToggle");
+            if (toggleBtn) {
+                toggleBtn.textContent = monthlyTrendAutoScale ? "⤢ Auto-scale: On" : "⤢ Auto-scale";
+                toggleBtn.classList.toggle("active-filter-btn", monthlyTrendAutoScale);
+            }
         }
 
         async function changeMonthlyTrendYear(el) {
             monthlyTrendYear = el.value;
             await writeDB(STORES.SETTINGS, { key: "monthlyTrendYear", value: monthlyTrendYear });
+            const { accounts, txs } = await computeAccountBalances();
+            renderMonthlyTrendChart(txs, accounts);
+        }
+
+        async function toggleMonthlyTrendAutoScale() {
+            monthlyTrendAutoScale = !monthlyTrendAutoScale;
+            await writeDB(STORES.SETTINGS, { key: "monthlyTrendAutoScale", value: monthlyTrendAutoScale });
             const { accounts, txs } = await computeAccountBalances();
             renderMonthlyTrendChart(txs, accounts);
         }
@@ -11285,6 +11335,9 @@
             const storedMonthlyTrendYear = await readKeyDB("settings", "monthlyTrendYear");
             if (storedMonthlyTrendYear) monthlyTrendYear = storedMonthlyTrendYear.value || new Date().getFullYear().toString();
 
+            const storedMonthlyTrendAutoScale = await readKeyDB("settings", "monthlyTrendAutoScale");
+            if (storedMonthlyTrendAutoScale) monthlyTrendAutoScale = !!storedMonthlyTrendAutoScale.value;
+
             const storedRecentTxType = await readKeyDB("settings", "recentTxTypeFilter");
             if (storedRecentTxType) recentTxTypeFilter = storedRecentTxType.value || "both";
 
@@ -11566,6 +11619,7 @@
                                 case "reportCardPeriod1": reportCardPeriod1 = rec.value || "thisYear"; break;
                                 case "reportCardPeriod2": reportCardPeriod2 = rec.value || "thisMonth"; break;
                                 case "monthlyTrendYear": monthlyTrendYear = rec.value || new Date().getFullYear().toString(); break;
+                                case "monthlyTrendAutoScale": monthlyTrendAutoScale = !!rec.value; break;
                                 case "defaultIncomeCategory": defaultIncomeCategory = rec.value || ""; break;
                                 case "defaultExpenseCategory": defaultExpenseCategory = rec.value || ""; break;
                                 case "recentTxTypeFilter": recentTxTypeFilter = rec.value || "both"; break;
@@ -11610,6 +11664,7 @@
             closeSidebar: () => closeSidebar(),
             monthlyTrendBarTap: (el, e) => { e.stopPropagation(); showMonthlyTrendTooltip(e, el); },
             hideMonthlyTrendTooltip: () => hideMonthlyTrendTooltip(),
+            toggleMonthlyTrendAutoScale: () => toggleMonthlyTrendAutoScale(),
             openInsightsDrawer: () => openInsightsDrawer(),
             closeInsightsDrawer: () => closeInsightsDrawer(),
             sidebarGo: (el) => sidebarGo(el),

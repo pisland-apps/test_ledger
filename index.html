@@ -357,6 +357,12 @@
             transition: background-color 0.15s ease-out, color 0.15s ease-out;
         }
         .text-btn:hover { background: var(--active-bg); color: #4338ca; }
+        /* v220: filled/"on" look for toggle buttons that reuse .text-btn's sizing (currently just
+           the Monthly Trend Auto-scale toggle) — a plain-text button gives no visual cue that a
+           toggle is currently active vs. just sitting there, so this fills the pill solid once
+           active-filter-btn is added/removed by JS. */
+        .text-btn.active-filter-btn { background: var(--primary); color: #fff; }
+        .text-btn.active-filter-btn:hover { background: var(--primary); color: #fff; opacity: 0.9; }
 
         .actions-bar {
             display: grid;
@@ -2480,7 +2486,10 @@
 
         <div class="section-header">
             <span class="section-title">Monthly Trend</span>
-            <select id="monthlyTrendYearSelect" class="period-select" data-change="changeMonthlyTrendYear"></select>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
+                <button type="button" id="monthlyTrendAutoScaleToggle" class="text-btn" data-click="toggleMonthlyTrendAutoScale" style="white-space:nowrap; padding:6px 10px; font-size:0.75rem;" title="Rescale the axis to the second-highest bar so one outlier month doesn't flatten the rest — the outlier bar still shows, just clipped with a notch; tap/hover it for its real value.">⤢ Auto-scale</button>
+                <select id="monthlyTrendYearSelect" class="period-select" data-change="changeMonthlyTrendYear"></select>
+            </div>
         </div>
         <div class="report-card-mini" style="margin-bottom: 16px;">
             <div style="position:relative;">
