@@ -2442,7 +2442,7 @@
                 </div>
             </div>
             <div class="net-worth-container">
-                <div>
+                <div style="cursor:pointer;" data-click="navigateToNetWorthStatementPage" title="Tap for the full Net Worth Statement (assets vs. liabilities breakdown)">
                     <h1 id="netWorthDisplay">0.00</h1>
                     <p style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">Portfolio Net Worth</p>
                 </div>
@@ -3083,6 +3083,73 @@
                 <span id="savingsExcludedTotal" style="color: var(--text-muted); font-weight:800;">0.00</span>
             </div>
         </div>
+    </div>
+
+    <!-- ================= PAGE: NET WORTH STATEMENT (v222) — reached by tapping the Dashboard's
+         big "Portfolio Net Worth" figure. A classic personal balance-sheet layout (Assets minus
+         Liabilities = Net Current Assets, plus Fixed Assets/Real Estate = final Net Worth) built
+         from the SAME account-group taxonomy (ACCOUNT_GROUPS/ACCOUNT_SUBGROUPS in ledger.js) the
+         Accounts page already organizes accounts by, so the FINAL total here always reconciles
+         exactly to the Dashboard's headline figure — see renderNetWorthStatementPage() in
+         ledger.js for the reconciliation note. Each row is tappable through to the Accounts page
+         pre-filtered to that group/sub-group, same drill-down already used by the Accounts page's
+         own sidebar type shortcuts. -->
+    <div id="page-networth-statement" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Net Worth Statement</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">What you have, what you owe, and what's left</p>
+            </div>
+        </div>
+
+        <div class="statement-card">
+            <h4 style="margin-bottom:10px; color:var(--income-color);">WHAT I HAVE</h4>
+            <div id="nwsAssetsRows"></div>
+            <div class="statement-row" style="border-top:2px solid var(--border-color); margin-top:8px; padding-top:8px; cursor:default;">
+                <strong>Total Assets</strong>
+                <span id="nwsAssetsTotal" style="color: var(--income-color); font-weight:800;">0.00</span>
+            </div>
+        </div>
+
+        <div class="statement-card">
+            <h4 style="margin-bottom:10px; color:var(--expense-color);">WHAT I OWE</h4>
+            <div id="nwsLiabilitiesRows"></div>
+            <div class="statement-row" style="border-top:2px solid var(--border-color); margin-top:8px; padding-top:8px; cursor:default;">
+                <strong>Total Liabilities</strong>
+                <span id="nwsLiabilitiesTotal" style="color: var(--expense-color); font-weight:800;">0.00</span>
+            </div>
+        </div>
+
+        <div class="statement-card" style="border: 2px solid var(--primary); background: var(--primary-chip-bg); color: var(--primary);">
+            <div style="display:flex; justify-content:space-between; font-weight:800; font-size:1rem;">
+                <span>Net Current Assets</span>
+                <span id="nwsNetCurrentValue">0.00</span>
+            </div>
+            <p style="font-size:0.68rem; margin-top:4px; opacity:0.85; font-weight:600;">Total Assets − Total Liabilities, before Real Estate below.</p>
+        </div>
+
+        <div class="statement-card" id="nwsFixedAssetsCard" style="display:none;">
+            <h4 style="margin-bottom:10px; color:var(--salary-color);">FIXED ASSETS</h4>
+            <div id="nwsFixedAssetsRows"></div>
+            <div class="statement-row" style="border-top:2px solid var(--border-color); margin-top:8px; padding-top:8px; cursor:default;">
+                <strong>Total Fixed Assets</strong>
+                <span id="nwsFixedAssetsTotal" style="color: var(--salary-color); font-weight:800;">0.00</span>
+            </div>
+        </div>
+
+        <div class="statement-card" style="border: 2px solid var(--primary); background: var(--primary); color: #fff;">
+            <div style="display:flex; justify-content:space-between; font-weight:800; font-size:1.15rem;">
+                <span>MY NET WORTH</span>
+                <span id="nwsFinalNetWorth">0.00</span>
+            </div>
+        </div>
+
+        <p style="font-size:0.68rem; color:var(--text-muted); margin-top:-6px; margin-bottom:16px;">
+            A row with nothing in it is left out rather than shown as a zero — add an account under
+            that group/sub-group (Accounts page) for it to appear here. Tap any row to jump to
+            those accounts.
+        </p>
     </div>
 
     <!-- ================= PAGE: UNIT TRUST PORTFOLIO REPORT (new, v78) =================

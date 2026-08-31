@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v221";
+        const APP_VERSION = "v222";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1561,6 +1561,7 @@
 
             const ledgerPage = document.getElementById("page-ledger");
             const savingsPage = document.getElementById("page-savings");
+            const networthStatementPage = document.getElementById("page-networth-statement");
             const accountsPage = document.getElementById("page-accounts");
             const categoriesPage = document.getElementById("page-categories");
             const backupPage = document.getElementById("page-backup");
@@ -1590,6 +1591,7 @@
                 navigateToWorkspace();
             } else if (
                 !savingsPage.classList.contains("hidden") ||
+                !networthStatementPage.classList.contains("hidden") ||
                 !accountsPage.classList.contains("hidden") ||
                 !categoriesPage.classList.contains("hidden") ||
                 !backupPage.classList.contains("hidden") ||
@@ -2104,7 +2106,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -2134,6 +2136,7 @@
                 case "page-spending-breakdown": return "Spending Breakdown";
                 case "page-income-breakdown": return "Income Breakdown";
                 case "page-savings": return "Savings Statement";
+                case "page-networth-statement": return "Net Worth Statement";
                 case "page-portfolio-report": return "Unit Trust Portfolio";
                 case "page-owner-networth-report": return "Financial Assets vs Real Estate";
                 case "page-currency-report": return "Net Worth by Currency";
@@ -2495,6 +2498,16 @@
             window.scrollTo(0,0);
             pushVirtualState("savings");
             renderApp();
+        }
+
+        // v222: the Dashboard's big "Portfolio Net Worth" figure is tappable through to this —
+        // a classic personal balance-sheet breakdown (see renderNetWorthStatementPage() below).
+        async function navigateToNetWorthStatementPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-networth-statement");
+            window.scrollTo(0, 0);
+            pushVirtualState("networth-statement");
+            await renderNetWorthStatementPage();
         }
 
         // Clears just the report-card-driven month scope on the Savings Statement, leaving the
@@ -6157,6 +6170,108 @@
                 }
             });
             return { total, currencyTotals };
+        }
+
+        // v222: Net Worth Statement page — a classic personal balance-sheet layout (reached by
+        // tapping the Dashboard's big Portfolio Net Worth figure). Buckets every account by its
+        // existing group/sub-group (ACCOUNT_GROUPS/ACCOUNT_SUBGROUPS) into Assets / Liabilities /
+        // Fixed Assets sections, respecting the same includeInNetWorth opt-out and the same
+        // accountBaseValue() conversion every other net-worth figure in this app uses — so the
+        // three section totals always add up to EXACTLY the Dashboard's headline number (Assets +
+        // Liabilities are naturally signed: a Credit Card/Bank Loan balance is already negative,
+        // "amount owed" being -balance, same convention documented on the Pay button's hint text
+        // — so "Net Current Assets = Total Assets + Total Liabilities" is just addition, no
+        // special-casing). A group/sub-group with nothing in it is skipped entirely rather than
+        // shown as a zero row, same "don't show empty" convention the Net Savings Statement uses
+        // for categories with no transactions.
+        async function renderNetWorthStatementPage() {
+            const { accounts, nativeBalances } = await computeAccountBalances();
+            const included = accounts.filter(a => a.includeInNetWorth !== false);
+
+            // Sums accountBaseValue() over every account matching `group` (and, if given,
+            // exactly that `subgroup` — pass a list to merge a few subgroups into one row, e.g.
+            // Savings + Cash below). `catchAllSubgroups`, when given, ADDITIONALLY sums any
+            // account in that group whose subgroup ISN'T one of the group's known subgroups
+            // (typically "" — never assigned one) — used once per section so an orphaned account
+            // still counts toward that section's total even though it gets no dedicated row.
+            const sumGroup = (group, subgroups = null) => included
+                .filter(a => (a.group || DEFAULT_ACCOUNT_GROUP) === group && (subgroups === null || subgroups.includes(a.subgroup || "")))
+                .reduce((sum, a) => sum + accountBaseValue(a, nativeBalances), 0);
+
+            const nwsRow = (label, amount, group, subgroup = "") => {
+                if (Math.abs(amount) < 0.005) return ""; // nothing here — skip the row rather than show a zero
+                return `
+                    <div class="statement-row" data-click="sidebarFilterAccountsByType" data-group="${escapeHtml(group)}" data-subgroup="${escapeHtml(subgroup)}" data-label="${escapeHtml(label)}">
+                        <span>${escapeHtml(label)}</span>
+                        <span style="font-weight:700;">${formatBalanceHTML(amount, baseCurrency)}</span>
+                    </div>
+                `;
+            };
+
+            // --- WHAT I HAVE ---
+            const currentAcct = sumGroup("Bank/Cash", ["Current Account"]);
+            // v222 note: kept as 2 separate rows rather than one merged "Savings & Cash Account"
+            // line — sidebarFilterAccountsByType/navigateToAccountsPage only support an EXACT
+            // single subgroup match (see the Accounts page's own filter, a few hundred lines up:
+            // `(a.subgroup||"") === (filter.subgroup||"")`), so a merged row's tap-through would
+            // have had no single subgroup value that actually matches both underlying subgroups —
+            // it'd either show nothing or only one of the two. Two precise, correctly-tappable
+            // rows beat one convenient-looking but broken one.
+            const savingsAcct = sumGroup("Bank/Cash", ["Savings Account"]);
+            const cashAcct = sumGroup("Bank/Cash", ["Cash Account"]);
+            const otherBankTotal = sumGroup("Bank/Cash", [""]); // un-sub-grouped Bank/Cash accounts
+            const foreignMoneyAcct = sumGroup("Multi-Currency");
+
+            const fdTotal = sumGroup("Investment", ["Fixed Deposit"]);
+            const kwspTotal = sumGroup("Investment", ["KWSP"]);
+            const cpfTotal = sumGroup("Investment", ["CPF"]);
+            const asnbTotal = sumGroup("Investment", ["ASNB"]);
+            const unitTrustTotal = sumGroup("Investment", ["Unit Trust"]);
+            const otherInvTotal = sumGroup("Investment", [""]); // un-sub-grouped Investment accounts
+
+            const otherAssetsTotal = sumGroup("Other Assets");
+
+            document.getElementById("nwsAssetsRows").innerHTML = [
+                nwsRow("Current Account", currentAcct, "Bank/Cash", "Current Account"),
+                nwsRow("Savings Account", savingsAcct, "Bank/Cash", "Savings Account"),
+                nwsRow("Cash Account", cashAcct, "Bank/Cash", "Cash Account"),
+                nwsRow("Other Bank/Cash", otherBankTotal, "Bank/Cash", ""),
+                nwsRow("Foreign Money Account", foreignMoneyAcct, "Multi-Currency"),
+                nwsRow("Fixed Deposit", fdTotal, "Investment", "Fixed Deposit"),
+                nwsRow("KWSP", kwspTotal, "Investment", "KWSP"),
+                nwsRow("CPF", cpfTotal, "Investment", "CPF"),
+                nwsRow("ASNB", asnbTotal, "Investment", "ASNB"),
+                nwsRow("Unit Trust", unitTrustTotal, "Investment", "Unit Trust"),
+                nwsRow("Other Investment", otherInvTotal, "Investment", ""),
+                nwsRow("Other Assets", otherAssetsTotal, "Other Assets"),
+            ].join("") || `<p style="font-size:0.75rem; color:var(--text-muted);">No asset accounts yet.</p>`;
+            const totalAssets = currentAcct + savingsAcct + cashAcct + otherBankTotal + foreignMoneyAcct + fdTotal + kwspTotal + cpfTotal + asnbTotal + unitTrustTotal + otherInvTotal + otherAssetsTotal;
+            document.getElementById("nwsAssetsTotal").innerHTML = formatBalanceHTML(totalAssets, baseCurrency);
+
+            // --- WHAT I OWE ---
+            const bankLoanTotal = sumGroup("Bank Loan");
+            const creditCardTotal = sumGroup("Credit Card");
+            const otherLiabTotal = sumGroup("Other Liabilities");
+
+            document.getElementById("nwsLiabilitiesRows").innerHTML = [
+                nwsRow("Bank Loan", bankLoanTotal, "Bank Loan"),
+                nwsRow("Credit Card", creditCardTotal, "Credit Card"),
+                nwsRow("Other Liabilities", otherLiabTotal, "Other Liabilities"),
+            ].join("") || `<p style="font-size:0.75rem; color:var(--text-muted);">No liabilities logged — nothing owed.</p>`;
+            const totalLiabilities = bankLoanTotal + creditCardTotal + otherLiabTotal; // already negative (or 0) — see the function-level comment
+            document.getElementById("nwsLiabilitiesTotal").innerHTML = formatBalanceHTML(totalLiabilities, baseCurrency);
+
+            const netCurrentAssets = totalAssets + totalLiabilities;
+            document.getElementById("nwsNetCurrentValue").innerHTML = formatBalanceHTML(netCurrentAssets, baseCurrency);
+
+            // --- FIXED ASSETS (Real Estate) ---
+            const realEstateTotal = sumGroup("Real Estate");
+            const hasRealEstate = included.some(a => (a.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate");
+            document.getElementById("nwsFixedAssetsCard").classList.toggle("hidden", !hasRealEstate);
+            document.getElementById("nwsFixedAssetsRows").innerHTML = nwsRow("Real Estate", realEstateTotal, "Real Estate");
+            document.getElementById("nwsFixedAssetsTotal").innerHTML = formatBalanceHTML(realEstateTotal, baseCurrency);
+
+            document.getElementById("nwsFinalNetWorth").innerHTML = formatBalanceHTML(netCurrentAssets + realEstateTotal, baseCurrency);
         }
 
         // Flips the "Net Worth by Member" section between expanded/collapsed and persists the
@@ -11673,6 +11788,7 @@
             monthlyTrendBarTap: (el, e) => { e.stopPropagation(); showMonthlyTrendTooltip(e, el); },
             hideMonthlyTrendTooltip: () => hideMonthlyTrendTooltip(),
             toggleMonthlyTrendAutoScale: () => toggleMonthlyTrendAutoScale(),
+            navigateToNetWorthStatementPage: () => navigateToNetWorthStatementPage(),
             openInsightsDrawer: () => openInsightsDrawer(),
             closeInsightsDrawer: () => closeInsightsDrawer(),
             sidebarGo: (el) => sidebarGo(el),
