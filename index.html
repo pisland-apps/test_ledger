@@ -1539,6 +1539,27 @@
             box-shadow: var(--card-shadow);
         }
 
+        /* v225 fix: on Android/Chrome, tapping directly on a word inside plain (selectable) text
+           can be interpreted as a text-selection tap rather than a click on the row — this pops
+           up Chrome's built-in "Search Google for '<word>'" bar (and/or the text-selection
+           handles) ON TOP OF whatever the tap's own data-click handler already opened (e.g. the
+           Recent Transactions Quick View card), instead of the tap. Root cause: none of the
+           app's tappable row classes ever set user-select:none, so their text stayed normal
+           selectable page text even though visually they're buttons/rows. Fixed once, app-wide,
+           on every shared tappable-row class (covers Dashboard Accounts/Recent Transactions
+           widgets, the main Ledger list, Accounts list/cards, the Net Worth Statement rows, the
+           Settings/config list, and the sidebar) rather than only the one the user hit — same
+           tap-on-text gap exists on all of them. -webkit-touch-callout:none also suppresses
+           iOS's long-press callout (copy/lookup) menu on these same rows for the same reason.
+           -webkit-tap-highlight-color:transparent removes the default gray flash Android/iOS
+           browsers draw on tap, now redundant with each class's own :active background. */
+        .ledger-item, .config-item, .statement-row, .sidebar-item {
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
         .ledger-item {
             display: flex;
             justify-content: space-between;
