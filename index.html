@@ -3863,8 +3863,25 @@
 
     <!-- MODAL: Select a Transaction Template (v227) — opened via the ⭐ button in the Add/Edit
          Transaction modal header (#txTemplateStarBtn). Picking a row fills the still-open
-         transaction form; nothing is saved here. -->
-    <div class="modal" id="templatePickerModal">
+         transaction form; nothing is saved here.
+         z-index:1400 (v228 bugfix): this modal opens NESTED on top of an already-active txModal
+         (tap ⭐ inside Add/Edit Transaction), but every .modal shares the same base z-index:1000
+         and this markup sits BEFORE txModal in source order, so without an explicit override
+         txModal — the later modal in source — painted on top regardless of which one actually
+         opened more recently. That silently put the still-open txModal IN FRONT of the newly-
+         opened picker, hiding it entirely behind the transaction form. From there, tapping
+         txModal's × (the picker being invisible, there was nothing else to tap) closed txModal
+         while the picker was still on top of modalStack, which trimmed the picker out of
+         modalStack's bookkeeping without removing its DOM "active" class — leaving it visible but
+         fully desynced from history, so every button inside it (including its own ×) called
+         closeModal() with no matching modalStack entry left to pop: history.back() fired but no
+         "active" class was ever removed, so the picker looked completely unresponsive and
+         un-closeable. Matches the app's existing convention for this exact situation — see
+         calcPadModal's z-index:1500 and attachmentViewerModal's z-index:1600 overrides elsewhere
+         in this file, both opened on top of txModal the same way; picked the same tier as
+         txOptionsModal/txSplitPickerModal (1400) since none of these ever nest on top of each
+         other. -->
+    <div class="modal" id="templatePickerModal" style="z-index:1400;">
         <div class="modal-sheet" style="padding:0; display:flex; flex-direction:column; overflow:hidden; max-height:75vh;">
             <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; padding:20px 20px 12px; flex-shrink:0; border-bottom:1px solid var(--border-color);">
                 <h3 style="font-weight: 800;">Select a Transaction Template</h3>
