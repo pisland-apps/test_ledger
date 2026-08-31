@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v225";
+        const APP_VERSION = "v226";
         const APP_VERSION_DATE = "2026-08-31";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1729,6 +1729,7 @@
             sel.innerHTML = `<option value="all">All Accounts</option>` +
                 accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
             sel.value = accounts.some(a => a.id === current) ? current : "all";
+            syncAccountPickerButtonText("recentTxAccountSelect");
         }
 
         function populateRecentTxCountSelect() {
@@ -1751,6 +1752,8 @@
             const countSel = document.getElementById("recentTxCountSelect");
             if (typeSel) typeSel.value = recentTxTypeFilter;
             if (countSel) countSel.value = String(recentTxCount);
+            syncAccountPickerButtonText("recentTxTypeSelect");
+            syncAccountPickerButtonText("recentTxCountSelect");
 
             let filtered = txs.filter(t => t.type === "income" || t.type === "expense");
             if (recentTxTypeFilter !== "both") filtered = filtered.filter(t => t.type === recentTxTypeFilter);
@@ -1815,6 +1818,7 @@
             if (isHidden) {
                 const orderSel = document.getElementById("dashboardWidgetOrderSelect");
                 if (orderSel) orderSel.value = dashboardWidgetOrder;
+                syncAccountPickerButtonText("dashboardWidgetOrderSelect");
             }
             panel.style.display = isHidden ? "flex" : "none";
         }
@@ -1950,16 +1954,27 @@
         // Builds one account-picker <select> per configured slot (1..pinnedAccountCount), each
         // pre-selected to whichever account is currently pinned there — mirrors the reference
         // screenshot's "Number of items shown" + one numbered dropdown per slot layout.
+        // v226: each slot's <select> now pairs with an account-picker-btn (see openAccountPicker())
+        // instead of rendering as a plain native <select> — matches the styling the user pointed
+        // to (Image 1's "Select Account" list) used elsewhere in the app (srcAccount,
+        // defaultPaymentAccountSelect, etc.), rather than the OS's own cramped dropdown/wheel.
+        // Needs a stable per-slot id (`pinnedAccountSlotSelect${i}`) since data-select targets an
+        // id, not a data-slot index — data-slot is kept on the (now-hidden) <select> itself only
+        // for handlePinnedAccountSlotChange to read.
         function renderPinnedAccountSlotSelects(accounts) {
             const wrap = document.getElementById("pinnedAccountSlotSelects");
             if (!wrap) return;
             let html = "";
             for (let i = 0; i < pinnedAccountCount; i++) {
                 const current = pinnedAccountIds[i] || "";
+                const selId = `pinnedAccountSlotSelect${i}`;
                 html += `
                     <div class="form-row" style="margin-bottom:0;">
                         <label>${i + 1}:</label>
-                        <select data-change="handlePinnedAccountSlotChange" data-slot="${i}">
+                        <button type="button" id="${selId}Btn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="${selId}" data-title="Slot ${i + 1} Account">
+                            <span id="${selId}BtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="${selId}" style="display:none;" data-change="handlePinnedAccountSlotChange" data-slot="${i}">
                             <option value="">(None)</option>
                             ${accounts.map(a => `<option value="${escapeHtml(a.id)}" ${a.id === current ? "selected" : ""}>${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("")}
                         </select>
@@ -1967,6 +1982,10 @@
                 `;
             }
             wrap.innerHTML = html;
+            // Button labels are freshly-rendered DOM, not carried over from before, so each one
+            // needs an explicit sync — the `selected` attribute above only sets the hidden
+            // <select>'s value, it doesn't touch its picker button's text on its own.
+            for (let i = 0; i < pinnedAccountCount; i++) syncAccountPickerButtonText(`pinnedAccountSlotSelect${i}`);
         }
 
         async function handlePinnedAccountCountChange() {
@@ -2000,6 +2019,7 @@
             populatePinnedAccountCountSelect();
             const countSel = document.getElementById("pinnedAccountCountSelect");
             if (countSel) countSel.value = String(pinnedAccountCount);
+            syncAccountPickerButtonText("pinnedAccountCountSelect");
             renderPinnedAccountSlotSelects(accounts);
 
             const rows = pinnedAccountIds

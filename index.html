@@ -3296,7 +3296,10 @@
             <div id="dashboardWidgetsSettingsPanel" style="display:none; flex-direction:column; gap:14px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
                 <div class="form-row" style="margin-bottom:0;">
                     <label>Order on Dashboard</label>
-                    <select id="dashboardWidgetOrderSelect" data-change="handleDashboardWidgetOrderChange">
+                    <button type="button" id="dashboardWidgetOrderSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="dashboardWidgetOrderSelect" data-title="Order on Dashboard">
+                        <span id="dashboardWidgetOrderSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="dashboardWidgetOrderSelect" style="display:none;" data-change="handleDashboardWidgetOrderChange">
                         <option value="accounts-first">Accounts, then Recent Transactions</option>
                         <option value="recenttx-first">Recent Transactions, then Accounts</option>
                     </select>
@@ -3305,7 +3308,10 @@
                     <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">ACCOUNTS WIDGET</p>
                     <div class="form-row" style="margin-bottom:0;">
                         <label>Number of items shown</label>
-                        <select id="pinnedAccountCountSelect" data-change="handlePinnedAccountCountChange"></select>
+                        <button type="button" id="pinnedAccountCountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="pinnedAccountCountSelect" data-title="Number of Items Shown">
+                            <span id="pinnedAccountCountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="pinnedAccountCountSelect" style="display:none;" data-change="handlePinnedAccountCountChange"></select>
                     </div>
                     <div id="pinnedAccountSlotSelects" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
                 </div>
@@ -3313,7 +3319,10 @@
                     <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">RECENT TRANSACTIONS WIDGET</p>
                     <div class="form-row" style="margin-bottom:0;">
                         <label>Show</label>
-                        <select id="recentTxTypeSelect" data-change="handleRecentTxSettingChange">
+                        <button type="button" id="recentTxTypeSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxTypeSelect" data-title="Show">
+                            <span id="recentTxTypeSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="recentTxTypeSelect" style="display:none;" data-change="handleRecentTxSettingChange">
                             <option value="both">Income + Expense</option>
                             <option value="income">Income Only</option>
                             <option value="expense">Expense Only</option>
@@ -3321,13 +3330,19 @@
                     </div>
                     <div class="form-row" style="margin-bottom:0; margin-top:8px;">
                         <label>Account</label>
-                        <select id="recentTxAccountSelect" data-change="handleRecentTxSettingChange">
+                        <button type="button" id="recentTxAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxAccountSelect" data-title="Select Account">
+                            <span id="recentTxAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="recentTxAccountSelect" style="display:none;" data-change="handleRecentTxSettingChange">
                             <option value="all">All Accounts</option>
                         </select>
                     </div>
                     <div class="form-row" style="margin-bottom:0; margin-top:8px;">
                         <label>Number of items</label>
-                        <select id="recentTxCountSelect" data-change="handleRecentTxSettingChange"></select>
+                        <button type="button" id="recentTxCountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxCountSelect" data-title="Number of Items">
+                            <span id="recentTxCountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="recentTxCountSelect" style="display:none;" data-change="handleRecentTxSettingChange"></select>
                     </div>
                 </div>
             </div>
