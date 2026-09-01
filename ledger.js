@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v244";
+        const APP_VERSION = "v245";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -202,6 +202,37 @@
                 // dropdowns and the NAV Date picker icon, which our CSS vars can't reach directly.
                 colorScheme: "dark",
                 themeColor: "#0a0a0f",
+            },
+            {
+                // 蠟筆小新風格 (Crayon Shin-chan style) — a full override like midnight/slate
+                // above, not a bg-only preset, since the crayon look needs its own primary/
+                // income/expense/salary hues (Shin-chan's blue/green/red/yellow) plus a warm
+                // cream page background and a bold, saturated border color for that
+                // "thick-outline crayon/cutout" edge (actual border *width* is bumped by the
+                // scoped html[data-bg-theme="crayon"] CSS rules in index.html — CSS vars alone
+                // can't change border-width, only its color). cardShadow uses a crisp, unblurred
+                // offset (no rgba blur radius beyond 0) to read as a flat construction-paper
+                // drop-shadow instead of a soft realistic one.
+                id: "crayon", name: "蠟筆小新",
+                bg: "#FFF8DC", cardBg: "#FFFDF5", textMain: "#3A2E1F", textMuted: "#8a7358",
+                borderColor: "#E63946",
+                cardTopBorderColor: "#E63946",
+                neuLight: "rgba(255,255,255,0.85)", neuDark: "rgba(230,57,70,0.30)",
+                neuPrimaryLight: "rgba(255,255,255,0.30)", neuPrimaryDark: "rgba(69,123,157,0.55)",
+                glassBg: "rgba(255,248,220,0.75)", glassBgStrong: "rgba(255,248,220,0.90)",
+                glassBgModal: "#FFFDF5", glassBorder: "rgba(230,57,70,0.35)", modalSheetBorder: "#E63946",
+                hoverBg: "#FFF1B8", pressBg: "#FFE9A0", activeBg: "#FFE9A0", activeBorder: "#FFE66D", chipBg: "#FFF1B8",
+                incomeChipBg: "#e6f5f3", incomeChipBorder: "#2A9D8F",
+                expenseChipBg: "#fdeaec", expenseChipBorder: "#E63946",
+                primaryChipBg: "#eaf2f6",
+                cardShadow: "4px 4px 0px rgba(230,57,70,0.22)",
+                hardwareTrackBg: "#f4ede4", hardwareTrackBorder: "#dcd1c4",
+                hardwareFillStart: "#FFE66D", hardwareFillEnd: "#E8A400",
+                dropdownOptionBg: "#FFFDF5",
+                primary: "#457B9D", incomeColor: "#2A9D8F", expenseColor: "#E63946",
+                transferColor: "#8b5cf6", salaryColor: "#E8A400",
+                colorScheme: "light",
+                themeColor: "#E63946",
             },
         ];
         const BG_THEME_STORAGE_KEY = "ledgerBgTheme";
@@ -6025,6 +6056,12 @@
             for (const key in BG_THEME_VAR_MAP) {
                 document.documentElement.style.setProperty(BG_THEME_VAR_MAP[key], theme[key] || THEME_DEFAULTS[key]);
             }
+            // v245: exposes the active preset's id as an attribute (not just CSS-var values) so
+            // a preset can opt into extra structural CSS the shared vars can't express — e.g.
+            // the 蠟筆小新/crayon preset's thicker borders + bigger corner radii + hover wiggle,
+            // scoped in index.html as html[data-bg-theme="crayon"] rules. Every other preset
+            // just doesn't match those selectors, so this is a no-op for them.
+            document.documentElement.setAttribute("data-bg-theme", theme.id);
             const metaThemeColor = document.querySelector('meta[name="theme-color"]');
             if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor || THEME_DEFAULTS.themeColor);
             if (save) {

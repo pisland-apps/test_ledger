@@ -2160,6 +2160,49 @@
             h1, h2, h3, .section-header { break-after: avoid; }
             a[href]::after { content: none !important; }
         }
+
+        /* v245: 蠟筆小新 (Crayon Shin-chan) preset — scoped entirely under this attribute
+           selector (set by applyBgTheme()/the head no-flash script) so every other preset is
+           completely untouched. The shared --border-color/--card-shadow vars (see BG_THEMES'
+           "crayon" entry in ledger.js) already carry this preset's colors; what CSS vars can't
+           express — thicker border *width*, bigger corner radius, a playful hover wiggle, and a
+           chunkier "pressed paper" tap response — is layered on here instead. Each selector list
+           below reuses this app's existing card/button/chip class names (not new markup), so it
+           applies retroactively to every page without any HTML changes. */
+        html[data-bg-theme="crayon"] header,
+        html[data-bg-theme="crayon"] .card,
+        html[data-bg-theme="crayon"] .report-card,
+        html[data-bg-theme="crayon"] .report-card-mini,
+        html[data-bg-theme="crayon"] .ledger-item,
+        html[data-bg-theme="crayon"] .config-item,
+        html[data-bg-theme="crayon"] .statement-card,
+        html[data-bg-theme="crayon"] .statement-row,
+        html[data-bg-theme="crayon"] .modal-sheet,
+        html[data-bg-theme="crayon"] .stat-box {
+            border-width: 2.5px;
+            border-radius: 20px;
+        }
+        html[data-bg-theme="crayon"] .action-btn,
+        html[data-bg-theme="crayon"] .btn-util {
+            border-radius: 16px;
+        }
+        /* Chunky rounded corners + a playful little shake on hover for anything button-like —
+           mirrors 臘筆小新风格.md's "hover 時加輕微晃動（wiggle）效果，點擊時元素會「壓下去」". */
+        html[data-bg-theme="crayon"] .action-btn:hover,
+        html[data-bg-theme="crayon"] .fab-btn:hover,
+        html[data-bg-theme="crayon"] .btn-util:hover {
+            animation: crayon-wiggle 0.35s ease;
+        }
+        html[data-bg-theme="crayon"] .action-btn:active,
+        html[data-bg-theme="crayon"] .fab-btn:active,
+        html[data-bg-theme="crayon"] .btn-util:active {
+            transform: translate(2px, 2px) !important;
+        }
+        @keyframes crayon-wiggle {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(-3deg); }
+            75% { transform: rotate(3deg); }
+        }
     </style>
     <!-- v179: apply any saved background-theme choice before first paint, so the page never
          flashes the default slate background and then jumps to the user's chosen tint.
@@ -2269,6 +2312,10 @@
                         if (m) m.setAttribute("content", saved.themeColor);
                     }
                 }
+                // v245: mirrors ledger.js's applyBgTheme() data-bg-theme attribute here too, so
+                // the crayon preset's scoped border/radius/wiggle CSS (see index.html <style>)
+                // is already active before first paint instead of popping in a frame late.
+                if (saved && saved.id) document.documentElement.setAttribute("data-bg-theme", saved.id);
             } catch (e) {}
         })();
     </script>
