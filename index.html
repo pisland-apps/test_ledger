@@ -2828,14 +2828,36 @@
         </div>
 
         <!-- Quick-add type picker (v34) — lets a new Income/Expense/Transfer entry be logged
-             straight from an account's own Activity page, pre-selecting that account. -->
+             straight from an account's own Activity page, pre-selecting that account.
+             v251: restyled from the plain rectangular action-btn row to the same circular
+             icon speed-dial used by the Dashboard's "+" FAB (speed-dial-sheet/speed-dial-row/
+             speed-dial-fab, sd-transfer/sd-income/sd-expense — v173-176), so every Activity
+             page (Account/Currency/Portfolio, all sharing this #page-ledger markup) matches
+             the dashboard's visual language. Still only Income/Expense/Transfer (no Salary,
+             matching the pre-existing scope of this sheet) and still calls quickAddChooseType
+             via data-type, unchanged. -->
         <div id="ledgerQuickAddBackdrop" class="quick-add-backdrop" style="display:none;" data-click="closeLedgerQuickAddSheet"></div>
-        <div id="ledgerQuickAddSheet" class="quick-add-sheet" style="display:none;">
-            <button class="action-btn btn-income" data-click="quickAddChooseType" data-type="income"><span>🟢 Income</span></button>
-            <button class="action-btn btn-expense" data-click="quickAddChooseType" data-type="expense"><span>🔴 Expense</span></button>
-            <button class="action-btn btn-transfer" data-click="quickAddChooseType" data-type="transfer"><span>🔄 Transfer</span></button>
+        <div id="ledgerQuickAddSheet" class="speed-dial-sheet" style="display:none;">
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Transfer money</span>
+                <button class="speed-dial-fab sd-transfer" data-click="quickAddChooseType" data-type="transfer" aria-label="Transfer money" title="Transfer money">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>
+                </button>
+            </div>
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Income</span>
+                <button class="speed-dial-fab sd-income" data-click="quickAddChooseType" data-type="income" aria-label="Income" title="Income">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+            </div>
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Expense</span>
+                <button class="speed-dial-fab sd-expense" data-click="quickAddChooseType" data-type="expense" aria-label="Expense" title="Expense">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                </button>
+            </div>
         </div>
-        <button class="fab-btn" data-click="toggleLedgerQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
+        <button class="fab-btn" id="ledgerQuickAddFab" data-click="toggleLedgerQuickAddSheet" aria-label="Add transaction" title="Add transaction">+</button>
     </div>
 
     <!-- MODAL: Description Summary (v188) — reached via the 📝 button on a category's ledger view

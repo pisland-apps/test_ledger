@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v250";
+        const APP_VERSION = "v251";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2663,16 +2663,20 @@
         }
 
         // Quick-add type picker (v34) — the "+" FAB on an account's own Activity page.
+        // v251: mirrors toggleDashboardQuickAddSheet()'s "+"→"×" rotate (fab-btn-open) now that
+        // this sheet uses the same speed-dial-sheet visual as the dashboard.
         function toggleLedgerQuickAddSheet() {
             const sheet = document.getElementById("ledgerQuickAddSheet");
             const isOpen = sheet.style.display === "flex";
             sheet.style.display = isOpen ? "none" : "flex";
             document.getElementById("ledgerQuickAddBackdrop").style.display = isOpen ? "none" : "block";
+            document.getElementById("ledgerQuickAddFab").classList.toggle("fab-btn-open", !isOpen);
         }
 
         function closeLedgerQuickAddSheet() {
             document.getElementById("ledgerQuickAddSheet").style.display = "none";
             document.getElementById("ledgerQuickAddBackdrop").style.display = "none";
+            document.getElementById("ledgerQuickAddFab").classList.remove("fab-btn-open");
         }
 
         function quickAddChooseType(el) {
