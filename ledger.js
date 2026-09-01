@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v249";
+        const APP_VERSION = "v250";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -6195,60 +6195,49 @@
             setCrayonFontEnabled(!!(toggle && toggle.checked));
         }
 
-        // v249: Privacy Mode — see the CSS comment on html[data-privacy-mode="on"] in
+        // v250: Privacy Mode — see the CSS comment on html[data-privacy-mode="on"] in
         // index.html for how the blur itself works. This block only owns the on/off state, the
-        // header button's icon, and the tap-to-reveal-then-auto-reblur behavior.
+        // header button's icon, and per-figure reveal/reblur. Default is ON (blurred) — an
+        // unset key means "never touched the setting", not "chose to turn it off" — so a fresh
+        // install is blurred-by-default rather than silently exposing amounts on first launch.
         const PRIVACY_MODE_KEY = "ledgerPrivacyModeEnabled";
         function isPrivacyModeEnabled() {
-            return localStorage.getItem(PRIVACY_MODE_KEY) === "1";
+            const v = localStorage.getItem(PRIVACY_MODE_KEY);
+            return v === null ? true : v === "1";
         }
+        // Feather-style outline icons (viewBox 0 0 24 24, stroke=currentColor, stroke-width=2,
+        // round caps/joins) — matches the sidebar nav icons elsewhere in this file exactly,
+        // rather than the emoji this button used before. Swapped via innerHTML in
+        // applyPrivacyModeAttr() below (open eye = currently visible/off; crossed-out eye =
+        // currently blurred/on — same convention as a password field's show/hide toggle).
+        const PRIVACY_ICON_EYE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>';
+        const PRIVACY_ICON_EYE_OFF = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
         function applyPrivacyModeAttr() {
             const enabled = isPrivacyModeEnabled();
             document.documentElement.setAttribute("data-privacy-mode", enabled ? "on" : "off");
             const btn = document.getElementById("privacyModeToggleBtn");
             if (btn) {
-                btn.textContent = enabled ? "👁️" : "🙈";
-                btn.title = enabled ? "Privacy mode on — tap amounts to reveal (Settings icon here to turn off)" : "Toggle privacy mode (blur amounts)";
+                btn.innerHTML = enabled ? PRIVACY_ICON_EYE_OFF : PRIVACY_ICON_EYE;
+                btn.title = enabled ? "Privacy mode on — tap an amount to reveal it (tap here to turn off)" : "Toggle privacy mode (blur amounts)";
             }
         }
         function togglePrivacyMode() {
             const enabling = !isPrivacyModeEnabled();
             try { localStorage.setItem(PRIVACY_MODE_KEY, enabling ? "1" : "0"); } catch (e) {}
             if (enabling) {
-                // Turning it ON should hide everything immediately — clear any figure that
-                // happened to be mid-reveal (and its pending auto-reblur timer) rather than
-                // leaving it visibly exposed until its timer runs out.
-                document.querySelectorAll(".privacy-amount-value.revealed").forEach(el => {
-                    el.classList.remove("revealed");
-                    clearPrivacyRevealTimer(el);
-                });
+                // Turning it back ON should hide everything immediately, not leave whatever was
+                // mid-reveal exposed until it's individually re-tapped.
+                document.querySelectorAll(".privacy-amount-value.revealed").forEach(el => el.classList.remove("revealed"));
             }
             applyPrivacyModeAttr();
         }
-        // WeakMap (not a data-* attribute) so each element's pending auto-reblur timeout is
-        // tracked without leaking into the DOM or colliding with anything else on the element.
-        const privacyRevealTimers = new WeakMap();
-        function clearPrivacyRevealTimer(el) {
-            const t = privacyRevealTimers.get(el);
-            if (t) { clearTimeout(t); privacyRevealTimers.delete(el); }
-        }
-        // Reveals one figure for a few seconds, then reblurs it automatically — a deliberate
-        // "peek" rather than a persistent unlock, so glancing at your own balance while
-        // recording an expense around other people doesn't require remembering to hide it
-        // again afterwards. Re-tapping an already-revealed figure hides it early.
-        function revealPrivacyAmountTemporarily(el, ms = 4000) {
+        // v250: was a 4-second auto-reblur — per feedback, a revealed figure should instead stay
+        // revealed until the user manually re-taps it, turns Privacy Mode off, or closes/
+        // reloads the app (a fresh page load never restores "revealed" — see applyPrivacyModeAttr()
+        // above and the <head> no-flash script, neither of which ever add the "revealed" class).
+        function togglePrivacyAmountReveal(el) {
             if (!el) return;
-            if (el.classList.contains("revealed")) {
-                el.classList.remove("revealed");
-                clearPrivacyRevealTimer(el);
-                return;
-            }
-            el.classList.add("revealed");
-            clearPrivacyRevealTimer(el);
-            privacyRevealTimers.set(el, setTimeout(() => {
-                el.classList.remove("revealed");
-                privacyRevealTimers.delete(el);
-            }, ms));
+            el.classList.toggle("revealed");
         }
 
         // v184: re-applies the saved theme the moment this script parses (this runs long before
@@ -12822,7 +12811,7 @@
             netWorthCardTap: () => {
                 const amountEl = document.getElementById("netWorthDisplay");
                 if (isPrivacyModeEnabled() && amountEl && !amountEl.classList.contains("revealed")) {
-                    revealPrivacyAmountTemporarily(amountEl);
+                    togglePrivacyAmountReveal(amountEl);
                     return;
                 }
                 navigateToNetWorthStatementPage();
@@ -12833,7 +12822,7 @@
             // anything for the CSS in index.html to reveal).
             togglePrivacyReveal: (el) => {
                 const amountEl = el.querySelector(".privacy-amount-value");
-                if (amountEl) revealPrivacyAmountTemporarily(amountEl);
+                togglePrivacyAmountReveal(amountEl);
             },
             togglePrivacyMode: () => togglePrivacyMode(),
             openInsightsDrawer: () => openInsightsDrawer(),

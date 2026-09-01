@@ -2247,10 +2247,10 @@
            figure's rough shape/length visible through the "glass" — a legible-but-obscured
            frosted look — rather than fully disappearing. Independent of every other preset/
            theme, so it applies the same way under every Background Theme.
-           v249: excludes elements with the .revealed class — added on tap (netWorthCardTap /
-           togglePrivacyReveal below) and auto-removed a few seconds later by
-           revealPrivacyAmountTemporarily()'s timeout, so a peek doesn't stay open forever if
-           you get distracted mid-transaction. */
+           v250: excludes elements with the .revealed class — added on tap (netWorthCardTap /
+           togglePrivacyReveal below) and removed again only by another manual tap, turning
+           Privacy Mode off, or a fresh page load/app restart (nothing here ever re-adds it on
+           a timer — see togglePrivacyAmountReveal() in ledger.js). */
         html[data-privacy-mode="on"] .privacy-amount-value:not(.revealed) {
             filter: blur(8px);
             cursor: pointer;
@@ -2388,7 +2388,10 @@
                 // Privacy Mode — a real amount briefly flashing unblurred for one frame while
                 // someone's phone screen is visible to bystanders is exactly the scenario this
                 // feature exists to prevent, so it can't wait for ledger.js to run.
-                if (localStorage.getItem("ledgerPrivacyModeEnabled") === "1") {
+                // v250: default is ON (blurred) — only an explicit "0" (user turned it off)
+                // skips setting the attribute; an unset key (never touched) still blurs, so a
+                // fresh install is private-by-default instead of exposing amounts on first launch.
+                if (localStorage.getItem("ledgerPrivacyModeEnabled") !== "0") {
                     document.documentElement.setAttribute("data-privacy-mode", "on");
                 }
             } catch (e) {}
@@ -2592,7 +2595,7 @@
                          doesn't broadcast your balance; a blurred figure reveals on tap for a
                          few seconds. State persists (localStorage), independent of every other
                          toggle. Icon/label kept in sync by applyPrivacyModeAttr(). -->
-                    <button class="lock-btn-header" id="privacyModeToggleBtn" title="Toggle privacy mode (blur amounts)" aria-label="Toggle privacy mode" data-click="togglePrivacyMode">🙈</button>
+                    <button class="lock-btn-header" id="privacyModeToggleBtn" title="Toggle privacy mode (blur amounts)" aria-label="Toggle privacy mode" data-click="togglePrivacyMode"></button>
                     <button class="lock-btn-header" title="Quick export (encrypted backup)" aria-label="Quick export encrypted backup" data-click="exportBackupQuick">💾</button>
                     <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
                 </div>
