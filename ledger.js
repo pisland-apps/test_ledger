@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v251";
+        const APP_VERSION = "v252";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1347,6 +1347,13 @@
         // openTemplatePicker()), refreshed by syncAndLoadTemplates() at bootstrap and after every
         // add/edit/delete/reorder — same pattern as dynamicCategories above.
         let dynamicTemplates = [];
+
+        // v252: distinct past transaction Descriptions, most-recently-dated first — refreshed by
+        // loadDescSuggestionsCache() (see openTransactionForm()) rather than queried live per
+        // keystroke, since this DB is fully encrypted (decryptRecord()) and re-decrypting the
+        // whole Transactions store on every keypress would be slow. filterDescSuggestions() below
+        // does a plain in-memory substring filter against this array.
+        let dynamicDescSuggestions = [];
 
         // User-chosen category pre-selected whenever a NEW Income / Expense entry is opened
         // (never applied when editing an existing transaction). Stored in the SETTINGS store,
@@ -7820,7 +7827,80 @@
         }
 
         // --- TRANSACTION CREATION / EDITOR CORE ---
+        // v252: DESCRIPTION AUTOCOMPLETE — the browser's own native autofill dropdown on #txDesc
+        // (see the v195 CSS comment on input:-webkit-autofill) only prefix-matches from the start
+        // of what's typed ("R" finds "Rest Mee Ngar", but "mee" never does, no matter what — a
+        // hard browser limitation). This is a from-scratch replacement: a small dropdown under the
+        // field, backed by dynamicDescSuggestions (above) and filtered by a plain case-insensitive
+        // SUBSTRING match instead, so "mee" does find "Rest Mee Ngar". autocomplete="off" on
+        // #txDesc (index.html) suppresses the native dropdown so the two don't stack.
+        async function loadDescSuggestionsCache() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            // Sorted most-recent-date-first, then de-duped case-insensitively (keeping the exact
+            // casing of whichever occurrence is newest) — so a re-typed "REST MEE NGAR" doesn't
+            // produce a separate entry from an older "Rest Mee Ngar", and the most recently-used
+            // spelling/casing is what gets suggested.
+            const sorted = txs.filter(t => t.desc && t.desc.trim()).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+            const seen = new Set();
+            const out = [];
+            for (const t of sorted) {
+                const key = t.desc.trim().toLowerCase();
+                if (seen.has(key)) continue;
+                seen.add(key);
+                out.push(t.desc.trim());
+            }
+            dynamicDescSuggestions = out;
+        }
+
+        // Wraps the matched substring in <mark> so it's visually obvious why each row matched —
+        // text outside the match is escaped separately so escapeHtml() never touches the <mark>
+        // tags themselves.
+        function highlightDescMatch(text, q) {
+            const idx = text.toLowerCase().indexOf(q);
+            if (idx === -1) return escapeHtml(text);
+            return escapeHtml(text.slice(0, idx)) + "<mark>" + escapeHtml(text.slice(idx, idx + q.length)) + "</mark>" + escapeHtml(text.slice(idx + q.length));
+        }
+
+        // Wired as both data-input and data-focus on #txDesc (index.html) — data-input so it
+        // re-filters as the user types, data-focus so refocusing a field that already has text
+        // (e.g. tabbing back into it) re-shows matches instead of staying hidden until the next
+        // keystroke.
+        function filterDescSuggestions(el) {
+            const list = document.getElementById("txDescSuggestList");
+            const q = el.value.trim().toLowerCase();
+            if (!q) { closeDescSuggestions(); return; }
+            const matches = dynamicDescSuggestions.filter(d => d.toLowerCase().includes(q)).slice(0, 8);
+            // Nothing to suggest — most commonly because what's typed already IS the only match,
+            // exactly as-is (no point showing a single row identical to what's already in the
+            // field).
+            if (matches.length === 0 || (matches.length === 1 && matches[0].toLowerCase() === q)) { closeDescSuggestions(); return; }
+            list.innerHTML = matches.map(d => `<button type="button" class="desc-suggest-item" data-click="selectDescSuggestion" data-value="${escapeHtml(d)}">${highlightDescMatch(d, q)}</button>`).join("");
+            list.classList.add("active");
+        }
+
+        function selectDescSuggestion(el) {
+            const input = document.getElementById("txDesc");
+            input.value = el.dataset.value;
+            closeDescSuggestions();
+            input.focus();
+        }
+
+        function closeDescSuggestions() {
+            const list = document.getElementById("txDescSuggestList");
+            if (!list) return;
+            list.classList.remove("active");
+            list.innerHTML = "";
+        }
+
         async function openTransactionForm(type, existingTxId = null, presetSrcAccountId = null) {
+            // v252: fresh Description-suggestion cache + a clean dropdown state every time this
+            // form opens, whether that's a brand-new entry, editing an existing one, or via
+            // Refund/Duplicate/Template (all of which route through this same function) — so
+            // suggestions always reflect transactions saved since the form was last open, and a
+            // dropdown left open from a previous session can't linger into this one.
+            await loadDescSuggestionsCache();
+            closeDescSuggestions();
+
             const accounts = await readAllDB(STORES.ACCOUNTS);
             if(accounts.length === 0) { alert("Add an account first!"); return; }
 
@@ -10206,6 +10286,12 @@
         // every row whose label starts with the pressed letter and focus()es the next one in that
         // subset each time the same letter is pressed again, resetting after a pause or a different
         // letter — matching the native select's own type-ahead timeout behaviour.
+        // v252: Escape closes the Description suggestion dropdown, same convention as everything
+        // else in the app that opens as an overlay.
+        document.addEventListener("keydown", (e) => {
+            if (e.key === "Escape") closeDescSuggestions();
+        });
+
         document.addEventListener("keydown", (e) => {
             const modal = document.getElementById("accountPickerModal");
             if (!modal || !modal.classList.contains("active")) return;
@@ -12981,6 +13067,7 @@
             deleteTransactionFromOptions: () => deleteTransactionFromOptions(),
             openRefundFromOptions: () => openRefundFromOptions(),
             openAccountPicker: (el) => openAccountPicker(el),
+            selectDescSuggestion: (el) => selectDescSuggestion(el),
             closeAccountPicker: () => closeAccountPicker(),
             selectAccountPickerOption: (el) => selectAccountPickerOption(el),
             openSalaryEntryForm: () => openSalaryEntryForm(),
@@ -13047,12 +13134,32 @@
             handleNavPriceInput: (el) => handleNavPriceInput(el),
             recalcTxSplitTotal: () => recalcTxSplitTotal(),
             recalcSalaryPreview: () => recalcSalaryPreview(),
+            filterDescSuggestions: (el) => filterDescSuggestions(el),
         };
 
         document.addEventListener("click", (e) => {
             const el = e.target.closest("[data-click]");
             if (!el) return;
             const action = CLICK_ACTIONS[el.dataset.click];
+            if (action) action(el, e);
+        });
+
+        // v252: closes the Description suggestion dropdown on any click that lands outside
+        // #txDescRow — a plain "outside click" check, not a blur listener, so tapping a
+        // suggestion row (which IS inside #txDescRow) never races against the dropdown closing
+        // before selectDescSuggestion() (CLICK_ACTIONS, above) gets to read it.
+        document.addEventListener("click", (e) => {
+            const row = document.getElementById("txDescRow");
+            if (row && !row.contains(e.target)) closeDescSuggestions();
+        });
+
+        // Refocusing #txDesc (data-focus, index.html) re-shows suggestions for whatever text is
+        // already there — "focus" doesn't bubble, so this needs "focusin" specifically, unlike
+        // the click/change/input delegated listeners above.
+        document.addEventListener("focusin", (e) => {
+            const el = e.target.closest("[data-focus]");
+            if (!el) return;
+            const action = INPUT_ACTIONS[el.dataset.focus];
             if (action) action(el, e);
         });
 

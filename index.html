@@ -1729,6 +1729,19 @@
             caret-color: var(--text-main);
             transition: background-color 5000s ease-in-out 0s;
         }
+        /* v252: Description autocomplete dropdown (see filterDescSuggestions() in ledger.js) —
+           positioned absolute so it floats below #txDescRow without pushing the rest of the form
+           down; #txDescRow needs position:relative as its containing block. Absolutely positioned
+           elements are automatically excluded from a flex parent's layout, so nesting this inside
+           #txDescRow (a .form-row-icon flex row) doesn't disturb the icon+input flex line above
+           it. */
+        #txDescRow { position: relative; }
+        .desc-suggest-list { display: none; position: absolute; top: 100%; left: 0; right: 0; margin-top: 4px; background: var(--card-bg); border: 1.5px solid var(--border-color); border-radius: 10px; max-height: 220px; overflow-y: auto; z-index: 50; box-shadow: 0 8px 24px rgba(0,0,0,0.18); }
+        .desc-suggest-list.active { display: block; }
+        .desc-suggest-item { display: block; width: 100%; padding: 11px 14px; border: none; background: transparent; color: var(--text-main); font-size: 0.85rem; text-align: left; cursor: pointer; }
+        .desc-suggest-item:active { background: var(--press-bg); }
+        .desc-suggest-item + .desc-suggest-item { border-top: 1px solid var(--border-color); }
+        .desc-suggest-item mark { background: var(--primary-chip-bg); color: var(--primary); border-radius: 3px; padding: 0 1px; font-weight: 800; }
         .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
         .calc-btn {
@@ -4303,7 +4316,7 @@
                     <p id="txFdMaturityPreview" style="font-size:0.72rem; color:#6d28d9; margin-top:2px;"></p>
                 </div>
 
-                <div class="form-row form-row-icon" id="txDescRow"><span class="field-icon" aria-hidden="true">👤</span><input type="text" id="txDesc" required placeholder="Description" aria-label="Description"></div>
+                <div class="form-row form-row-icon" id="txDescRow"><span class="field-icon" aria-hidden="true">👤</span><input type="text" id="txDesc" required placeholder="Description" aria-label="Description" autocomplete="off" data-input="filterDescSuggestions" data-focus="filterDescSuggestions"><div class="desc-suggest-list" id="txDescSuggestList"></div></div>
                 <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📝</span><input type="text" id="txNotes" placeholder="Notes (Optional)" aria-label="Notes (Optional)"></div>
                 <div class="form-row">
                     <div class="toggle-switch-row">
