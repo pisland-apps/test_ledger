@@ -2203,19 +2203,6 @@
             25% { transform: rotate(-3deg); }
             75% { transform: rotate(3deg); }
         }
-        /* v246: apply the app's existing self-hosted "Kalam" handwritten font (see the
-           @font-face block above — same files already used by #noteSummaryModal, so this adds
-           zero new network/CSP surface) app-wide while the crayon preset is active, matching
-           臘筆小新风格.md's "用圓潤的手寫風格字體" note. Needs the `*` combinator (not just
-           `html[data-bg-theme="crayon"]`) because the base `* { font-family: ... }` rule above
-           sets font-family directly on every element, and a directly-set property always wins
-           over an inherited one regardless of the inherited rule's specificity — so overriding
-           has to match that same per-element `*` shape, just with an extra attribute qualifier
-           for higher specificity. #noteSummaryModal's own font-family rule keeps winning inside
-           that modal either way, since an ID selector already outranks this attribute+type one. */
-        html[data-bg-theme="crayon"] * {
-            font-family: "Kalam", cursive;
-        }
     </style>
     <!-- v179: apply any saved background-theme choice before first paint, so the page never
          flashes the default slate background and then jumps to the user's chosen tint.
