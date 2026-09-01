@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v248";
+        const APP_VERSION = "v249";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -6195,6 +6195,62 @@
             setCrayonFontEnabled(!!(toggle && toggle.checked));
         }
 
+        // v249: Privacy Mode — see the CSS comment on html[data-privacy-mode="on"] in
+        // index.html for how the blur itself works. This block only owns the on/off state, the
+        // header button's icon, and the tap-to-reveal-then-auto-reblur behavior.
+        const PRIVACY_MODE_KEY = "ledgerPrivacyModeEnabled";
+        function isPrivacyModeEnabled() {
+            return localStorage.getItem(PRIVACY_MODE_KEY) === "1";
+        }
+        function applyPrivacyModeAttr() {
+            const enabled = isPrivacyModeEnabled();
+            document.documentElement.setAttribute("data-privacy-mode", enabled ? "on" : "off");
+            const btn = document.getElementById("privacyModeToggleBtn");
+            if (btn) {
+                btn.textContent = enabled ? "👁️" : "🙈";
+                btn.title = enabled ? "Privacy mode on — tap amounts to reveal (Settings icon here to turn off)" : "Toggle privacy mode (blur amounts)";
+            }
+        }
+        function togglePrivacyMode() {
+            const enabling = !isPrivacyModeEnabled();
+            try { localStorage.setItem(PRIVACY_MODE_KEY, enabling ? "1" : "0"); } catch (e) {}
+            if (enabling) {
+                // Turning it ON should hide everything immediately — clear any figure that
+                // happened to be mid-reveal (and its pending auto-reblur timer) rather than
+                // leaving it visibly exposed until its timer runs out.
+                document.querySelectorAll(".privacy-amount-value.revealed").forEach(el => {
+                    el.classList.remove("revealed");
+                    clearPrivacyRevealTimer(el);
+                });
+            }
+            applyPrivacyModeAttr();
+        }
+        // WeakMap (not a data-* attribute) so each element's pending auto-reblur timeout is
+        // tracked without leaking into the DOM or colliding with anything else on the element.
+        const privacyRevealTimers = new WeakMap();
+        function clearPrivacyRevealTimer(el) {
+            const t = privacyRevealTimers.get(el);
+            if (t) { clearTimeout(t); privacyRevealTimers.delete(el); }
+        }
+        // Reveals one figure for a few seconds, then reblurs it automatically — a deliberate
+        // "peek" rather than a persistent unlock, so glancing at your own balance while
+        // recording an expense around other people doesn't require remembering to hide it
+        // again afterwards. Re-tapping an already-revealed figure hides it early.
+        function revealPrivacyAmountTemporarily(el, ms = 4000) {
+            if (!el) return;
+            if (el.classList.contains("revealed")) {
+                el.classList.remove("revealed");
+                clearPrivacyRevealTimer(el);
+                return;
+            }
+            el.classList.add("revealed");
+            clearPrivacyRevealTimer(el);
+            privacyRevealTimers.set(el, setTimeout(() => {
+                el.classList.remove("revealed");
+                privacyRevealTimers.delete(el);
+            }, ms));
+        }
+
         // v184: re-applies the saved theme the moment this script parses (this runs long before
         // bootstrap()'s async lock/DB work, since ledger.js is loaded via a plain <script src>
         // at the end of <body>, not gated on "load" or DB init). This is a deliberate SECOND
@@ -6215,6 +6271,12 @@
         } else {
             applyBgTheme(getSavedBgThemeId(), { save: false });
         }
+
+        // v249: syncs the header button's icon/title with the persisted Privacy Mode choice —
+        // the <head> no-flash script already set the CSS-facing attribute before first paint,
+        // but the button itself doesn't exist in the DOM until now (ledger.js loads at the end
+        // of <body>), so its icon/title still need this separate pass.
+        applyPrivacyModeAttr();
 
         // v202: keeps Auto mode tracking the OS live for as long as this tab/PWA stays open,
         // not just once at launch — e.g. sunset triggering the OS's own auto dark mode while the
@@ -12751,6 +12813,29 @@
             hideMonthlyTrendTooltip: () => hideMonthlyTrendTooltip(),
             toggleMonthlyTrendAutoScale: () => toggleMonthlyTrendAutoScale(),
             navigateToNetWorthStatementPage: () => navigateToNetWorthStatementPage(),
+            // v249: replaces navigateToNetWorthStatementPage as the net-worth card's own
+            // data-click target — same destination, but while Privacy Mode is on and the figure
+            // is still blurred, the first tap only reveals it instead of navigating away; a
+            // second tap (now revealed) navigates as before. The navigateToNetWorthStatementPage
+            // entry above is left in place — the function itself is still called directly
+            // elsewhere (accountsPageBackTarget handling), independent of this dispatch table.
+            netWorthCardTap: () => {
+                const amountEl = document.getElementById("netWorthDisplay");
+                if (isPrivacyModeEnabled() && amountEl && !amountEl.classList.contains("revealed")) {
+                    revealPrivacyAmountTemporarily(amountEl);
+                    return;
+                }
+                navigateToNetWorthStatementPage();
+            },
+            // v249: Financial Assets / Real Estate split cards — no other click behavior on
+            // these, so a tap always just toggles that one figure's own reveal state (a no-op
+            // when Privacy Mode is off, since html[data-privacy-mode="off"] never blurs
+            // anything for the CSS in index.html to reveal).
+            togglePrivacyReveal: (el) => {
+                const amountEl = el.querySelector(".privacy-amount-value");
+                if (amountEl) revealPrivacyAmountTemporarily(amountEl);
+            },
+            togglePrivacyMode: () => togglePrivacyMode(),
             openInsightsDrawer: () => openInsightsDrawer(),
             closeInsightsDrawer: () => closeInsightsDrawer(),
             sidebarGo: (el) => sidebarGo(el),

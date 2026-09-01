@@ -2238,6 +2238,34 @@
             90% { transform: rotate(-6deg); }
             95% { transform: rotate(6deg); }
         }
+        /* v249: Privacy Mode — frosted-glass blur over Net Worth / Financial Assets / Real
+           Estate figures. Scoped by html[data-privacy-mode="on"] (set by
+           applyPrivacyModeAttr()) rather than a class directly on the amounts, so turning
+           Privacy Mode off instantly un-blurs everything without touching each element's own
+           class list (that's reserved for "revealed" — see .privacy-amount-value.revealed
+           below). filter:blur() (not color:transparent/visibility) is deliberate: it keeps the
+           figure's rough shape/length visible through the "glass" — a legible-but-obscured
+           frosted look — rather than fully disappearing. Independent of every other preset/
+           theme, so it applies the same way under every Background Theme.
+           v249: excludes elements with the .revealed class — added on tap (netWorthCardTap /
+           togglePrivacyReveal below) and auto-removed a few seconds later by
+           revealPrivacyAmountTemporarily()'s timeout, so a peek doesn't stay open forever if
+           you get distracted mid-transaction. */
+        html[data-privacy-mode="on"] .privacy-amount-value:not(.revealed) {
+            filter: blur(8px);
+            cursor: pointer;
+            user-select: none;
+            transition: filter 0.2s ease;
+        }
+        html[data-privacy-mode="on"] .privacy-amount-value.revealed {
+            filter: none;
+            transition: filter 0.2s ease;
+        }
+        /* Whole split-card is the tap target (data-click="togglePrivacyReveal" is on the card,
+           not just the number inside it) — cursor affordance should cover the whole card too. */
+        html[data-privacy-mode="on"] .net-worth-split-card {
+            cursor: pointer;
+        }
     </style>
     <!-- v179: apply any saved background-theme choice before first paint, so the page never
          flashes the default slate background and then jumps to the user's chosen tint.
@@ -2356,6 +2384,13 @@
                 // never-touched install still shows Kalam under the crayon preset from first paint.
                 var crayonFontPref = localStorage.getItem("ledgerCrayonFontEnabled");
                 document.documentElement.setAttribute("data-crayon-font", crayonFontPref === "0" ? "default" : "kalam");
+                // v249: same before-first-paint reasoning as the two attributes above, for
+                // Privacy Mode — a real amount briefly flashing unblurred for one frame while
+                // someone's phone screen is visible to bystanders is exactly the scenario this
+                // feature exists to prevent, so it can't wait for ledger.js to run.
+                if (localStorage.getItem("ledgerPrivacyModeEnabled") === "1") {
+                    document.documentElement.setAttribute("data-privacy-mode", "on");
+                }
             } catch (e) {}
         })();
     </script>
@@ -2552,13 +2587,19 @@
                     <button class="currency-pill" data-click="openCurrencyConfig" title="Base currency" aria-label="Base currency">
                         <span id="currentBasePill">USD</span> ⚙
                     </button>
+                    <!-- v249: Privacy Mode — blurs Net Worth / Financial Assets / Real Estate
+                         figures (frosted-glass look) so opening the app around other people
+                         doesn't broadcast your balance; a blurred figure reveals on tap for a
+                         few seconds. State persists (localStorage), independent of every other
+                         toggle. Icon/label kept in sync by applyPrivacyModeAttr(). -->
+                    <button class="lock-btn-header" id="privacyModeToggleBtn" title="Toggle privacy mode (blur amounts)" aria-label="Toggle privacy mode" data-click="togglePrivacyMode">🙈</button>
                     <button class="lock-btn-header" title="Quick export (encrypted backup)" aria-label="Quick export encrypted backup" data-click="exportBackupQuick">💾</button>
                     <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
                 </div>
             </div>
             <div class="net-worth-container">
-                <div style="cursor:pointer;" data-click="navigateToNetWorthStatementPage" title="Tap for the full Net Worth Statement (assets vs. liabilities breakdown)">
-                    <h1 id="netWorthDisplay">0.00</h1>
+                <div style="cursor:pointer;" data-click="netWorthCardTap" title="Tap for the full Net Worth Statement (assets vs. liabilities breakdown)">
+                    <h1 id="netWorthDisplay" class="privacy-amount-value">0.00</h1>
                     <p style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">Portfolio Net Worth</p>
                 </div>
             </div>
@@ -2567,13 +2608,13 @@
                  Estate account exists (toggled in renderApp()); otherwise stays hidden and the
                  Portfolio Net Worth figure above is the only total shown, per design. -->
             <div class="net-worth-split-row hidden" id="netWorthSplitRow">
-                <div class="net-worth-split-card net-worth-split-financial">
+                <div class="net-worth-split-card net-worth-split-financial" data-click="togglePrivacyReveal" title="Tap to reveal">
                     <span class="net-worth-split-label">💼 Financial Assets</span>
-                    <span class="net-worth-split-value" id="financialAssetsDisplay">0.00</span>
+                    <span class="net-worth-split-value privacy-amount-value" id="financialAssetsDisplay">0.00</span>
                 </div>
-                <div class="net-worth-split-card net-worth-split-realestate">
+                <div class="net-worth-split-card net-worth-split-realestate" data-click="togglePrivacyReveal" title="Tap to reveal">
                     <span class="net-worth-split-label">🏠 Real Estate</span>
-                    <span class="net-worth-split-value" id="realEstateDisplay">0.00</span>
+                    <span class="net-worth-split-value privacy-amount-value" id="realEstateDisplay">0.00</span>
                 </div>
             </div>
         </header>
