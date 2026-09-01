@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v243";
+        const APP_VERSION = "v244";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -11233,7 +11233,7 @@
                         // between them.
                         return `
                         <div class="ledger-item" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(viewingMultiAcc.id)}" data-currency="${escapeHtml(curr)}" data-back="ledger">
-                            <div class="item-left" style="max-width:100%; display:flex; align-items:center; gap:8px;">
+                            <div class="item-left" style="max-width:100%; display:flex; flex-direction:row; align-items:center; gap:8px;">
                                 ${currencyIconHTML(curr)}
                                 <div>
                                     <span class="item-name">${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span></span>
