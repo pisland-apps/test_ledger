@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v233";
+        const APP_VERSION = "v238";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2442,6 +2442,17 @@
             renderApp();
         }
 
+        // v237: "today" button in the Calendar view header — jumps straight back to the current
+        // month and selects today's date (same as first entering Calendar mode fresh), regardless
+        // of how many months the user has paged away via </>.
+        function ledgerCalendarGoToday() {
+            const today = new Date();
+            ledgerCalYear = today.getFullYear();
+            ledgerCalMonth = today.getMonth();
+            ledgerCalSelectedDate = localDateStr(today);
+            renderApp();
+        }
+
         function selectLedgerCalendarDate(dateStr) {
             ledgerCalSelectedDate = dateStr;
             renderApp();
@@ -3288,6 +3299,14 @@
             } else if (ledgerBackToPage === "member") {
                 showPage("page-member");
                 await renderMemberPage();
+                window.scrollTo(0, workspaceScrollY);
+            } else if (ledgerBackToPage === "spending-breakdown") {
+                showPage("page-spending-breakdown");
+                await renderSpendingBreakdownPage();
+                window.scrollTo(0, workspaceScrollY);
+            } else if (ledgerBackToPage === "income-breakdown") {
+                showPage("page-income-breakdown");
+                await renderIncomeBreakdownPage();
                 window.scrollTo(0, workspaceScrollY);
             } else {
                 navigateToWorkspace();
@@ -7754,6 +7773,24 @@
                     document.getElementById("txFdMaturityDate").value = tx.fdMaturityDate || "";
                     recalcTxFdMaturity();
                 }
+
+                // v234: Linked FD Placement (interest paid OUT to this account from an existing
+                // placement elsewhere) — mutually exclusive with the FD-placement-terms block
+                // just above, so this only ever has something to show when tx.fdMaturityDate
+                // wasn't set on this same record.
+                await updateTxFdLinkVisibility(accounts);
+                if (tx.linkedFdPlacementId) {
+                    document.getElementById("txFdLinkToggle").checked = true;
+                    document.getElementById("txFdLinkFieldRow").style.display = "block";
+                    const linkSelect = document.getElementById("txFdLinkPlacement");
+                    if ([...linkSelect.options].some(o => o.value === String(tx.linkedFdPlacementId))) {
+                        linkSelect.value = String(tx.linkedFdPlacementId);
+                    }
+                    syncAccountPickerButtonText("txFdLinkPlacement");
+                } else {
+                    document.getElementById("txFdLinkToggle").checked = false;
+                    document.getElementById("txFdLinkFieldRow").style.display = "none";
+                }
             } else {
                 document.getElementById("txId").value = "";
                 document.getElementById("txType").value = type;
@@ -7836,6 +7873,14 @@
                 // New entry: default to "auto" Description (off) — most FD placements don't need
                 // a separate free-text description on top of their Account/Reference No.
                 document.getElementById("txFdManualDesc").checked = false;
+
+                // v234: Linked FD Placement always starts off/unselected on a new entry — its
+                // visibility and option list get (re)computed by syncTransactionCurrency() below
+                // once the default/preset Account is in place.
+                document.getElementById("txFdLinkToggle").checked = false;
+                document.getElementById("txFdLinkFieldRow").style.display = "none";
+                document.getElementById("txFdLinkPlacement").innerHTML = "";
+                document.getElementById("txFdLinkPlacement").value = "";
 
                 document.getElementById("txManualFxToggle").checked = false;
                 document.getElementById("txManualFxRate").value = "";
@@ -8429,6 +8474,112 @@
             descInput.required = !autoMode;
         }
 
+        // v234: every FD placement across every FD account — a placement is any transaction
+        // record with fdMaturityDate set, whether still open or already fdResolved (renewed/
+        // withdrawn). Shared by the "Linked Placement" picker below and by renderLedgerPage's
+        // linked-interest-payment lookup. v235: now includes resolved placements too (tagged
+        // "✅ Closed" in the label) so a late/backdated interest entry can still be linked to a
+        // placement that's already matured and been resolved — previously the picker only
+        // offered still-open placements.
+        function getActiveFdPlacements(txs, accounts) {
+            return txs
+                .filter(t => t.fdMaturityDate)
+                .map(t => {
+                    const acctId = t.type === "transfer" ? t.dest : t.src;
+                    const acct = accounts.find(a => a.id === acctId);
+                    if (!acct || acct.type !== "fd") return null;
+                    const refPart = t.fdReferenceNo ? ` (${t.fdReferenceNo})` : "";
+                    const statusPart = t.fdResolved ? " · ✅ Closed" : ` · Matures ${t.fdMaturityDate}`;
+                    return {
+                        id: t.id,
+                        accountId: acct.id,
+                        label: `🏦 ${acct.name}${refPart} — ${formatCurrency(t.amount, t.currency)}${statusPart}`
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.label.localeCompare(b.label));
+        }
+
+        // v234: renders the nested, read-only sub-rows shown right under a Fixed Deposit
+        // placement's own row on that FD account's Activity page — every Income entry tagged as
+        // "paid out from" this placement (linkedFdPlacementId), sorted oldest-first. Indented +
+        // a lighter left border to read as "belongs to the row above" rather than its own peer
+        // entry; tapping one still opens the normal Quick View for that record (it's a real,
+        // independently-editable transaction living on its own destination account — this is
+        // just a second, contextual place it's also shown).
+        function buildLinkedFdPaymentRowsHTML(placementTx, txs, accounts) {
+            const linked = txs.filter(lt => lt.linkedFdPlacementId === placementTx.id).sort((a, b) => new Date(a.date) - new Date(b.date));
+            if (linked.length === 0) return "";
+            return linked.map(lt => {
+                const acct = accounts.find(a => a.id === lt.src);
+                const acctLabel = acct ? escapeHtml(acct.name) : "(deleted account)";
+                return `
+                    <div class="ledger-item ledger-item-tx" data-click="openTxQuickView" data-type="${escapeHtml(lt.type)}" data-id="${escapeHtml(lt.id)}" style="margin-left:24px; opacity:0.92; border-left:3px solid #93c5fd;">
+                        <div class="tx-icon-circle" style="background:${categoryIconBgColor(lt.cat || lt.type)}; width:30px; height:30px; font-size:0.85rem;"><span style="line-height:1;">${getCategoryIcon(lt.cat, lt.type)}</span></div>
+                        <div class="tx-row-body">
+                            <div class="item-left">
+                                <span class="item-name" style="font-size:0.85rem;">↳ ${escapeHtml(lt.desc)}</span>
+                                <span class="item-meta">${escapeHtml(lt.date)} [${escapeHtml(lt.cat || '')}] · Paid to ${acctLabel}</span>
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="color:var(--income-color); font-weight:bold; font-size:0.85rem;">+${formatCurrency(lt.amount, lt.currency)}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // v234: shows the "Linked FD Placement" optional section (txFdLinkWrap) only for an
+        // Income entry paid into a NON-FD account — an FD-type account already shows the "new
+        // placement" fields (txFdFieldsWrap) instead, and the two are mutually exclusive on any
+        // one entry. Mirrors updateTxFdFieldsVisibilitySync's account-lookup shape but is its own
+        // independent check.
+        async function updateTxFdLinkVisibility(accounts) {
+            const type = document.getElementById("txType").value;
+            const wrap = document.getElementById("txFdLinkWrap");
+            if (type !== "income") {
+                wrap.style.display = "none";
+                return;
+            }
+            const relevantAccount = accounts.find(a => a.id === document.getElementById("srcAccount").value);
+            const isFdAccount = !!(relevantAccount && relevantAccount.type === "fd");
+            wrap.style.display = isFdAccount ? "none" : "block";
+            if (isFdAccount) {
+                document.getElementById("txFdLinkToggle").checked = false;
+                document.getElementById("txFdLinkFieldRow").style.display = "none";
+            } else {
+                await populateTxFdLinkPlacementSelect();
+            }
+        }
+
+        // Populates the Linked Placement <select> with every active placement (see
+        // getActiveFdPlacements) — a plain option list read generically by the shared
+        // openAccountPicker()/selectAccountPickerOption() picker, same as every other
+        // account-picker-btn field.
+        async function populateTxFdLinkPlacementSelect() {
+            const select = document.getElementById("txFdLinkPlacement");
+            const currentVal = select.value;
+            const [txs, accounts] = await Promise.all([readAllDB(STORES.TRANSACTIONS), readAllDB(STORES.ACCOUNTS)]);
+            const placements = getActiveFdPlacements(txs, accounts);
+            select.innerHTML = '<option value="">— None —</option>' + placements.map(p =>
+                `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)}</option>`
+            ).join("");
+            if (placements.some(p => String(p.id) === currentVal)) select.value = currentVal;
+            syncAccountPickerButtonText("txFdLinkPlacement");
+        }
+
+        // Toggling "This is interest paid out from an FD placement" off clears any picked
+        // placement rather than leaving a stale hidden selection that could get saved anyway.
+        function toggleTxFdLinkFields() {
+            const checked = document.getElementById("txFdLinkToggle").checked;
+            document.getElementById("txFdLinkFieldRow").style.display = checked ? "block" : "none";
+            if (!checked) {
+                document.getElementById("txFdLinkPlacement").value = "";
+                syncAccountPickerButtonText("txFdLinkPlacement");
+            }
+        }
+
         // Builds the auto-generated Description used for an FD placement when the user hasn't
         // opted to fill it in manually — derived from the Account/Reference No. if one was given,
         // else a generic placement label.
@@ -8455,6 +8606,7 @@
             }
 
             updateTxFdFieldsVisibilitySync(accounts);
+            updateTxFdLinkVisibility(accounts);
             updateTxManualFxVisibility();
             updateTxTransferFxVisibility();
         }
@@ -9040,6 +9192,17 @@
                 fdTenureMonths: null,
                 fdInterestRate: null,
                 fdMaturityDate: null,
+                // v234: optional tag linking an Income entry (e.g. FD interest paid out to a
+                // Current/Savings account) back to the FD placement it came from — purely a
+                // display link (see renderLedgerPage's linked-payment sub-rows), never affects
+                // that placement's own principal/balance. Only ever set for Income entries into
+                // a non-FD account with the "linked" toggle on and a placement chosen.
+                linkedFdPlacementId: (document.getElementById("txType").value === "income"
+                    && document.getElementById("txFdLinkWrap").style.display !== "none"
+                    && document.getElementById("txFdLinkToggle").checked
+                    && document.getElementById("txFdLinkPlacement").value)
+                    ? parseInt(document.getElementById("txFdLinkPlacement").value, 10)
+                    : null,
                 // Manual FX rate override (v32) — only meaningful for Income/Expense against a
                 // "normal" account when the entry's currency differs from the account's currency.
                 // null means "auto": convert using the live global fxRates table, as before.
@@ -10927,6 +11090,24 @@
                         <span class="tx-side-bar" style="background:var(--${col});"></span>
                     </div>
                 `;
+
+                // v234: right under a Fixed Deposit placement's own row, nest every Income entry
+                // that was tagged "paid out from" this placement (see linkedFdPlacementId /
+                // txFdLinkWrap) — e.g. a monthly/half-yearly interest payout credited to a
+                // Current/Savings account rather than reinvested. These are read-only references:
+                // the linked entry already counts toward its own destination account's balance
+                // elsewhere, so nothing here touches this placement's principal/balance/totals.
+                // v236: only nest the linked-interest sub-rows when this placement row is being
+                // shown on the FD account's OWN Activity page — not when it's showing here
+                // because we're viewing the OTHER leg of its opening Transfer (e.g. the Current
+                // Account it was funded from) or the unfiltered "All" view. Those contexts
+                // already show the interest payout as its own normal top-level row on the
+                // account that actually received it, so nesting it a second time here was
+                // duplicating it on-screen.
+                const fdOwnAccountId = t.type === "transfer" ? t.dest : t.src;
+                if (t.fdMaturityDate && activeLedgerAccountView === fdOwnAccountId) {
+                    ledgerHTML += buildLinkedFdPaymentRowsHTML(t, txs, accounts);
+                }
             });
 
             if (matchedCount > ledgerRenderLimit) {
@@ -11280,11 +11461,18 @@
         // the old dashboard Spending Breakdown used, now reused by both breakdown pages.
         function buildBreakdownListHTML(entries, total, type, year = "all", month = "all") {
             if (entries.length === 0) return '<p style="font-size: 0.75rem; text-align: center; color: var(--text-muted);">Nothing categorised yet.</p>';
+            // v238: which page a category row's own Back/hardware-back should return to — the two
+            // callers of this function (Spending Breakdown for "expense", Income Breakdown for
+            // "income") are already distinguished by `type`, so it's derived here rather than
+            // needing its own parameter. Previously this row carried no data-back at all, so
+            // navigateToCategoryPage's default ("workspace") applied — Back skipped straight past
+            // the Breakdown page to the Dashboard instead of returning one step.
+            const backTarget = type === "income" ? "income-breakdown" : "spending-breakdown";
             return entries.map(e => {
                 const pct = total > 0 ? ((e.value / total) * 100).toFixed(0) : 0;
                 const icon = getCategoryIcon(e.label, type);
                 return `
-                    <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(e.label)}" data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}" style="font-size:0.75rem; margin-top:4px;">
+                    <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(e.label)}" data-back="${backTarget}" data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}" style="font-size:0.75rem; margin-top:4px;">
                         <div style="display:flex; justify-content:space-between; margin-bottom: 2px;">
                             <strong>${icon} ${escapeHtml(e.label.toUpperCase())}</strong>
                             <span>${formatCurrency(e.value, baseCurrency)} (${pct}%)</span>
@@ -12476,6 +12664,7 @@
             setLedgerViewMode: (el) => setLedgerViewMode(el),
             ledgerCalendarPrevMonth: () => ledgerCalendarPrevMonth(),
             ledgerCalendarNextMonth: () => ledgerCalendarNextMonth(),
+            ledgerCalendarGoToday: () => ledgerCalendarGoToday(),
             selectLedgerCalendarDate: (el) => selectLedgerCalendarDate(el.dataset.date),
             toggleLedgerQuickAddSheet: () => toggleLedgerQuickAddSheet(),
             closeLedgerQuickAddSheet: () => closeLedgerQuickAddSheet(),
@@ -12594,6 +12783,7 @@
             saveDefaultPaymentAccount: () => saveDefaultPaymentAccount(),
             saveDefaultReceiveAccount: () => saveDefaultReceiveAccount(),
             toggleTxFdDescMode: () => toggleTxFdDescMode(),
+            toggleTxFdLinkFields: () => toggleTxFdLinkFields(),
             resetSavingsPageAndRender: () => renderSavingsStatement(),
             toggleTxManualFx: () => toggleTxManualFx(),
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),

@@ -2667,6 +2667,7 @@
                 <button type="button" class="btn-util" data-click="ledgerCalendarPrevMonth" style="padding:6px 14px; font-size:1rem;">&lt;</button>
                 <span id="ledgerCalendarMonthLabel" style="font-weight:800; font-size:1.05rem; min-width:140px; text-align:center;"></span>
                 <button type="button" class="btn-util" data-click="ledgerCalendarNextMonth" style="padding:6px 14px; font-size:1rem;">&gt;</button>
+                <button type="button" class="btn-util" data-click="ledgerCalendarGoToday" title="Jump to today" style="padding:6px 10px; font-size:1rem; line-height:1;">📅</button>
             </div>
             <div id="ledgerCalendarGrid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:4px; text-align:center; margin-bottom:16px;"></div>
             <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px;">
@@ -3999,6 +4000,30 @@
                         <span id="destAccountBtnText">Select account</span><span class="account-picker-chevron">▾</span>
                     </button>
                     <select id="destAccount" style="display:none;" data-change="syncTransactionCurrency"></select>
+                </div>
+
+                <!-- v234: optional link from an Income entry to an existing FD placement it was
+                     paid out of (e.g. monthly/half-yearly FD interest credited to a Current/
+                     Savings account rather than reinvested into the FD). Tags the entry so it
+                     displays nested under that placement on the FD account's own Activity page
+                     — it never touches the placement's own principal/balance/maturity, and is
+                     only offered when the Account chosen above is NOT itself an FD account (an
+                     FD-type destination already gets the "new placement" fields below instead). -->
+                <div id="txFdLinkWrap" style="display:none; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px; margin-bottom:10px;">
+                    <div class="toggle-switch-row" style="margin:0 0 8px;">
+                        <span class="toggle-switch-label" style="font-size:0.75rem;">🏦 This is interest paid out from an FD placement</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="txFdLinkToggle" data-change="toggleTxFdLinkFields">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div id="txFdLinkFieldRow" style="display:none;">
+                        <label style="font-size:0.7rem; font-weight:700; color:#1d4ed8; display:block; margin-bottom:4px;">Linked Placement</label>
+                        <button type="button" id="txFdLinkPlacementBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="txFdLinkPlacement" data-title="Select Fixed Deposit Placement">
+                            <span id="txFdLinkPlacementBtnText">Select placement</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="txFdLinkPlacement" style="display:none;"></select>
+                    </div>
                 </div>
 
                 <!-- Shown only for Transfers between two single-currency ("normal") accounts whose
