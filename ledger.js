@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v241";
+        const APP_VERSION = "v242";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -4285,7 +4285,16 @@
             const filtered = filter
                 ? accounts.filter(a => (a.group || DEFAULT_ACCOUNT_GROUP) === filter.group && (a.subgroup || "") === (filter.subgroup || ""))
                 : accounts;
-            const sorted = sortAccountsByGroupThenName(filtered);
+            // v241: on a sidebar type-shortcut view (filter set), accounts sitting at RM0.00
+            // base value are hidden — a filtered list like "Fixed Deposit" is meant to show what
+            // you actually hold, and empty/closed-out accounts just add noise there. The full
+            // unfiltered "Financial Accounts" list (filter === null) deliberately still shows
+            // every account, zero-balance included, since that's the place to go find/manage an
+            // account you're not currently using. Epsilon guards against float rounding dust.
+            const withoutZeroBalance = filter
+                ? filtered.filter(a => Math.abs(accountBaseValue(a, nativeBalances)) >= 0.005)
+                : filtered;
+            const sorted = sortAccountsByGroupThenName(withoutZeroBalance);
 
             // v64: the collapse/expand state (expandedAccountSubrows) used to be keyed by
             // account id alone, so the same account's subrows showed the same open/closed state
