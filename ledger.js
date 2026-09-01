@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v232";
+        const APP_VERSION = "v233";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -10987,6 +10987,15 @@
             } else {
                 ledgerListEl.style.display = "";
                 ledgerListEl.innerHTML = ledgerHTML || '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No matches found.</p>';
+            }
+
+            // v232 fix: the branch just above always sets ledgerListEl back to visible for the
+            // plain Portfolio General Log, which ran AFTER (and silently undid) the Calendar-mode
+            // hide set earlier in this function — so switching to Calendar left the full list
+            // showing on top of the month grid instead of replacing it. Re-assert the hide here,
+            // once the list-building logic above is done writing to it.
+            if (isPortfolioAllView && ledgerViewMode === "calendar") {
+                ledgerListEl.style.display = "none";
             }
 
             // The Net Savings Statement page has its own independent "All Years / Year" filter
