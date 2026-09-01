@@ -2225,6 +2225,19 @@
            for every other preset's panel instead of showing a control with no visible effect. */
         #crayonFontToggleRow { display: none; }
         html[data-bg-theme="crayon"] #crayonFontToggleRow { display: flex; }
+        /* v248: header mascot badge — see the SVG markup on .top-bar for what this is. Hidden
+           for every other preset; only the crayon preset's html[data-bg-theme] attribute turns
+           it on, matching the same scoping pattern as the font-toggle row just above. */
+        .crayon-logo-badge { display: none; flex-shrink: 0; }
+        html[data-bg-theme="crayon"] .crayon-logo-badge {
+            display: inline-block;
+            animation: crayon-logo-idle-wiggle 3.2s ease-in-out infinite;
+        }
+        @keyframes crayon-logo-idle-wiggle {
+            0%, 85%, 100% { transform: rotate(0deg); }
+            90% { transform: rotate(-6deg); }
+            95% { transform: rotate(6deg); }
+        }
     </style>
     <!-- v179: apply any saved background-theme choice before first paint, so the page never
          flashes the default slate background and then jumps to the user's chosen tint.
@@ -2514,6 +2527,25 @@
             <div class="dashboard-header-row">
                 <div class="top-bar">
                     <button class="hamburger-btn" data-click="openSidebar" aria-label="Open menu">☰</button>
+                    <!-- v248: original crayon-doodle mascot badge — only shown while the 蠟筆小新
+                         preset is active (see the html[data-bg-theme="crayon"] rule in <style>).
+                         Deliberately an original chibi doodle, not a likeness of the copyrighted
+                         Crayon Shin-chan character itself — spiky-hair kid holding a giant
+                         crayon, drawn to match the preset's own palette (blue/red/yellow/cream). -->
+                    <svg class="crayon-logo-badge" viewBox="0 0 64 64" width="30" height="30" aria-hidden="true" focusable="false">
+                        <circle cx="32" cy="32" r="29" fill="#FFF8DC" stroke="#E63946" stroke-width="4"/>
+                        <path d="M18 24 Q16 10 26 14 Q28 6 34 12 Q42 8 40 18 Q48 16 44 26 Q41 22 32 21 Q22 21 18 24 Z" fill="#3A2E1F"/>
+                        <circle cx="32" cy="34" r="15" fill="#FFE0B2"/>
+                        <circle cx="26" cy="33" r="2.1" fill="#3A2E1F"/>
+                        <circle cx="38" cy="33" r="2.1" fill="#3A2E1F"/>
+                        <circle cx="23" cy="39" r="2.6" fill="#F4A6A0" opacity="0.8"/>
+                        <circle cx="41" cy="39" r="2.6" fill="#F4A6A0" opacity="0.8"/>
+                        <path d="M25 41 Q32 47 39 41" stroke="#3A2E1F" stroke-width="2" fill="none" stroke-linecap="round"/>
+                        <g transform="rotate(-28 50 18)">
+                            <rect x="47" y="4" width="6" height="20" rx="2.5" fill="#457B9D"/>
+                            <path d="M47 4 L53 4 L50 -3 Z" fill="#2A9D8F"/>
+                        </g>
+                    </svg>
                     <span class="top-bar-title">Ledger</span>
                 </div>
                 <div class="header-controls-group">
