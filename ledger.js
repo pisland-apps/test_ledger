@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v238";
+        const APP_VERSION = "v241";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -268,6 +268,14 @@
         // Which member/joint-group is currently being viewed on page-member, e.g.
         // { type: "member", ids: ["mem_1"] } or { type: "joint", ids: ["mem_1","mem_2"] }.
         let activeMemberFilter = null;
+        // v241: set true whenever the user navigates away from the Dashboard via a sidebar item
+        // (Financial Accounts + its type shortcuts, Daily NAV Update, Transactions, any Report,
+        // a Member's page, Setting, ...). navigateToWorkspace() consumes it (openSidebar() +
+        // reset to false) the next time it runs, so returning to the Dashboard — whichever page
+        // you came back from, however many taps deep — reopens the sidebar drawer instead of
+        // landing on a bare Dashboard. Every sidebar item now behaves the same way "Financial
+        // Accounts" did before. Mobile-drawer only; harmless no-op on desktop's persistent rail.
+        let sidebarNavPending = false;
         // Set by the sidebar's per-type shortcuts (see renderSidebarAccountTypeShortcuts) to
         // restrict the Accounts page list to one group/sub-group at a time, e.g.
         // { group: "Investment", subgroup: "Fixed Deposit", label: "Fixed Deposit" }. null shows
@@ -3175,6 +3183,12 @@
             // report card, etc.) — scrolling before that would target a not-yet-full-height page
             // and land in the wrong place.
             window.scrollTo(0, workspaceScrollY);
+            // v241: reopen the sidebar drawer if this return-to-Dashboard followed a
+            // sidebar-originated visit somewhere else in the app — see sidebarNavPending above.
+            if (sidebarNavPending) {
+                sidebarNavPending = false;
+                openSidebar();
+            }
         }
 
         async function navigateToAccountsPage(typeFilter, backTarget) {
@@ -3193,21 +3207,12 @@
         // v222 fix: Accounts page's "← Back" button target — previously hardcoded to
         // navigateToWorkspace(), which stranded users on the Dashboard when Accounts was
         // opened from the new Net Worth Statement page instead of the sidebar/dashboard.
+        // v241: no longer special-cases the sidebar-reopen behavior here — navigateToWorkspace()
+        // now does that generically for every sidebar-originated page, driven by
+        // sidebarNavPending (set in sidebarFilterAccountsByType() for the type shortcuts).
         function handleAccountsBackClick() {
             if (accountsPageBackTarget === "networth-statement") navigateToNetWorthStatementPage();
-            else {
-                // v240: coming back from a sidebar "Financial Accounts ⌄" type shortcut (e.g.
-                // "Current Account") used to land straight on a bare Dashboard. Now it reopens
-                // the sidebar first, restoring the same state the user was in right before they
-                // tapped into that account type — one step back to the sidebar, not straight
-                // through it. Only applies when a type filter was actually set (i.e. the page
-                // was reached via a sidebar shortcut, not the Dashboard's own "Accounts" link);
-                // desktop's persistent sidebar rail is unaffected, this only matters for the
-                // mobile drawer.
-                const cameFromSidebarTypeShortcut = !!accountsPageTypeFilter;
-                navigateToWorkspace();
-                if (cameFromSidebarTypeShortcut) openSidebar();
-            }
+            else navigateToWorkspace();
         }
 
         // Clears the Accounts page's type filter (if any) and re-renders — wired to the "Show
@@ -3249,6 +3254,11 @@
         // dashboard button.
         function navigateToDataSecurityPage() {
             closeSidebar();
+            // v241: reused both as the sidebar's "Setting" entry point and as the "← Back"
+            // target from Settings' own sub-pages (Categories, Backup, Auto-Lock, Database) —
+            // either way the visit traces back to the sidebar, so marking it here every time is
+            // harmless and correct.
+            sidebarNavPending = true;
             workspaceScrollY = window.scrollY;
             showPage("page-datasecurity");
             window.scrollTo(0, 0);
@@ -3286,6 +3296,7 @@
         // batches, one row per NAV Date.
         function navigateToNavUpdatePage() {
             closeSidebar();
+            sidebarNavPending = true; // v241: only ever reached via the sidebar's own button
             workspaceScrollY = window.scrollY;
             showPage("page-navupdate");
             window.scrollTo(0, 0);
@@ -3403,6 +3414,10 @@
         function sidebarGo(el) {
             const target = el.dataset.target;
             closeSidebar();
+            // v241: every real destination here (everything except re-landing on the Dashboard
+            // itself, or the non-navigational "lock" action) counts as a sidebar-originated
+            // visit — see sidebarNavPending above.
+            if (target !== "workspace" && target !== "lock") sidebarNavPending = true;
             if (target === "workspace") navigateToWorkspace();
             else if (target === "all-ledger") navigateToLedgerPage("all");
             else if (target === "savings") navigateToSavingsPage();
@@ -6286,6 +6301,7 @@
         }
 
         function sidebarGoMember(el) {
+            sidebarNavPending = true; // v241: only ever reached via a sidebar member row
             navigateToMemberPage(el.dataset.key);
         }
 
@@ -6374,6 +6390,15 @@
 
         // Wired to each shortcut above — opens the Accounts page filtered to just that
         // group/sub-group instead of the full list.
+        // v241: thin wrapper for the sidebar's own "Financial Accounts" button — that button and
+        // the Dashboard's "Accounts" section-title both call navigateToAccountsPage() with no
+        // arguments, so this is the only way to tell "came from the sidebar" apart from "came
+        // from the Dashboard" and mark sidebarNavPending only for the former.
+        function sidebarGoFinancialAccounts() {
+            sidebarNavPending = true;
+            navigateToAccountsPage();
+        }
+
         function sidebarFilterAccountsByType(el) {
             // v222 fix: this same handler is now wired to both the sidebar's type shortcuts
             // (want "back to Dashboard") and the Net Worth Statement page's rows (want "back
@@ -6383,6 +6408,10 @@
             // v240: reverted the v239 auto-collapse — the "Financial Accounts ⌄" shortcut list
             // in the sidebar now only ever expands/collapses via its own chevron button, never
             // as a side-effect of picking one of its items.
+            // v241: real sidebar shortcuts (not the Net Worth Statement's own rows, which reuse
+            // this same handler) mark themselves as a sidebar-originated visit — see
+            // sidebarNavPending above.
+            if (!el.classList.contains("statement-row")) sidebarNavPending = true;
             navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label }, backTarget);
         }
 
@@ -12643,6 +12672,7 @@
             reportCardClickTotal: (el) => reportCardClickTotal(el),
             clearSavingsMonthScope: () => clearSavingsMonthScope(),
             navigateToAccountsPage: () => navigateToAccountsPage(),
+            sidebarGoFinancialAccounts: () => sidebarGoFinancialAccounts(),
             handleAccountsBackClick: () => handleAccountsBackClick(),
             navigateToCategoriesPage: () => navigateToCategoriesPage(),
             navigateToTemplatesPage: () => navigateToTemplatesPage(),
