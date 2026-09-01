@@ -3195,7 +3195,19 @@
         // opened from the new Net Worth Statement page instead of the sidebar/dashboard.
         function handleAccountsBackClick() {
             if (accountsPageBackTarget === "networth-statement") navigateToNetWorthStatementPage();
-            else navigateToWorkspace();
+            else {
+                // v240: coming back from a sidebar "Financial Accounts ⌄" type shortcut (e.g.
+                // "Current Account") used to land straight on a bare Dashboard. Now it reopens
+                // the sidebar first, restoring the same state the user was in right before they
+                // tapped into that account type — one step back to the sidebar, not straight
+                // through it. Only applies when a type filter was actually set (i.e. the page
+                // was reached via a sidebar shortcut, not the Dashboard's own "Accounts" link);
+                // desktop's persistent sidebar rail is unaffected, this only matters for the
+                // mobile drawer.
+                const cameFromSidebarTypeShortcut = !!accountsPageTypeFilter;
+                navigateToWorkspace();
+                if (cameFromSidebarTypeShortcut) openSidebar();
+            }
         }
 
         // Clears the Accounts page's type filter (if any) and re-renders — wired to the "Show
@@ -6362,22 +6374,16 @@
 
         // Wired to each shortcut above — opens the Accounts page filtered to just that
         // group/sub-group instead of the full list.
-        async function sidebarFilterAccountsByType(el) {
+        function sidebarFilterAccountsByType(el) {
             // v222 fix: this same handler is now wired to both the sidebar's type shortcuts
             // (want "back to Dashboard") and the Net Worth Statement page's rows (want "back
             // to Net Worth Statement") — tell them apart by which markup called it, since both
             // share this one data-click action.
             const backTarget = el.classList.contains("statement-row") ? "networth-statement" : "workspace";
-            // v239: picking a sidebar type shortcut now auto-collapses that shortcut list
-            // (mirrors the Accounts-page hint links being hidden) — the chevron above it still
-            // expands/collapses it manually exactly as before, this only changes the state right
-            // after a pick. Net Worth Statement rows aren't part of that sidebar list, so leave
-            // them out of this.
-            if (!el.classList.contains("statement-row")) {
-                sidebarAccountShortcutsExpanded = false;
-            }
-            await navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label }, backTarget);
-            renderSidebarAccountTypeShortcuts();
+            // v240: reverted the v239 auto-collapse — the "Financial Accounts ⌄" shortcut list
+            // in the sidebar now only ever expands/collapses via its own chevron button, never
+            // as a side-effect of picking one of its items.
+            navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label }, backTarget);
         }
 
         // --- FILTERED NET WORTH HELPERS (shared by the dashboard's per-member rows and the
