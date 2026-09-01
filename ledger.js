@@ -4271,7 +4271,10 @@
             const titleEl = document.getElementById("accountsPageListTitle");
             const hintEl = document.getElementById("accountsPageFilterHint");
             if (titleEl) titleEl.textContent = filter ? filter.label : "All Accounts";
-            if (hintEl) hintEl.classList.toggle("hidden", !filter);
+            // v239: "Show All Accounts" hint link hidden per user request — clearAccountsPageTypeFilter()
+            // and the underlying data-click wiring are left untouched, so nothing about the
+            // function itself is removed, it's just not shown any more.
+            if (hintEl) hintEl.classList.add("hidden");
 
             let html = "";
             let lastGroup = null;
@@ -4314,7 +4317,7 @@
                 if (subgroup !== lastSubgroup) {
                     flushSubgroupTotal();
                     if (subgroup) {
-                        html += `<div class="config-list-subgroup-label">↳ ${escapeHtml(subgroup)}</div>`;
+                        html += `<div class="config-list-subgroup-label" style="display:none;">↳ ${escapeHtml(subgroup)}</div>`; // v239: hidden per user request
                     }
                     lastSubgroup = subgroup;
                 }
@@ -6359,13 +6362,22 @@
 
         // Wired to each shortcut above — opens the Accounts page filtered to just that
         // group/sub-group instead of the full list.
-        function sidebarFilterAccountsByType(el) {
+        async function sidebarFilterAccountsByType(el) {
             // v222 fix: this same handler is now wired to both the sidebar's type shortcuts
             // (want "back to Dashboard") and the Net Worth Statement page's rows (want "back
             // to Net Worth Statement") — tell them apart by which markup called it, since both
             // share this one data-click action.
             const backTarget = el.classList.contains("statement-row") ? "networth-statement" : "workspace";
-            navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label }, backTarget);
+            // v239: picking a sidebar type shortcut now auto-collapses that shortcut list
+            // (mirrors the Accounts-page hint links being hidden) — the chevron above it still
+            // expands/collapses it manually exactly as before, this only changes the state right
+            // after a pick. Net Worth Statement rows aren't part of that sidebar list, so leave
+            // them out of this.
+            if (!el.classList.contains("statement-row")) {
+                sidebarAccountShortcutsExpanded = false;
+            }
+            await navigateToAccountsPage({ group: el.dataset.group, subgroup: el.dataset.subgroup || "", label: el.dataset.label }, backTarget);
+            renderSidebarAccountTypeShortcuts();
         }
 
         // --- FILTERED NET WORTH HELPERS (shared by the dashboard's per-member rows and the
