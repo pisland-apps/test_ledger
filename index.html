@@ -2615,6 +2615,14 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
             </div>
         </div>
+        <!-- List/Calendar view toggle (v232) — only shown on the plain "all accounts" Portfolio
+             General Log (isPortfolioAllView), i.e. the page reached via the sidebar's
+             "Transactions" link. Calendar mode reuses this same page/state rather than being a
+             separate sidebar entry — see renderLedgerViewToggle()/renderLedgerCalendarSection(). -->
+        <div class="nav-view-toggle" id="ledgerViewToggle" style="display:none; margin:0 0 14px;">
+            <button type="button" class="nav-view-toggle-btn active" data-click="setLedgerViewMode" data-mode="list" style="flex:1;">📋 List</button>
+            <button type="button" class="nav-view-toggle-btn" data-click="setLedgerViewMode" data-mode="calendar" style="flex:1;">📅 Calendar</button>
+        </div>
         <div id="ledgerCurrentBalanceBanner" class="net-savings-banner" style="display:none; background:var(--active-bg);">
             <span id="ledgerCurrentBalanceLabel">Current Balance</span>: <span id="ledgerCurrentBalanceValue">0.00</span>
         </div>
@@ -2650,6 +2658,23 @@
             <div id="fundHoldingsTableWrap" style="overflow-x:auto;"></div>
         </div>
         <div class="ledger-container" id="ledgerList"></div>
+
+        <!-- Calendar view (v232) — alternate to #ledgerList above on the Portfolio General Log.
+             Month grid with a dot on any day that has a transaction; tapping a day shows that
+             day's transactions below, newest-added first (same tie-break as the list view). -->
+        <div id="ledgerCalendarSection" style="display:none;">
+            <div style="display:flex; align-items:center; justify-content:center; gap:16px; padding:2px 0 12px;">
+                <button type="button" class="btn-util" data-click="ledgerCalendarPrevMonth" style="padding:6px 14px; font-size:1rem;">&lt;</button>
+                <span id="ledgerCalendarMonthLabel" style="font-weight:800; font-size:1.05rem; min-width:140px; text-align:center;"></span>
+                <button type="button" class="btn-util" data-click="ledgerCalendarNextMonth" style="padding:6px 14px; font-size:1rem;">&gt;</button>
+            </div>
+            <div id="ledgerCalendarGrid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:4px; text-align:center; margin-bottom:16px;"></div>
+            <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px;">
+                <h4 id="ledgerCalendarDayHeader" style="font-weight:800; font-size:1rem;"></h4>
+                <span id="ledgerCalendarDayCount" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;"></span>
+            </div>
+            <div class="ledger-container" id="ledgerCalendarDayList"></div>
+        </div>
 
         <!-- Quick-add type picker (v34) — lets a new Income/Expense/Transfer entry be logged
              straight from an account's own Activity page, pre-selecting that account. -->

@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v231";
-        const APP_VERSION_DATE = "2026-08-31";
+        const APP_VERSION = "v232";
+        const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -1186,6 +1186,19 @@
         // Pagination for the transaction list — avoids rendering thousands of DOM rows at once.
         let ledgerRenderLimit = 50;
         const LEDGER_PAGE_SIZE = 50;
+
+        // Portfolio General Log view mode (v232) — "list" is the existing infinite list,
+        // "calendar" shows a month grid + selected day's transactions. Persisted via SETTINGS
+        // (key "ledgerViewMode") like the dashboard widget toggles. Only ever relevant on the
+        // isPortfolioAllView page (see renderApp's ledger-page section) — other drill-ins
+        // (account/category/type) always render as "list" regardless of this value.
+        let ledgerViewMode = "list";
+        // Which month the calendar grid is showing — defaults to the current month each time
+        // calendar mode is (re)entered fresh (see setLedgerViewMode), not persisted.
+        let ledgerCalYear = new Date().getFullYear();
+        let ledgerCalMonth = new Date().getMonth(); // 0-11
+        // The selected day's date as "YYYY-MM-DD", or null when nothing is selected yet.
+        let ledgerCalSelectedDate = null;
 
         // v121: replaced the old single currentTxImageData (one inline receipt photo) with a
         // multi-attachment model, images and PDFs, styled after the companion Family Health &
@@ -2395,6 +2408,153 @@
             window.scrollTo(0,0);
             pushVirtualState("ledger");
             renderApp();
+        }
+
+        // Switches the Portfolio General Log between its List and Calendar views (v232). Persisted
+        // so the next visit to Transactions opens in whichever mode was last used.
+        function setLedgerViewMode(el) {
+            const mode = el.dataset.mode;
+            if (mode === ledgerViewMode) return;
+            ledgerViewMode = mode;
+            if (mode === "calendar" && ledgerCalSelectedDate === null) {
+                // First time entering calendar mode this session — default to today's month and,
+                // if today has any transactions, today itself (mirrors the reference app opening
+                // with the current day already selected). Otherwise just the month grid shows,
+                // day list stays empty until the user taps a date.
+                const today = new Date();
+                ledgerCalYear = today.getFullYear();
+                ledgerCalMonth = today.getMonth();
+                ledgerCalSelectedDate = localDateStr(today);
+            }
+            writeDB(STORES.SETTINGS, { key: "ledgerViewMode", value: mode });
+            renderApp();
+        }
+
+        function ledgerCalendarPrevMonth() {
+            ledgerCalMonth--;
+            if (ledgerCalMonth < 0) { ledgerCalMonth = 11; ledgerCalYear--; }
+            renderApp();
+        }
+
+        function ledgerCalendarNextMonth() {
+            ledgerCalMonth++;
+            if (ledgerCalMonth > 11) { ledgerCalMonth = 0; ledgerCalYear++; }
+            renderApp();
+        }
+
+        function selectLedgerCalendarDate(dateStr) {
+            ledgerCalSelectedDate = dateStr;
+            renderApp();
+        }
+
+        // Builds the month grid + selected-day transaction list for the Portfolio General Log's
+        // Calendar view (v232). Called from renderApp's ledger-page section, which already has
+        // `txs`/`accounts` loaded — passed in rather than re-reading the DB here.
+        function renderLedgerCalendarSection(txs, accounts) {
+            const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+            document.getElementById("ledgerCalendarMonthLabel").textContent = `${monthNames[ledgerCalMonth]} ${ledgerCalYear}`;
+
+            // Which dates in this month have at least one transaction — drives the small dot
+            // under each day number below.
+            const datesWithTx = new Set();
+            txs.forEach(t => {
+                const d = new Date(t.date);
+                if (d.getFullYear() === ledgerCalYear && d.getMonth() === ledgerCalMonth) datesWithTx.add(t.date);
+            });
+
+            const todayStr = localDateStr(new Date());
+            const startWeekday = new Date(ledgerCalYear, ledgerCalMonth, 1).getDay(); // 0 = Sun
+            const daysInMonth = new Date(ledgerCalYear, ledgerCalMonth + 1, 0).getDate();
+
+            const weekdayLabels = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+            let gridHTML = weekdayLabels.map(w => `<div style="font-size:0.68rem; font-weight:700; color:var(--text-muted); padding:4px 0;">${w}</div>`).join("");
+            for (let i = 0; i < startWeekday; i++) gridHTML += `<div></div>`;
+            for (let day = 1; day <= daysInMonth; day++) {
+                const dateStr = `${ledgerCalYear}-${String(ledgerCalMonth + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+                const isSelected = dateStr === ledgerCalSelectedDate;
+                const isToday = dateStr === todayStr;
+                const hasTx = datesWithTx.has(dateStr);
+                const bg = isSelected ? "var(--primary)" : "transparent";
+                const fg = isSelected ? "#fff" : "var(--text-main)";
+                const ring = (!isSelected && isToday) ? "1.5px solid var(--primary)" : "1.5px solid transparent";
+                const dotColor = hasTx ? (isSelected ? "#fff" : "var(--expense-color)") : "transparent";
+                gridHTML += `
+                    <div data-click="selectLedgerCalendarDate" data-date="${dateStr}" style="cursor:pointer; padding:6px 0 4px; border-radius:10px; background:${bg}; border:${ring};">
+                        <div style="font-size:0.82rem; font-weight:700; color:${fg};">${day}</div>
+                        <div style="height:5px; width:5px; border-radius:50%; margin:3px auto 0; background:${dotColor};"></div>
+                    </div>
+                `;
+            }
+            document.getElementById("ledgerCalendarGrid").innerHTML = gridHTML;
+
+            // Selected day's transactions, newest-added first (same tie-break as the list view —
+            // see v231 comment on the main sort above).
+            const headerEl = document.getElementById("ledgerCalendarDayHeader");
+            const countEl = document.getElementById("ledgerCalendarDayCount");
+            const listEl = document.getElementById("ledgerCalendarDayList");
+            if (!ledgerCalSelectedDate) {
+                headerEl.textContent = "";
+                countEl.textContent = "";
+                listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.82rem; padding:20px 0;">Tap a date above to see that day's transactions.</p>`;
+                return;
+            }
+
+            // Same Split Expense collapse as the main list — show one combined row for the
+            // group's representative member rather than every part separately.
+            const dayTxs = txs.filter(t => {
+                if (t.date !== ledgerCalSelectedDate) return false;
+                if (t.splitGroupId) {
+                    const info = getSplitGroupInfo(t, txs);
+                    if (info && t.id !== info.repId) return false;
+                }
+                return true;
+            }).sort((a, b) => b.id - a.id);
+
+            const [y, m, dd] = ledgerCalSelectedDate.split("-").map(Number);
+            headerEl.textContent = `${monthNames[m - 1]} ${dd}, ${y}`;
+            countEl.textContent = dayTxs.length === 1 ? "1 record" : `${dayTxs.length} records`;
+
+            if (dayTxs.length === 0) {
+                listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.82rem; padding:20px 0;">No transactions on this day.</p>`;
+                return;
+            }
+
+            // Deliberately a simpler row than the main list's (no FD/refund/manual-FX badges or
+            // receipt count) — this is a quick day-at-a-glance view; tapping a row still opens the
+            // same full Quick View (openTxQuickView) where every detail is available.
+            listEl.innerHTML = dayTxs.map(t => {
+                const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
+                let col, sgn;
+                if (t.type === "income") { col = "income-color"; sgn = "+"; }
+                else if (t.type === "expense") { col = "expense-color"; sgn = "-"; }
+                else { col = "transfer-color"; sgn = "🔄"; }
+                const iconBadge = t.type === "transfer" ? "🔄" : (splitInfo ? splitInfo.members.map(mm => getCategoryIcon(mm.cat, t.type)).join("") : getCategoryIcon(t.cat, t.type));
+                const txIconBg = t.type === "transfer" ? "#e0e7ff" : categoryIconBgColor(splitInfo ? splitInfo.catLabel : (t.cat || t.type));
+                const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
+                const accountText = t.type === "transfer"
+                    ? `🏦 ${accountName(t.src)} → ${t.dest ? accountName(t.dest) : "(unknown)"}`
+                    : `🏦 ${accountName(t.src)}`;
+                const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertTxAmountToBase(t, accounts), baseCurrency)}</span>` : '';
+                return `
+                    <div class="ledger-item ledger-item-tx" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                        <div class="tx-icon-circle" style="background:${txIconBg};"><span style="line-height:1;">${iconBadge}</span></div>
+                        <div class="tx-row-body">
+                            <div class="item-left">
+                                <span class="item-name">${escapeHtml(t.desc)}</span>
+                                <span class="item-meta">[${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]</span>
+                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="color:var(--${col}); font-weight:bold;">
+                                    ${sgn}${formatCurrency(splitInfo ? splitInfo.totalAmount : t.amount, t.currency)}
+                                    ${sub}
+                                </div>
+                            </div>
+                        </div>
+                        <span class="tx-side-bar" style="background:var(--${col});"></span>
+                    </div>
+                `;
+            }).join("");
         }
 
         // These three handlers serve both year-nav modes (per-account Activity, and the
@@ -10248,6 +10408,30 @@
                 yearNavEl.style.display = "none";
             }
 
+            // List/Calendar toggle (v232) — only on the plain Portfolio General Log
+            // (isPortfolioAllView), the page reached via the sidebar's "Transactions" link. Every
+            // other drill-in (account/category/type) always shows as the ordinary list.
+            const ledgerViewToggleEl = document.getElementById("ledgerViewToggle");
+            const ledgerCalendarSectionEl = document.getElementById("ledgerCalendarSection");
+            const ledgerListContainerEl = document.getElementById("ledgerList");
+            if (isPortfolioAllView) {
+                ledgerViewToggleEl.style.display = "flex";
+                document.querySelectorAll("#ledgerViewToggle .nav-view-toggle-btn").forEach(b => b.classList.toggle("active", b.dataset.mode === ledgerViewMode));
+                if (ledgerViewMode === "calendar") {
+                    yearNavEl.style.display = "none";
+                    ledgerListContainerEl.style.display = "none";
+                    ledgerCalendarSectionEl.style.display = "block";
+                    renderLedgerCalendarSection(txs, accounts);
+                } else {
+                    ledgerCalendarSectionEl.style.display = "none";
+                    ledgerListContainerEl.style.display = "";
+                }
+            } else {
+                ledgerViewToggleEl.style.display = "none";
+                ledgerCalendarSectionEl.style.display = "none";
+                ledgerListContainerEl.style.display = "";
+            }
+
             // "+" quick-add FAB (v34) — only on a specific account's own Activity page.
             document.querySelector("#page-ledger .fab-btn").style.display = showFullAccountHistory ? "flex" : "none";
             closeLedgerQuickAddSheet();
@@ -11874,6 +12058,18 @@
             const storedRecentTxType = await readKeyDB("settings", "recentTxTypeFilter");
             if (storedRecentTxType) recentTxTypeFilter = storedRecentTxType.value || "both";
 
+            const storedLedgerViewMode = await readKeyDB("settings", "ledgerViewMode");
+            if (storedLedgerViewMode) ledgerViewMode = storedLedgerViewMode.value === "calendar" ? "calendar" : "list";
+            if (ledgerViewMode === "calendar") {
+                // Mirrors the default-to-today selection in setLedgerViewMode() — needed here too
+                // since a returning user's persisted mode is already "calendar" on first render,
+                // so that handler never runs this session.
+                const today = new Date();
+                ledgerCalYear = today.getFullYear();
+                ledgerCalMonth = today.getMonth();
+                ledgerCalSelectedDate = localDateStr(today);
+            }
+
             const storedRecentTxAccount = await readKeyDB("settings", "recentTxAccountFilter");
             if (storedRecentTxAccount) recentTxAccountFilter = storedRecentTxAccount.value || "all";
 
@@ -12169,6 +12365,7 @@
                                 case "monthlyTrendAutoScale": monthlyTrendAutoScale = !!rec.value; break;
                                 case "defaultIncomeCategory": defaultIncomeCategory = rec.value || ""; break;
                                 case "defaultExpenseCategory": defaultExpenseCategory = rec.value || ""; break;
+                                case "ledgerViewMode": ledgerViewMode = rec.value === "calendar" ? "calendar" : "list"; break;
                                 case "recentTxTypeFilter": recentTxTypeFilter = rec.value || "both"; break;
                                 case "recentTxAccountFilter": recentTxAccountFilter = rec.value || "all"; break;
                                 case "recentTxCount": recentTxCount = rec.value || 5; break;
@@ -12267,6 +12464,10 @@
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
+            setLedgerViewMode: (el) => setLedgerViewMode(el),
+            ledgerCalendarPrevMonth: () => ledgerCalendarPrevMonth(),
+            ledgerCalendarNextMonth: () => ledgerCalendarNextMonth(),
+            selectLedgerCalendarDate: (el) => selectLedgerCalendarDate(el.dataset.date),
             toggleLedgerQuickAddSheet: () => toggleLedgerQuickAddSheet(),
             closeLedgerQuickAddSheet: () => closeLedgerQuickAddSheet(),
             quickAddChooseType: (el) => quickAddChooseType(el),
