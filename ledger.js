@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v242";
+        const APP_VERSION = "v243";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -351,6 +351,24 @@
         function currencyBadgeHTML(code) {
             const { bg, fg } = currencyBadgeColor(code);
             return `<span style="font-size:0.65rem; padding:1px 4px; border-radius:4px; background:${bg}; color:${fg}; font-weight:bold;">${escapeHtml(code)}</span>`;
+        }
+
+        // v242: small round "coin" icon for a currency row (Multi-Currency subrows on the
+        // Accounts page, the member-page equivalent, and a Multi-Currency account's own Activity
+        // list) — same currencyBadgeColor() palette as the flat code badge above, so a currency's
+        // color stays consistent between the badge and the coin, just rendered as a circle with a
+        // short glyph instead of the 3-letter code. Falls back to the currency code's first two
+        // letters for anything not in the hand-picked glyph table.
+        const CURRENCY_ICON_GLYPHS = {
+            MYR: "RM", SGD: "S$", USD: "$", EUR: "€", GBP: "£", JPY: "¥", AUD: "A$",
+            HKD: "$", CNY: "¥", THB: "฿", IDR: "Rp", INR: "₹", KRW: "₩", TWD: "NT$", BND: "B$",
+        };
+        function currencyIconHTML(code, size) {
+            size = size || 26;
+            const { bg, fg } = currencyBadgeColor(code);
+            const glyph = CURRENCY_ICON_GLYPHS[code] || String(code || "").slice(0, 2);
+            const fontSize = glyph.length > 2 ? size * 0.34 : size * 0.42;
+            return `<span style="display:inline-flex; align-items:center; justify-content:center; width:${size}px; height:${size}px; min-width:${size}px; border-radius:50%; background:${bg}; color:${fg}; font-weight:800; font-size:${fontSize}px; box-shadow:inset 0 0 0 1.5px rgba(255,255,255,0.65), 0 1px 2px rgba(0,0,0,0.12); flex-shrink:0;">${escapeHtml(glyph)}</span>`;
         }
 
         // v163 美化方案 point 2: deterministic gradient-avatar initial for an Accounts-page row —
@@ -4452,7 +4470,7 @@
                                 : "";
                             return `
                             <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(a.id)}" data-currency="${escapeHtml(curr)}" data-back="accounts">
-                                <span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span>${subText}</span>
+                                <span style="display:flex; align-items:center; gap:8px;">${currencyIconHTML(curr)}<span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span>${subText}</span></span>
                                 <span style="color:var(--text-muted);">›</span>
                             </div>`;
                         }).join("");
@@ -6871,7 +6889,7 @@
                                 : "";
                             return `
                             <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(a.id)}" data-currency="${escapeHtml(curr)}" data-back="member">
-                                <span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span>${subText}</span>
+                                <span style="display:flex; align-items:center; gap:8px;">${currencyIconHTML(curr)}<span>${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span>${subText}</span></span>
                                 <span style="color:var(--text-muted);">›</span>
                             </div>`;
                         }).join("");
@@ -11215,9 +11233,12 @@
                         // between them.
                         return `
                         <div class="ledger-item" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(viewingMultiAcc.id)}" data-currency="${escapeHtml(curr)}" data-back="ledger">
-                            <div class="item-left" style="max-width:100%;">
-                                <span class="item-name">${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span></span>
-                                ${subText}
+                            <div class="item-left" style="max-width:100%; display:flex; align-items:center; gap:8px;">
+                                ${currencyIconHTML(curr)}
+                                <div>
+                                    <span class="item-name">${escapeHtml(curr)} <span style="color:var(--text-muted); font-weight:600;">— ${formatBalanceHTML(baskets[curr], curr)}</span></span>
+                                    ${subText}
+                                </div>
                             </div>
                         </div>`;
                     }).join("");
