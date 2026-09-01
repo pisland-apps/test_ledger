@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v245";
+        const APP_VERSION = "v247";
         const APP_VERSION_DATE = "2026-09-01";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -6064,6 +6064,11 @@
             document.documentElement.setAttribute("data-bg-theme", theme.id);
             const metaThemeColor = document.querySelector('meta[name="theme-color"]');
             if (metaThemeColor) metaThemeColor.setAttribute("content", theme.themeColor || THEME_DEFAULTS.themeColor);
+            // v247: independent of which BG_THEMES preset is active — this attribute only ever
+            // matters where the CSS scopes on it too (html[data-bg-theme="crayon"][data-crayon-
+            // font="kalam"]), so re-asserting it here on every theme apply is harmless for every
+            // other preset and keeps it correctly set even right after a fresh selectBgTheme().
+            applyCrayonFontAttr();
             if (save) {
                 try {
                     localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme));
@@ -6141,6 +6146,8 @@
             `).join("");
             const autoToggle = document.getElementById("bgThemeAutoToggle");
             if (autoToggle) autoToggle.checked = isBgThemeAutoEnabled();
+            const fontToggle = document.getElementById("crayonFontToggle");
+            if (fontToggle) fontToggle.checked = isCrayonFontEnabled();
         }
 
         function selectBgTheme(el) {
@@ -6164,6 +6171,28 @@
             const isHidden = panel.style.display === "none";
             if (isHidden) buildBgThemeSwatchGrid();
             panel.style.display = isHidden ? "flex" : "none";
+        }
+
+        // v247: manual toggle (Settings > Background Theme > "Handwritten font (Kalam)") for
+        // whether the 蠟筆小新 preset uses the self-hosted Kalam font or the app's normal
+        // sans-serif — independent of the preset's colors/borders/radius, which stay Kalam-
+        // agnostic. Default "on" (unset key) so this matches the behavior already shipped in
+        // v246 for anyone who hasn't touched the new toggle yet.
+        const CRAYON_FONT_KEY = "ledgerCrayonFontEnabled";
+        function isCrayonFontEnabled() {
+            const v = localStorage.getItem(CRAYON_FONT_KEY);
+            return v === null ? true : v === "1";
+        }
+        function setCrayonFontEnabled(enabled) {
+            try { localStorage.setItem(CRAYON_FONT_KEY, enabled ? "1" : "0"); } catch (e) {}
+            applyCrayonFontAttr();
+        }
+        function applyCrayonFontAttr() {
+            document.documentElement.setAttribute("data-crayon-font", isCrayonFontEnabled() ? "kalam" : "default");
+        }
+        function handleCrayonFontToggleChange() {
+            const toggle = document.getElementById("crayonFontToggle");
+            setCrayonFontEnabled(!!(toggle && toggle.checked));
         }
 
         // v184: re-applies the saved theme the moment this script parses (this runs long before
@@ -12925,6 +12954,7 @@
             changeReportCardPeriod2: (el) => changeReportCardPeriod(2, el.value),
             changeMonthlyTrendYear: (el) => changeMonthlyTrendYear(el),
             handleBgThemeAutoToggleChange: () => handleBgThemeAutoToggleChange(),
+            handleCrayonFontToggleChange: () => handleCrayonFontToggleChange(),
         };
 
         const INPUT_ACTIONS = {

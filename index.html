@@ -2203,6 +2203,28 @@
             25% { transform: rotate(-3deg); }
             75% { transform: rotate(3deg); }
         }
+        /* v246: apply the app's existing self-hosted "Kalam" handwritten font (see the
+           @font-face block above — same files already used by #noteSummaryModal, so this adds
+           zero new network/CSP surface) app-wide while the crayon preset is active, matching
+           臘筆小新风格.md's "用圓潤的手寫風格字體" note. Needs the `*` combinator (not just
+           `html[data-bg-theme="crayon"]`) because the base `* { font-family: ... }` rule above
+           sets font-family directly on every element, and a directly-set property always wins
+           over an inherited one regardless of the inherited rule's specificity — so overriding
+           has to match that same per-element `*` shape, just with an extra attribute qualifier
+           for higher specificity. #noteSummaryModal's own font-family rule keeps winning inside
+           that modal either way, since an ID selector already outranks this attribute+type one. */
+        /* v247: was unconditional — now gated by data-crayon-font (set from the "Handwritten
+           font (Kalam)" toggle in Settings > Background Theme, default on) so the crayon preset's
+           colors/borders/radius are independent of this manual font choice. Same specificity
+           reasoning as before: has to override the per-element `*` rule near the top of this
+           stylesheet, so it needs the same `*` shape, just with both attributes qualifying it. */
+        html[data-bg-theme="crayon"][data-crayon-font="kalam"] * {
+            font-family: "Kalam", cursive;
+        }
+        /* Settings row for the toggle above only means anything for this one preset — hidden
+           for every other preset's panel instead of showing a control with no visible effect. */
+        #crayonFontToggleRow { display: none; }
+        html[data-bg-theme="crayon"] #crayonFontToggleRow { display: flex; }
     </style>
     <!-- v179: apply any saved background-theme choice before first paint, so the page never
          flashes the default slate background and then jumps to the user's chosen tint.
@@ -2316,6 +2338,11 @@
                 // the crayon preset's scoped border/radius/wiggle CSS (see index.html <style>)
                 // is already active before first paint instead of popping in a frame late.
                 if (saved && saved.id) document.documentElement.setAttribute("data-bg-theme", saved.id);
+                // v247: same reasoning, for the manual Kalam-font toggle (Settings > Background
+                // Theme) — default "on" (matches ledger.js's isCrayonFontEnabled() default) so a
+                // never-touched install still shows Kalam under the crayon preset from first paint.
+                var crayonFontPref = localStorage.getItem("ledgerCrayonFontEnabled");
+                document.documentElement.setAttribute("data-crayon-font", crayonFontPref === "0" ? "default" : "kalam");
             } catch (e) {}
         })();
     </script>
@@ -3348,6 +3375,16 @@
                 </div>
                 <p style="font-size:0.7rem; color:var(--text-muted);">Tapping 暗夜描边 or Slate — anytime, even while Auto is off — sets which one Auto switches to at night. The other stays remembered for daytime.</p>
                 <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
+                <!-- v247: only relevant to the 蠟筆小新 preset (its scoped CSS is the only place
+                     data-crayon-font is read), so this row stays hidden via CSS below for every
+                     other preset instead of cluttering Settings when it wouldn't do anything. -->
+                <div class="toggle-switch-row" id="crayonFontToggleRow" style="margin-top:0;">
+                    <span class="toggle-switch-label">✏️ 蠟筆小新: Handwritten font (Kalam)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="crayonFontToggle" data-change="handleCrayonFontToggleChange">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
                 <span>📊 <strong>Dashboard Widgets</strong></span>
