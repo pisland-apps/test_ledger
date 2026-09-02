@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v259";
+        const APP_VERSION = "v260";
         const APP_VERSION_DATE = "2026-09-02";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -4423,18 +4423,38 @@
             }
 
             // Flushes the pending sub-group subtotal (only when that group actually has
-            // sub-groups configured — plain groups with no sub-division never show one — and,
-            // on the unfiltered list, only when that sub-group has more than one account; a
-            // solo-account sub-group instead gets a bare divider — see .config-list-subgroup-
-            // divider above for why a boundary marker is still needed even without a number).
-            function flushSubgroupTotal() {
-                if (lastSubgroup) {
-                    const key = `${lastGroup}\u0000${lastSubgroup}`;
-                    const soloOnUnfilteredList = !filter && subgroupAccountCounts[key] === 1;
-                    if (soloOnUnfilteredList) {
-                        html += `<div class="config-list-subgroup-divider"></div>`;
+            // sub-groups configured — plain groups with no sub-division never show one).
+            // `closingGroupEnd` is true when this flush is happening because the *group* itself
+            // is ending (about to print Group Total / a new group header) — in that case the
+            // group boundary is already obvious, so no extra marker is needed. It's false when
+            // we're only moving from one sub-group bucket to another *within* the same group,
+            // where a boundary marker is exactly the thing that's missing otherwise.
+            function flushSubgroupTotal(closingGroupEnd) {
+                if (lastSubgroup !== undefined) {
+                    if (lastSubgroup === "") {
+                        // v260: the plain "no sub-group" bucket (e.g. an account like "testing"
+                        // added under a group with Sub-Group left as "(No Sub-Group)") never had
+                        // its own Sub-Total row — there's no name to attach "Sub-Total · X" to.
+                        // But when it sits directly above a *named* sub-group that DOES show a
+                        // Sub-Total below it (e.g. "Fixed Deposit"), there was previously no
+                        // visual break between them at all, so the no-sub-group account looked
+                        // like it belonged to that next named sub-group. A bare divider (same as
+                        // the solo-account case below) fixes that, but only when moving to a
+                        // different sub-group within the same group — not when the group itself
+                        // is ending, since the Group Total line right after already marks that
+                        // boundary clearly and an extra divider there would be redundant. Scoped
+                        // to the unfiltered list only, same as the solo-subgroup case below.
+                        if (!closingGroupEnd && !filter) {
+                            html += `<div class="config-list-subgroup-divider"></div>`;
+                        }
                     } else {
-                        html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <span class="total-amount">${formatBalanceHTML(subgroupTotal, baseCurrency)}</span></div>`;
+                        const key = `${lastGroup}\u0000${lastSubgroup}`;
+                        const soloOnUnfilteredList = !filter && subgroupAccountCounts[key] === 1;
+                        if (soloOnUnfilteredList) {
+                            html += `<div class="config-list-subgroup-divider"></div>`;
+                        } else {
+                            html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <span class="total-amount">${formatBalanceHTML(subgroupTotal, baseCurrency)}</span></div>`;
+                        }
                     }
                 }
                 subgroupTotal = 0;
@@ -4458,14 +4478,14 @@
                 const group = a.group || DEFAULT_ACCOUNT_GROUP;
                 const subgroup = a.subgroup || "";
                 if (group !== lastGroup) {
-                    flushSubgroupTotal();
+                    flushSubgroupTotal(true);
                     flushGroupTotal();
                     html += `<div class="config-list-section-label">${accountGroupBadgeHTML(group)}</div>`;
                     lastGroup = group;
                     lastSubgroup = undefined;
                 }
                 if (subgroup !== lastSubgroup) {
-                    flushSubgroupTotal();
+                    flushSubgroupTotal(false);
                     if (subgroup) {
                         html += `<div class="config-list-subgroup-label" style="display:none;">↳ ${escapeHtml(subgroup)}</div>`; // v239: hidden per user request
                     }
@@ -4675,7 +4695,7 @@
                     html += `<div id="acctSubrows-${escapeHtml(subrowKey)}" class="${isExpanded ? "" : "hidden"}">${subrowsHtml}</div>`;
                 }
             });
-            flushSubgroupTotal();
+            flushSubgroupTotal(true);
             flushGroupTotal();
             document.getElementById("accountsPageList").innerHTML = html || (filter
                 ? `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No ${escapeHtml(filter.label)} accounts yet.</p>`
