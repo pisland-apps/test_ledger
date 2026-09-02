@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v262";
-        const APP_VERSION_DATE = "2026-09-02";
+        const APP_VERSION = "v263";
+        const APP_VERSION_DATE = "2026-09-03";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -280,7 +280,7 @@
         // Deposit/Unit Trust), just where it's filed on the Accounts page.
         const ACCOUNT_SUBGROUPS = {
             "Bank/Cash": ["Current Account", "Savings Account", "Cash Account"],
-            "Investment": ["Fixed Deposit", "KWSP", "CPF", "ASNB", "Unit Trust"],
+            "Investment": ["Fixed Deposit", "KWSP", "CPF", "ASNB", "PTPTN", "Unit Trust"],
         };
         function subgroupsForGroup(group) {
             return ACCOUNT_SUBGROUPS[group] || [];
@@ -6813,6 +6813,7 @@
             const kwspTotal = sumGroup("Investment", ["KWSP"]);
             const cpfTotal = sumGroup("Investment", ["CPF"]);
             const asnbTotal = sumGroup("Investment", ["ASNB"]);
+            const ptptnTotal = sumGroup("Investment", ["PTPTN"]);
             const unitTrustTotal = sumGroup("Investment", ["Unit Trust"]);
             const otherInvTotal = sumGroup("Investment", [""]); // un-sub-grouped Investment accounts
 
@@ -6828,11 +6829,12 @@
                 nwsRow("KWSP", kwspTotal, "Investment", "KWSP"),
                 nwsRow("CPF", cpfTotal, "Investment", "CPF"),
                 nwsRow("ASNB", asnbTotal, "Investment", "ASNB"),
+                nwsRow("PTPTN", ptptnTotal, "Investment", "PTPTN"),
                 nwsRow("Unit Trust", unitTrustTotal, "Investment", "Unit Trust"),
                 nwsRow("Other Investment", otherInvTotal, "Investment", ""),
                 nwsRow("Other Assets", otherAssetsTotal, "Other Assets"),
             ].join("") || `<p style="font-size:0.75rem; color:var(--text-muted);">No asset accounts yet.</p>`;
-            const totalAssets = currentAcct + savingsAcct + cashAcct + otherBankTotal + foreignMoneyAcct + fdTotal + kwspTotal + cpfTotal + asnbTotal + unitTrustTotal + otherInvTotal + otherAssetsTotal;
+            const totalAssets = currentAcct + savingsAcct + cashAcct + otherBankTotal + foreignMoneyAcct + fdTotal + kwspTotal + cpfTotal + asnbTotal + ptptnTotal + unitTrustTotal + otherInvTotal + otherAssetsTotal;
             document.getElementById("nwsAssetsTotal").innerHTML = formatBalanceHTML(totalAssets, baseCurrency);
 
             // --- WHAT I OWE ---

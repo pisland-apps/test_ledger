@@ -1889,58 +1889,6 @@
             transform: translateY(-1px);
             border-color: #c7d2fe;
         }
-        /* v262: Setting hub — card-grid layout (icon badge + label, 3 per row) replacing the
-           old vertical .config-item list, matching the reference "我的" screen the user shared:
-           each entry is its own rounded tile with a colored circular icon badge on top and a
-           short label below, rather than a flat row with a trailing chevron. Functionally
-           identical to .config-item (same [data-click]/data-target attributes, same event
-           delegation — see the closest("[data-click]") dispatcher), purely a visual regrouping. */
-        .settings-card-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-            margin-top: 12px;
-        }
-        .settings-card {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 16px 6px;
-            background: var(--card-bg);
-            border-radius: 16px;
-            border: 1px solid var(--border-color);
-            border-top-color: var(--card-top-border);
-            box-shadow: var(--card-shadow);
-            text-align: center;
-            cursor: pointer;
-            transition: box-shadow 0.15s ease, transform 0.15s ease, border-color 0.15s ease;
-        }
-        .settings-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.08);
-            transform: translateY(-1px);
-            border-color: #c7d2fe;
-        }
-        .settings-card-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0;
-        }
-        .settings-card-label {
-            font-size: 0.72rem;
-            font-weight: 700;
-            color: var(--text-main);
-            line-height: 1.25;
-        }
-        @media (max-width: 380px) {
-            .settings-card-grid { grid-template-columns: repeat(2, 1fr); }
-        }
         /* Fund holding listed under its Unit Trust account row on the Accounts page — indented,
            lighter background/border so it reads as a child of the account above it. Deliberately
            flatter than .config-item above (no shadow/hover-lift) — it's already visually nested
@@ -2707,14 +2655,23 @@
                     <button class="currency-pill" data-click="openCurrencyConfig" title="Base currency" aria-label="Base currency">
                         <span id="currentBasePill">USD</span> ⚙
                     </button>
+                    <!-- v262: Save and Lock reordered to sit either side of Privacy Mode's eye
+                         icon — was eye/save/lock, now save/eye/lock, so the eye toggle sits
+                         directly beside Lock rather than out on its own at the left of the
+                         cluster. Save/Lock icons also swapped from emoji (💾/🔒) to the same
+                         Feather-style outline SVG (viewBox 0 0 24 24, stroke=currentColor,
+                         stroke-width=2, round caps/joins, 20x20) that Privacy Mode's eye icon
+                         already used — all three now share one visual language instead of two
+                         emoji next to one line-icon. Static markup (no state to toggle), unlike
+                         the eye icon which is swapped via innerHTML by applyPrivacyModeAttr(). -->
+                    <button class="lock-btn-header" title="Quick export (encrypted backup)" aria-label="Quick export encrypted backup" data-click="exportBackupQuick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg></button>
                     <!-- v249: Privacy Mode — blurs Net Worth / Financial Assets / Real Estate
                          figures (frosted-glass look) so opening the app around other people
                          doesn't broadcast your balance; a blurred figure reveals on tap for a
                          few seconds. State persists (localStorage), independent of every other
                          toggle. Icon/label kept in sync by applyPrivacyModeAttr(). -->
                     <button class="lock-btn-header" id="privacyModeToggleBtn" title="Toggle privacy mode (blur amounts)" aria-label="Toggle privacy mode" data-click="togglePrivacyMode"></button>
-                    <button class="lock-btn-header" title="Quick export (encrypted backup)" aria-label="Quick export encrypted backup" data-click="exportBackupQuick">💾</button>
-                    <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow">🔒</button>
+                    <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
                 </div>
             </div>
             <div class="net-worth-container">
@@ -3646,30 +3603,127 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Members, backups, auto-lock &amp; storage</p>
             </div>
         </div>
-        <div class="settings-card-grid">
-            <div class="settings-card" data-click="toggleBgThemeSettings">
-                <span class="settings-card-icon" style="background:#fef9c3; color:#a16207;">🎨</span>
-                <span class="settings-card-label">Background<br>Theme</span>
+        <div class="config-list">
+            <div class="config-item" style="cursor:pointer;" data-click="toggleBgThemeSettings">
+                <span>🎨 <strong>Background Theme</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="toggleDashboardWidgetsSettings">
-                <span class="settings-card-icon" style="background:#ccfbf1; color:#0d9488;">📊</span>
-                <span class="settings-card-label">Dashboard<br>Widgets</span>
+            <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the page background and the tint of the chrome shadows (FAB, calculator, nav bar) to match. Cards, glass panels and data colors stay the same.</p>
+                <!-- v206: mirrors the OS's own day/night auto-switch — toggling this on tracks
+                     prefers-color-scheme live, flipping between whichever dark preset (暗夜描边
+                     or Slate) you last tapped and whichever light preset was active beforehand.
+                     Tapping any swatch below turns Auto back off but still remembers that swatch
+                     for its side (light or dark) — so you can change which dark preset Auto uses
+                     any time, not just while turning Auto on. -->
+                <div class="toggle-switch-row" style="margin-top:0;">
+                    <span class="toggle-switch-label">🌗 Auto (follow system day/night)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="bgThemeAutoToggle" data-change="handleBgThemeAutoToggleChange">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
+                <p style="font-size:0.7rem; color:var(--text-muted);">Tapping 暗夜描边 or Slate — anytime, even while Auto is off — sets which one Auto switches to at night. The other stays remembered for daytime.</p>
+                <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
+                <!-- v247: only relevant to the 蠟筆小新 preset (its scoped CSS is the only place
+                     data-crayon-font is read), so this row stays hidden via CSS below for every
+                     other preset instead of cluttering Settings when it wouldn't do anything. -->
+                <div class="toggle-switch-row" id="crayonFontToggleRow" style="margin-top:0;">
+                    <span class="toggle-switch-label">✏️ 蠟筆小新: Handwritten font (Kalam)</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="crayonFontToggle" data-change="handleCrayonFontToggleChange">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
             </div>
-            <div class="settings-card" data-click="toggleDefaultAccountsSettings">
-                <span class="settings-card-icon" style="background:#fae8ff; color:#a21caf;">💰</span>
-                <span class="settings-card-label">Default<br>Accounts</span>
+            <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
+                <span>📊 <strong>Dashboard Widgets</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="sidebarGo" data-target="members">
-                <span class="settings-card-icon" style="background:#ede9fe; color:#7c3aed;">👪</span>
-                <span class="settings-card-label">Manage<br>Members</span>
+            <div id="dashboardWidgetsSettingsPanel" style="display:none; flex-direction:column; gap:14px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <div class="form-row" style="margin-bottom:0;">
+                    <label>Order on Dashboard</label>
+                    <button type="button" id="dashboardWidgetOrderSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="dashboardWidgetOrderSelect" data-title="Order on Dashboard">
+                        <span id="dashboardWidgetOrderSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="dashboardWidgetOrderSelect" style="display:none;" data-change="handleDashboardWidgetOrderChange">
+                        <option value="accounts-first">Accounts, then Recent Transactions</option>
+                        <option value="recenttx-first">Recent Transactions, then Accounts</option>
+                    </select>
+                </div>
+                <div>
+                    <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">ACCOUNTS WIDGET</p>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <label>Number of items shown</label>
+                        <button type="button" id="pinnedAccountCountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="pinnedAccountCountSelect" data-title="Number of Items Shown">
+                            <span id="pinnedAccountCountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="pinnedAccountCountSelect" style="display:none;" data-change="handlePinnedAccountCountChange"></select>
+                    </div>
+                    <div id="pinnedAccountSlotSelects" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
+                </div>
+                <div>
+                    <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">RECENT TRANSACTIONS WIDGET</p>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <label>Show</label>
+                        <button type="button" id="recentTxTypeSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxTypeSelect" data-title="Show">
+                            <span id="recentTxTypeSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="recentTxTypeSelect" style="display:none;" data-change="handleRecentTxSettingChange">
+                            <option value="both">Income + Expense</option>
+                            <option value="income">Income Only</option>
+                            <option value="expense">Expense Only</option>
+                        </select>
+                    </div>
+                    <div class="form-row" style="margin-bottom:0; margin-top:8px;">
+                        <label>Account</label>
+                        <button type="button" id="recentTxAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxAccountSelect" data-title="Select Account">
+                            <span id="recentTxAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="recentTxAccountSelect" style="display:none;" data-change="handleRecentTxSettingChange">
+                            <option value="all">All Accounts</option>
+                        </select>
+                    </div>
+                    <div class="form-row" style="margin-bottom:0; margin-top:8px;">
+                        <label>Number of items</label>
+                        <button type="button" id="recentTxCountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxCountSelect" data-title="Number of Items">
+                            <span id="recentTxCountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                        <select id="recentTxCountSelect" style="display:none;" data-change="handleRecentTxSettingChange"></select>
+                    </div>
+                </div>
             </div>
-            <div class="settings-card" data-click="navigateToCategoriesPage">
-                <span class="settings-card-icon" style="background:#d1fae5; color:#059669;">🏷️</span>
-                <span class="settings-card-label">Manage<br>Categories</span>
+            <div class="config-item" style="cursor:pointer;" data-click="toggleDefaultAccountsSettings">
+                <span>💰 <strong>Default Accounts</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="navigateToTemplatesPage">
-                <span class="settings-card-icon" style="background:#fef3c7; color:#d97706;">🧾</span>
-                <span class="settings-card-label">Transaction<br>Templates</span>
+            <div id="defaultAccountsSettingsPanel" style="display:none; flex-direction:column; gap:14px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <div class="form-row" style="margin-bottom:0;">
+                    <label>Default Payment Account</label>
+                    <button type="button" id="defaultPaymentAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultPaymentAccountSelect" data-title="Default Payment Account">
+                        <span id="defaultPaymentAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="defaultPaymentAccountSelect" style="display:none;" data-change="saveDefaultPaymentAccount"></select>
+                </div>
+                <div class="form-row" style="margin-bottom:0;">
+                    <label>Default Receive Account</label>
+                    <button type="button" id="defaultReceiveAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultReceiveAccountSelect" data-title="Default Receive Account">
+                        <span id="defaultReceiveAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="defaultReceiveAccountSelect" style="display:none;" data-change="saveDefaultReceiveAccount"></select>
+                </div>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="members">
+                <span>👪 <strong>Manage Members</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="navigateToCategoriesPage">
+                <span>🏷️ <strong>Manage Categories</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="navigateToTemplatesPage">
+                <span>🧾 <strong>Transaction Templates</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
             <!-- v257: Manage Tags — trip/event labels (e.g. "Japan Holiday Aug 2026") a transaction
                  can carry alongside its Category, so spending across a whole trip/claim can be
@@ -3678,133 +3732,29 @@
                  icon/type/parent fields (see renderTagsPage()/openTagFormModal() in ledger.js) —
                  tags don't need their own icon since they're always shown alongside a
                  transaction's existing Category icon, not in place of it. -->
-            <div class="settings-card" data-click="navigateToTagsPage">
-                <span class="settings-card-icon" style="background:#e0f2fe; color:#0369a1;">🔖</span>
-                <span class="settings-card-label">Manage<br>Tags</span>
+            <div class="config-item" style="cursor:pointer;" data-click="navigateToTagsPage">
+                <span>🔖 <strong>Manage Tags</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="sidebarGo" data-target="backup">
-                <span class="settings-card-icon" style="background:#fce7f3; color:#be185d;">💾</span>
-                <span class="settings-card-label">Backup &amp;<br>Restore</span>
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="backup">
+                <span>💾 <strong>Backup &amp; Restore</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="sidebarGo" data-target="autolock">
-                <span class="settings-card-icon" style="background:#ffedd5; color:#c2410c;">⏱️</span>
-                <span class="settings-card-label">Auto-Lock</span>
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="autolock">
+                <span>⏱️ <strong>Auto-Lock</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="sidebarGo" data-target="database">
-                <span class="settings-card-icon" style="background:#e2e8f0; color:#475569;">🗄️</span>
-                <span class="settings-card-label">App Local<br>Database</span>
+            <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="database">
+                <span>🗄️ <strong>App Local Database</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="lockAppNow">
-                <span class="settings-card-icon" style="background:#dbeafe; color:#1d4ed8;">🔒</span>
-                <span class="settings-card-label">Lock App<br>Now</span>
+            <div class="config-item" style="cursor:pointer;" data-click="lockAppNow">
+                <span>🔒 <strong>Lock App Now</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
-            <div class="settings-card" data-click="openResetAppDataModal">
-                <span class="settings-card-icon" style="background:#fee2e2; color:#dc2626;">🗑️</span>
-                <span class="settings-card-label" style="color:var(--expense-color);">Reset App<br>Data</span>
-            </div>
-        </div>
-
-        <!-- v262: the three settings that need more than a simple tap-to-navigate (Background
-             Theme, Dashboard Widgets, Default Accounts) still open as expandable panels — same
-             toggleBgThemeSettings()/toggleDashboardWidgetsSettings()/toggleDefaultAccountsSettings()
-             functions as before, just relocated below the card grid instead of sitting inline
-             between list rows, since a grid has no natural "expand right here" spot the way the
-             old vertical list did. -->
-        <div id="bgThemeSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-top:14px;">
-            <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the page background and the tint of the chrome shadows (FAB, calculator, nav bar) to match. Cards, glass panels and data colors stay the same.</p>
-            <!-- v206: mirrors the OS's own day/night auto-switch — toggling this on tracks
-                 prefers-color-scheme live, flipping between whichever dark preset (暗夜描边
-                 or Slate) you last tapped and whichever light preset was active beforehand.
-                 Tapping any swatch below turns Auto back off but still remembers that swatch
-                 for its side (light or dark) — so you can change which dark preset Auto uses
-                 any time, not just while turning Auto on. -->
-            <div class="toggle-switch-row" style="margin-top:0;">
-                <span class="toggle-switch-label">🌗 Auto (follow system day/night)</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="bgThemeAutoToggle" data-change="handleBgThemeAutoToggleChange">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            <p style="font-size:0.7rem; color:var(--text-muted);">Tapping 暗夜描边 or Slate — anytime, even while Auto is off — sets which one Auto switches to at night. The other stays remembered for daytime.</p>
-            <div class="color-swatch-grid" id="bgThemeSwatchGrid"></div>
-            <!-- v247: only relevant to the 蠟筆小新 preset (its scoped CSS is the only place
-                 data-crayon-font is read), so this row stays hidden via CSS below for every
-                 other preset instead of cluttering Settings when it wouldn't do anything. -->
-            <div class="toggle-switch-row" id="crayonFontToggleRow" style="margin-top:0;">
-                <span class="toggle-switch-label">✏️ 蠟筆小新: Handwritten font (Kalam)</span>
-                <label class="toggle-switch">
-                    <input type="checkbox" id="crayonFontToggle" data-change="handleCrayonFontToggleChange">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-        </div>
-        <div id="dashboardWidgetsSettingsPanel" style="display:none; flex-direction:column; gap:14px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-top:14px;">
-            <div class="form-row" style="margin-bottom:0;">
-                <label>Order on Dashboard</label>
-                <button type="button" id="dashboardWidgetOrderSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="dashboardWidgetOrderSelect" data-title="Order on Dashboard">
-                    <span id="dashboardWidgetOrderSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                </button>
-                <select id="dashboardWidgetOrderSelect" style="display:none;" data-change="handleDashboardWidgetOrderChange">
-                    <option value="accounts-first">Accounts, then Recent Transactions</option>
-                    <option value="recenttx-first">Recent Transactions, then Accounts</option>
-                </select>
-            </div>
-            <div>
-                <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">ACCOUNTS WIDGET</p>
-                <div class="form-row" style="margin-bottom:0;">
-                    <label>Number of items shown</label>
-                    <button type="button" id="pinnedAccountCountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="pinnedAccountCountSelect" data-title="Number of Items Shown">
-                        <span id="pinnedAccountCountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                    </button>
-                    <select id="pinnedAccountCountSelect" style="display:none;" data-change="handlePinnedAccountCountChange"></select>
-                </div>
-                <div id="pinnedAccountSlotSelects" style="display:flex; flex-direction:column; gap:8px; margin-top:8px;"></div>
-            </div>
-            <div>
-                <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">RECENT TRANSACTIONS WIDGET</p>
-                <div class="form-row" style="margin-bottom:0;">
-                    <label>Show</label>
-                    <button type="button" id="recentTxTypeSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxTypeSelect" data-title="Show">
-                        <span id="recentTxTypeSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                    </button>
-                    <select id="recentTxTypeSelect" style="display:none;" data-change="handleRecentTxSettingChange">
-                        <option value="both">Income + Expense</option>
-                        <option value="income">Income Only</option>
-                        <option value="expense">Expense Only</option>
-                    </select>
-                </div>
-                <div class="form-row" style="margin-bottom:0; margin-top:8px;">
-                    <label>Account</label>
-                    <button type="button" id="recentTxAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxAccountSelect" data-title="Select Account">
-                        <span id="recentTxAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                    </button>
-                    <select id="recentTxAccountSelect" style="display:none;" data-change="handleRecentTxSettingChange">
-                        <option value="all">All Accounts</option>
-                    </select>
-                </div>
-                <div class="form-row" style="margin-bottom:0; margin-top:8px;">
-                    <label>Number of items</label>
-                    <button type="button" id="recentTxCountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="recentTxCountSelect" data-title="Number of Items">
-                        <span id="recentTxCountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                    </button>
-                    <select id="recentTxCountSelect" style="display:none;" data-change="handleRecentTxSettingChange"></select>
-                </div>
-            </div>
-        </div>
-        <div id="defaultAccountsSettingsPanel" style="display:none; flex-direction:column; gap:14px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-top:14px;">
-            <div class="form-row" style="margin-bottom:0;">
-                <label>Default Payment Account</label>
-                <button type="button" id="defaultPaymentAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultPaymentAccountSelect" data-title="Default Payment Account">
-                    <span id="defaultPaymentAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                </button>
-                <select id="defaultPaymentAccountSelect" style="display:none;" data-change="saveDefaultPaymentAccount"></select>
-            </div>
-            <div class="form-row" style="margin-bottom:0;">
-                <label>Default Receive Account</label>
-                <button type="button" id="defaultReceiveAccountSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="defaultReceiveAccountSelect" data-title="Default Receive Account">
-                    <span id="defaultReceiveAccountSelectBtnText">Select...</span><span class="account-picker-chevron">▾</span>
-                </button>
-                <select id="defaultReceiveAccountSelect" style="display:none;" data-change="saveDefaultReceiveAccount"></select>
+            <div class="config-item" style="cursor:pointer;" data-click="openResetAppDataModal">
+                <span style="color:var(--expense-color);">🗑️ <strong>Reset App Data</strong></span>
+                <span style="color:var(--text-muted);">›</span>
             </div>
         </div>
     </div>
