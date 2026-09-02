@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v257";
-        const APP_VERSION_DATE = "2026-09-01";
+        const APP_VERSION = "v258";
+        const APP_VERSION_DATE = "2026-09-02";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -4405,11 +4405,33 @@
             let lastSubgroup = undefined;
             let groupTotal = 0, subgroupTotal = 0;
 
+            // v257: on the unfiltered "Financial Accounts" list (filter === null), a sub-group
+            // that only holds a single account (e.g. "KWSP" sub-group containing just the one
+            // KWSP account) gets its Sub-Total row skipped — that row would just repeat the same
+            // balance already shown on the one account line right above it. Counted up front from
+            // `sorted` (the exact set being rendered) so flushSubgroupTotal can look up "how many
+            // accounts does this sub-group have" without re-scanning. Deliberately scoped to the
+            // unfiltered view only — a sidebar shortcut like "Fixed Deposit" (filter set) still
+            // shows every sub-group's Sub-Total as before, since that page is meant to summarize
+            // exactly the narrowed-down set the user tapped into.
+            const subgroupAccountCounts = {};
+            if (!filter) {
+                sorted.forEach(a => {
+                    const key = `${a.group || DEFAULT_ACCOUNT_GROUP}\u0000${a.subgroup || ""}`;
+                    subgroupAccountCounts[key] = (subgroupAccountCounts[key] || 0) + 1;
+                });
+            }
+
             // Flushes the pending sub-group subtotal (only when that group actually has
-            // sub-groups configured — plain groups with no sub-division never show one).
+            // sub-groups configured — plain groups with no sub-division never show one — and,
+            // on the unfiltered list, only when that sub-group has more than one account).
             function flushSubgroupTotal() {
                 if (lastSubgroup) {
-                    html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <span class="total-amount">${formatBalanceHTML(subgroupTotal, baseCurrency)}</span></div>`;
+                    const key = `${lastGroup}\u0000${lastSubgroup}`;
+                    const soloOnUnfilteredList = !filter && subgroupAccountCounts[key] === 1;
+                    if (!soloOnUnfilteredList) {
+                        html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <span class="total-amount">${formatBalanceHTML(subgroupTotal, baseCurrency)}</span></div>`;
+                    }
                 }
                 subgroupTotal = 0;
             }
