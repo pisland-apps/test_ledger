@@ -1433,10 +1433,16 @@
            (mirrors the left drawer's own edge-swipe exactly — see
            setupInsightsDrawerSwipeGesture in ledger.js), or by tapping the dashboard's
            "Insights" shortcut; closed via the × button or tapping the dimmed overlay
-           (#insightsRailOverlay, reusing .sidebar-overlay's styling). Left untouched at
-           768–1399px (tablet) — same as before this version, that range simply has no way to
-           reach it, matching the gap that already existed there for the rail itself. */
-        @media (max-width: 767px) {
+           (#insightsRailOverlay, reusing .sidebar-overlay's styling).
+           v256: this drawer mode now extends up to 1399px (see the @media block below) — it used
+           to stop at 767px, leaving 768–1399px (tablets) with no way to reach the rail at all. */
+        /* v256: was max-width: 767px — the rail was only ever a permanent 1400px+ dock or a
+           <768px slide-in drawer, leaving 768–1399px (tablets) with no way to reach it at all
+           (see the removed comment below this block, which used to document that gap as
+           deliberate/left-as-is). Widened to cover that whole range instead, so anything narrower
+           than the 1400px dock now gets the drawer treatment — paired with the matching widened
+           swipe-gesture gate in setupInsightsDrawerSwipeGesture() (ledger.js). */
+        @media (max-width: 1399px) {
             .desktop-insights-rail {
                 display: flex;
                 flex-direction: column;
@@ -1526,6 +1532,21 @@
                underneath the sidebar, completely covered and unclickable. Shift it past the
                sidebar's own width (336px, matching body's margin-left right above) instead. */
             .print-fab-btn { left: 356px; }
+        }
+
+        /* v256: #insightsRailOverlay (id, not just .sidebar-overlay's class) reasserts itself over
+           the "display:none !important" rule right above — that rule was written for the LEFT
+           sidebar's own overlay (correctly hidden at 768px+, since the left sidebar becomes a
+           permanent column there, never a drawer needing a backdrop), but #insightsRailOverlay
+           shares the same .sidebar-overlay class purely for its dim+blur styling and is a
+           genuinely separate element that now also acts as a drawer through 1399px (see the
+           .desktop-insights-rail CSS comment). Without this, the drawer itself would still
+           slide in/out correctly at 768–1399px, but its dimmed backdrop — and with it,
+           tap-outside-to-close — would silently stay display:none the whole time. An id selector
+           always outranks a class selector's specificity regardless of source order, so this
+           reliably wins over the rule above even though it's !important too. */
+        @media (min-width: 768px) and (max-width: 1399px) {
+            #insightsRailOverlay { display: block !important; }
         }
 
         /* v166: layered-surface shadow — static (this container isn't itself a click target;
@@ -1742,6 +1763,15 @@
         .desc-suggest-item:active { background: var(--press-bg); }
         .desc-suggest-item + .desc-suggest-item { border-top: 1px solid var(--border-color); }
         .desc-suggest-item mark { background: var(--primary-chip-bg); color: var(--primary); border-radius: 3px; padding: 0 1px; font-weight: 800; }
+        /* v257: removable chips for the Tags row (#txTagsChips) — same primary-tinted pill
+           language as .desc-suggest-item mark just above, styled as a standalone pill instead of
+           an inline highlight. Empty (no tags attached yet) collapses to zero height rather than
+           showing an empty bordered box, since #txTagInput right below it is enough on its own. */
+        .tag-chip-row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+        .tag-chip-row:empty { margin-bottom: 0; }
+        .tag-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--primary-chip-bg); color: var(--primary); border-radius: 20px; padding: 5px 8px 5px 12px; font-size: 0.78rem; font-weight: 700; }
+        .tag-chip button { background: none; border: none; color: inherit; font-size: 1rem; line-height: 1; padding: 2px; cursor: pointer; opacity: 0.7; }
+        .tag-chip button:active { opacity: 1; }
         .submit-btn { background: var(--primary); color: white; border: none; padding: 14px; border-radius: 10px; width: 100%; font-weight: 700; cursor: pointer; font-size: 0.9rem; margin-top: 10px; }
         .submit-btn:active { opacity: 0.9; transform: scale(0.99); }
         .calc-btn {
@@ -2401,12 +2431,12 @@
                 // Privacy Mode — a real amount briefly flashing unblurred for one frame while
                 // someone's phone screen is visible to bystanders is exactly the scenario this
                 // feature exists to prevent, so it can't wait for ledger.js to run.
-                // v250: default is ON (blurred) — only an explicit "0" (user turned it off)
-                // skips setting the attribute; an unset key (never touched) still blurs, so a
-                // fresh install is private-by-default instead of exposing amounts on first launch.
-                if (localStorage.getItem("ledgerPrivacyModeEnabled") !== "0") {
-                    document.documentElement.setAttribute("data-privacy-mode", "on");
-                }
+                // v255: unconditional now — Privacy Mode is a per-session-only toggle (see
+                // ledger.js's privacyModeEnabledSession), never persisted, so every fresh
+                // load/relaunch always starts blurred regardless of whether it was turned off
+                // last session. The old localStorage("ledgerPrivacyModeEnabled") check here (and
+                // the "0" it used to look for) is gone along with that persistence.
+                document.documentElement.setAttribute("data-privacy-mode", "on");
             } catch (e) {}
         })();
     </script>
@@ -2423,15 +2453,17 @@
     <button type="button" class="back-to-top-btn" id="backToTopBtn" data-click="scrollToTop" aria-label="Back to top" title="Back to top">&uarr;</button>
 
     <!-- v182: dimmed backdrop behind the insights rail when it's acting as a mobile drawer
-         (<768px — see the CSS comment on .desktop-insights-rail). No-op at 1400px+/tablet since
-         it's only ever toggled .open by openInsightsDrawer(), which is itself only reachable via
-         the <768px swipe gesture. Reuses .sidebar-overlay's dim+blur styling as-is. -->
+         (<1400px as of v256 — see the CSS comment on .desktop-insights-rail). No-op at 1400px+
+         since it's only ever toggled .open by openInsightsDrawer(), which is itself only
+         reachable via the <1400px swipe gesture (or the drawer's own close controls). Reuses
+         .sidebar-overlay's dim+blur styling as-is. -->
     <div class="sidebar-overlay" id="insightsRailOverlay" data-click="closeInsightsDrawer"></div>
 
     <!-- v181: Desktop "Insights" right rail — see the matching CSS comment above for why this
-         only shows at 1400px+. Lives outside every .page div (same reasoning as the back-to-top
-         button above) and is refreshed by renderDesktopInsightsRail(), called from renderApp().
-         v182: same element also serves as the <768px slide-in drawer — see the CSS comment. -->
+         only shows permanently-docked at 1400px+. Lives outside every .page div (same reasoning
+         as the back-to-top button above) and is refreshed by renderDesktopInsightsRail(), called
+         from renderApp(). v182/v256: same element also serves as the <1400px slide-in drawer —
+         see the CSS comment. -->
     <div class="desktop-insights-rail" id="desktopInsightsRail">
         <div class="insights-rail-header">
             <span class="insights-rail-title">Insights</span>
@@ -2508,6 +2540,12 @@
             </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="currency-report">
                 <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span> Net Worth by Currency
+            </button>
+            <!-- v257: "Spending by Tag" — pick a trip/claim tag, see its Income/Expense/Net total,
+                 date range covered, a category breakdown, and the itemized list of every
+                 transaction carrying it (see renderTagReportPage()). -->
+            <button class="sidebar-item" data-click="sidebarGo" data-target="tag-report">
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span> Spending by Tag
             </button>
 
             <div class="sidebar-divider"></div>
@@ -3013,6 +3051,21 @@
         <button class="fab-btn" data-click="openTemplateFormModal" aria-label="Add template" title="Add template">+</button>
     </div>
 
+    <!-- ================= PAGE: MANAGE TAGS (v257) ================= -->
+    <div id="page-tags" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToDataSecurityPage">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Manage Tags</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Trip/claim labels for the Add Income/Expense form's Tags field</p>
+            </div>
+        </div>
+
+        <div class="config-list" id="tagsPageList" style="padding-bottom:88px;"></div>
+
+        <button class="fab-btn" data-click="openTagFormModal" aria-label="Add tag" title="Add tag">+</button>
+    </div>
+
 
     <!-- ================= PAGE 6: BACKUP & RESTORE ================= -->
     <div id="page-backup" class="page hidden">
@@ -3455,6 +3508,69 @@
         </p>
     </div>
 
+    <!-- ================= PAGE: SPENDING BY TAG (v257) =================
+         Pick a trip/claim Tag (see Manage Tags / the Add Income/Expense form's Tags row) and see
+         its Income/Expense/Net total, the date range it actually spans, an expense-by-Category
+         breakdown (same donut/list convention as the Spending Breakdown report — a refund nets
+         back against its own category rather than being ignored), and every transaction carrying
+         it, itemized (not collapsed by Split Expense group — see renderTagReportPage()'s own
+         comment on why). Tags are stored on transactions as plain name-string arrays (same
+         convention as Category — see the STORES.TAGS createObjectStore comment in ledger.js), so
+         this filters by name text, not a tag id. -->
+    <div id="page-tag-report" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;" id="tagReportTitle">Spending by Tag</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Pick a tag to see its total, breakdown &amp; transactions</p>
+            </div>
+        </div>
+
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
+            <label>Tag</label>
+            <select id="tagReportTagSelect" class="form-input" data-change="renderTagReportPage">
+                <option value="">— Select a tag —</option>
+            </select>
+        </div>
+
+        <div id="tagReportEmptyState">
+            <p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">Pick a tag above to see its total, breakdown &amp; transactions. No tags yet? Create one right from this dropdown's list, from Setting → 🔖 Manage Tags, or on the fly from the Tags field on any Income/Expense entry.</p>
+        </div>
+
+        <div id="tagReportContent" style="display:none;">
+            <div class="report-card">
+                <div style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:4px;">
+                    <span style="color:var(--text-muted);">Income</span>
+                    <span id="tagReportIncomeTotal" style="color:var(--income-color);">0.00</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:0.85rem; font-weight:700; margin-bottom:4px;">
+                    <span style="color:var(--text-muted);">Expense</span>
+                    <span id="tagReportExpenseTotal" style="color:var(--expense-color);">0.00</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; font-size:0.95rem; font-weight:800; padding-top:8px; border-top:1.5px solid var(--border-color); margin-top:4px;">
+                    <span>Net</span>
+                    <span id="tagReportNetTotal">0.00</span>
+                </div>
+                <p style="font-size:0.72rem; color:var(--text-muted); margin-top:10px;" id="tagReportMeta"></p>
+            </div>
+
+            <div class="section-header">
+                <span class="section-title">Expense Breakdown by Category</span>
+            </div>
+            <div class="report-card">
+                <div id="tagReportChartWrap"></div>
+                <div id="tagReportList" style="display:flex; flex-direction:column; gap:8px; margin-top:10px;"></div>
+            </div>
+
+            <div class="section-header">
+                <span class="section-title">Transactions</span>
+            </div>
+            <div class="ledger-container" style="margin-bottom:24px;">
+                <div id="tagReportTxList"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- ================= PAGE: DATA SECURITY HUB (replaces sidebar "Data & Security" section) ================= -->
     <div id="page-datasecurity" class="page hidden">
         <div class="nav-header">
@@ -3584,6 +3700,17 @@
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="navigateToTemplatesPage">
                 <span>🧾 <strong>Transaction Templates</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <!-- v257: Manage Tags — trip/event labels (e.g. "Japan Holiday Aug 2026") a transaction
+                 can carry alongside its Category, so spending across a whole trip/claim can be
+                 pulled together later regardless of what Category or date range it actually falls
+                 under. Same simple flat-list CRUD pattern as Manage Categories above, minus the
+                 icon/type/parent fields (see renderTagsPage()/openTagFormModal() in ledger.js) —
+                 tags don't need their own icon since they're always shown alongside a
+                 transaction's existing Category icon, not in place of it. -->
+            <div class="config-item" style="cursor:pointer;" data-click="navigateToTagsPage">
+                <span>🔖 <strong>Manage Tags</strong></span>
                 <span style="color:var(--text-muted);">›</span>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="sidebarGo" data-target="backup">
@@ -4043,20 +4170,37 @@
                 <div class="form-row-inline" style="grid-template-columns: 2fr 1fr;">
                     <div>
                         <label>Amount</label>
-                        <input type="number" id="tplAmount" step="0.01" inputmode="decimal" placeholder="0.00">
+                        <input type="number" id="tplAmount" step="0.01" inputmode="decimal" placeholder="0.00" data-input="recalcTplSplitTotal">
                     </div>
                     <div>
                         <label>Currency</label>
-                        <select id="tplCurrency" class="form-input"></select>
+                        <select id="tplCurrency" class="form-input" data-change="recalcTplSplitTotal"></select>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <label>Category</label>
-                    <button type="button" id="tplCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="tplCategory" data-title="Select Category">
-                        <span id="tplCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
-                    </button>
+                    <div class="split-row-catline">
+                        <span class="split-cat-icon" id="tplCategoryIcon">🏷️</span>
+                        <button type="button" id="tplCategoryBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="tplCategory" data-title="Select Category">
+                            <span id="tplCategoryBtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                        </button>
+                    </div>
                     <select id="tplCategory" style="display:none;"></select>
+                </div>
+
+                <!-- v254: Split Expenses on a Template — same markup pattern/CSS classes as
+                     #txSplitWrap in the Add/Edit Transaction form (.split-row/.split-total-row/
+                     .split-add-btn), but its own #tplSplitRows/tplSplitRowCounter so it never
+                     collides with an also-open transaction form's split state. See
+                     addTplSplitRow()/collectTplSplitRows()/populateTplSplitRowsFromTemplate() in
+                     ledger.js. Always visible here (unlike #txSplitWrap, which openTransactionForm()
+                     hides for Transfers/edits) — a template is always Income or Expense, never a
+                     Transfer, and is only ever "added" or "edited" as itself, never mid-entry. -->
+                <div id="tplSplitRows"></div>
+                <div class="split-total-row">
+                    <span style="font-size:0.82rem; font-weight:700; color:var(--text-main);">Split Total: <span id="tplSplitTotalDisplay">—</span></span>
+                    <button type="button" class="split-add-btn" data-click="addTplSplitRow" title="Split into another category">+</button>
                 </div>
 
                 <div class="form-row">
@@ -4078,6 +4222,27 @@
                 </div>
 
                 <button type="button" data-click="handleSaveTemplateMobile" class="submit-btn" id="tplSubmitBtn">Save Template</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Add/Edit Tag (v257) — deliberately minimal (name only, no icon/type/parent like
+         Categories) since a tag is just a trip/claim label, not something that needs its own
+         visual identity beyond appearing as a small chip. Opened from the Manage Tags page's "+"
+         FAB (add mode) or ✏️ (edit/rename mode) — see openTagFormModal()/editTag() in ledger.js. -->
+    <div class="modal" id="tagModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;" id="tagModalTitle">Add Tag</h3>
+                <button data-click="closeModal" data-modal="tagModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div>
+                <input type="hidden" id="tagEditId" value="">
+                <div class="form-row">
+                    <label>Tag Name</label>
+                    <input type="text" id="tagName" placeholder="e.g. Japan Holiday Aug 2026" required>
+                </div>
+                <button type="button" data-click="handleSaveTagMobile" class="submit-btn" id="tagSubmitBtn">Save Tag</button>
             </div>
         </div>
     </div>
@@ -4318,6 +4483,22 @@
 
                 <div class="form-row form-row-icon" id="txDescRow"><span class="field-icon" aria-hidden="true">👤</span><input type="text" id="txDesc" required placeholder="Description" aria-label="Description" autocomplete="off" data-input="filterDescSuggestions" data-focus="filterDescSuggestions"><div class="desc-suggest-list" id="txDescSuggestList"></div></div>
                 <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📝</span><input type="text" id="txNotes" placeholder="Notes (Optional)" aria-label="Notes (Optional)"></div>
+
+                <!-- v257: Tags — trip/claim labels (see "Spending by Tag" in Reports); hidden for
+                     Transfers (toggled in openTransactionForm(), same convention as #txSplitWrap).
+                     Chips render into #txTagsChips; #txTagInput reuses the exact substring-filter
+                     suggestion pattern built for Description (see filterDescSuggestions() in
+                     ledger.js), just producing chips instead of filling one value, plus a
+                     "+ Create tag" fallback when nothing matches. -->
+                <div class="form-row" id="txTagsRow">
+                    <label>Tags <span style="text-transform:none; font-weight:600; color:var(--text-muted);">(optional)</span></label>
+                    <div class="tag-chip-row" id="txTagsChips"></div>
+                    <div style="position:relative;">
+                        <input type="text" id="txTagInput" placeholder="+ Add tag" autocomplete="off" data-input="filterTxTagSuggestions" data-focus="filterTxTagSuggestions">
+                        <div class="desc-suggest-list" id="txTagSuggestList"></div>
+                    </div>
+                </div>
+
                 <div class="form-row">
                     <div class="toggle-switch-row">
                         <span class="toggle-switch-label">Checked</span>
