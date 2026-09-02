@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v260";
+        const APP_VERSION = "v261";
         const APP_VERSION_DATE = "2026-09-02";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2200,6 +2200,25 @@
                 return `<span style="color:var(--expense-color);">(${formatCurrency(Math.abs(amount), curr)})</span>`;
             }
             return formatCurrency(amount, curr);
+        }
+
+        // v261: for a Net Savings Statement category row (or its Total Income/Total Expense
+        // footer), the section it's in (Income vs Expense) usually predicts which way the money
+        // moves — but not always. A Refund posted against an Expense category (see isRefund
+        // handling in renderSavingsStatement) subtracts from that category's total, and if the
+        // refund is bigger than what was actually spent there in the period, the category's net
+        // value goes negative even though it lives in the Expense section — meaning it actually
+        // *helped* savings, not hurt them. Previously this still forced the section's fixed sign
+        // ("-" for Expense) in front of formatCurrency's own "-" on the negative number, printing
+        // a broken-looking double negative like "-RM-150.00". This picks the sign/color from the
+        // actual direction the money moved (green "+" when it net added to savings, red "-" when
+        // it net cost) instead of the section it's filed under, and always formats the magnitude
+        // so only one sign character ever prints.
+        function savingsAmountHTML(value, sectionType) {
+            const nettedTowardSavings = sectionType === "income" ? value >= 0 : value < 0;
+            const color = nettedTowardSavings ? "var(--income-color)" : "var(--expense-color)";
+            const sign = nettedTowardSavings ? "+" : "-";
+            return `<span style="color:${color}; font-weight:700;">${sign}${formatCurrency(Math.abs(value), baseCurrency)}</span>`;
         }
 
         function convertCurrency(amount, fromCurr, toCurr) {
@@ -11986,8 +12005,6 @@
                 subsByMainId.get(s.parentId).push(s);
             });
 
-            const sign = type === "income" ? "+" : "-";
-            const color = type === "income" ? "var(--income-color)" : "var(--expense-color)";
             const rendered = new Set();
             let html = "";
 
@@ -12016,7 +12033,7 @@
                             <strong>${icon} ${escapeHtml(main.name)}</strong>
                         </span>
                         <span style="display:flex; align-items:center; gap:8px;">
-                            <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(combined, baseCurrency)}</span>
+                            ${savingsAmountHTML(combined, type)}
                             ${hasSubs ? `<button type="button" class="trash-btn" data-click="toggleSavingsMainExpand" data-id="${escapeHtml(main.id)}" title="${expanded ? 'Hide subcategories' : 'Show subcategories'}" style="padding:2px 6px; font-size:0.7rem;">${expanded ? '▲' : '▼'}</button>` : ''}
                         </span>
                     </div>
@@ -12027,7 +12044,7 @@
                         html += `
                             <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(s.name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}" style="padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;">
                                 <span><span style="color:var(--text-muted);">↳</span> ${s.icon} ${escapeHtml(s.name)}</span>
-                                <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(s.value, baseCurrency)}</span>
+                                ${savingsAmountHTML(s.value, type)}
                             </div>
                         `;
                     });
@@ -12042,7 +12059,7 @@
                 html += `
                     <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}">
                         <strong>${icon} ${escapeHtml(name)}</strong>
-                        <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(val, baseCurrency)}</span>
+                        ${savingsAmountHTML(val, type)}
                     </div>
                 `;
             });
@@ -12132,11 +12149,15 @@
 
             let incRowsHTML = buildSavingsSectionRowsHTML(catSummary.income, "income", filterY, savingsFilterMonth);
             document.getElementById("savingsIncomeRows").innerHTML = incRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No income entries logged.</p>';
-            document.getElementById("savingsIncomeTotal").textContent = `+${formatCurrency(Math.abs(incBaseTotal) < SAVINGS_ZERO_EPS ? 0 : incBaseTotal, baseCurrency)}`;
+            const incTotalDisplay = Math.abs(incBaseTotal) < SAVINGS_ZERO_EPS ? 0 : incBaseTotal;
+            document.getElementById("savingsIncomeTotal").textContent = `${incTotalDisplay < 0 ? "-" : "+"}${formatCurrency(Math.abs(incTotalDisplay), baseCurrency)}`;
+            document.getElementById("savingsIncomeTotal").style.color = incTotalDisplay < 0 ? "var(--expense-color)" : "var(--income-color)";
 
             let expRowsHTML = buildSavingsSectionRowsHTML(catSummary.expense, "expense", filterY, savingsFilterMonth);
             document.getElementById("savingsExpenseRows").innerHTML = expRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No expense entries logged.</p>';
-            document.getElementById("savingsExpenseTotal").textContent = `-${formatCurrency(Math.abs(expBaseTotal) < SAVINGS_ZERO_EPS ? 0 : expBaseTotal, baseCurrency)}`;
+            const expTotalDisplay = Math.abs(expBaseTotal) < SAVINGS_ZERO_EPS ? 0 : expBaseTotal;
+            document.getElementById("savingsExpenseTotal").textContent = `${expTotalDisplay < 0 ? "+" : "-"}${formatCurrency(Math.abs(expTotalDisplay), baseCurrency)}`;
+            document.getElementById("savingsExpenseTotal").style.color = expTotalDisplay < 0 ? "var(--income-color)" : "var(--expense-color)";
 
             const statementDiff = incBaseTotal - expBaseTotal;
             document.getElementById("savingsSurplusLabel").textContent = statementDiff >= 0 ? "Surplus Margin (Savings):" : "Deficit (Shortfall Margin):";
