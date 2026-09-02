@@ -930,6 +930,20 @@
             border-radius: 8px;
             text-align: right;
         }
+        /* v259: shown in place of .config-list-subtotal for a sub-group that only has one
+           account on the unfiltered "Financial Accounts" list (see flushSubgroupTotal in
+           ledger.js) — that sub-group's Sub-Total would just repeat the one account's balance,
+           so it's suppressed, but *some* boundary marker still has to sit between it and the
+           next sub-group below, or a solo sub-group like "KWSP" sitting directly above a
+           sub-group that DOES show its Sub-Total (e.g. "ASNB") visually reads as if that
+           Sub-Total summed both of them together. No text/number here on purpose — a bare
+           divider is enough to say "new sub-group starts here" without duplicating a figure.  */
+        .config-list-subgroup-divider {
+            height: 0;
+            border-top: 1px dashed var(--border-color);
+            margin: 10px 14px 10px;
+            opacity: 0.6;
+        }
         .config-list-grouptotal {
             font-size: 0.82rem;
             font-weight: 800;

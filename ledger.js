@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v258";
+        const APP_VERSION = "v259";
         const APP_VERSION_DATE = "2026-09-02";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -4424,12 +4424,16 @@
 
             // Flushes the pending sub-group subtotal (only when that group actually has
             // sub-groups configured — plain groups with no sub-division never show one — and,
-            // on the unfiltered list, only when that sub-group has more than one account).
+            // on the unfiltered list, only when that sub-group has more than one account; a
+            // solo-account sub-group instead gets a bare divider — see .config-list-subgroup-
+            // divider above for why a boundary marker is still needed even without a number).
             function flushSubgroupTotal() {
                 if (lastSubgroup) {
                     const key = `${lastGroup}\u0000${lastSubgroup}`;
                     const soloOnUnfilteredList = !filter && subgroupAccountCounts[key] === 1;
-                    if (!soloOnUnfilteredList) {
+                    if (soloOnUnfilteredList) {
+                        html += `<div class="config-list-subgroup-divider"></div>`;
+                    } else {
                         html += `<div class="config-list-subtotal"><span class="total-label">Sub-Total · ${escapeHtml(lastSubgroup)}</span>: <span class="total-amount">${formatBalanceHTML(subgroupTotal, baseCurrency)}</span></div>`;
                     }
                 }
