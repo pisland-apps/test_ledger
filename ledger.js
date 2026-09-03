@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v264";
+        const APP_VERSION = "v265";
         const APP_VERSION_DATE = "2026-09-03";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -3057,7 +3057,7 @@
             const effectiveTotal = budgetEffectiveTotal(rec);
             const { total: spent, byCategory } = computeMonthActuals(budgetViewMonthKey, txs, accounts);
             const remaining = effectiveTotal - spent;
-            const pctUsed = effectiveTotal > 0 ? Math.min((spent / effectiveTotal) * 100, 100) : (spent > 0 ? 100 : 0);
+            const pctUsed = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
             const overBudget = remaining < 0;
             const daysLeft = daysLeftInMonthKey(budgetViewMonthKey);
             const daysElapsed = Math.max(daysElapsedInMonthKey(budgetViewMonthKey), 1);
@@ -3065,6 +3065,13 @@
             const dailyBudget = effectiveTotal / daysInMonthKey(budgetViewMonthKey);
             const dailyRemaining = daysLeft > 0 ? remaining / daysLeft : remaining;
             const barColor = overBudget ? "var(--expense-color)" : "var(--primary)";
+            // A refund posted this month that's bigger than what was actually spent in its own
+            // category (e.g. a refund with no matching purchase this month) can net the month's
+            // total spend below zero — same convention the Financial Report Card/Spending
+            // Breakdown already use (refunds net against their own category), just surfaced here
+            // too. formatBalanceHTML (parens + red) makes that read as "net refund", not a broken
+            // number, and the note below spells it out.
+            const netRefundMonth = spent < 0;
 
             const summaryHTML = `
                 <div class="report-card-mini" style="margin-bottom:14px;">
@@ -3079,23 +3086,25 @@
                         <div class="progress-bar-fill" style="width:${pctUsed}%; background:${barColor};"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:14px; text-align:center;">
-                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Spent</div><div style="font-weight:700; font-size:0.85rem; ${overBudget ? "color:var(--expense-color);" : ""}">${formatCurrency(spent, baseCurrency)}</div></div>
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Spent</div><div style="font-weight:700; font-size:0.85rem; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(spent, baseCurrency)}</div></div>
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Budget</div><div style="font-weight:700; font-size:0.85rem;">${formatCurrency(effectiveTotal, baseCurrency)}</div></div>
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Used</div><div style="font-weight:700; font-size:0.85rem;">${pctUsed.toFixed(0)}%</div></div>
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Days Left</div><div style="font-weight:700; font-size:0.85rem;">${daysLeft}</div></div>
                     </div>
+                    ${netRefundMonth ? `<p style="font-size:0.72rem; color:var(--text-muted); margin-top:8px;">Spent is negative because a refund posted this month is larger than what was actually spent in its category — so this month is a net inflow so far.</p>` : ""}
                     <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:10px;">
-                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;"><span style="color:var(--text-muted);">🟠 Daily avg. spent</span><strong>${formatCurrency(dailyAvgSpent, baseCurrency)}</strong></div>
-                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;"><span style="color:var(--text-muted);">🔵 Daily budget</span><strong>${formatCurrency(dailyBudget, baseCurrency)}</strong></div>
-                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;"><span style="color:var(--text-muted);">🟢 Daily remaining</span><strong>${formatCurrency(Math.max(dailyRemaining, 0), baseCurrency)}</strong></div>
+                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per day so far this month (spent ÷ days elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per day so far)</span><strong>${formatBalanceHTML(dailyAvgSpent, baseCurrency)}</strong></div>
+                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across every day of the month (budget ÷ days in month)"><span style="color:var(--text-muted);">🔵 Budgeted per day (whole month)</span><strong>${formatCurrency(dailyBudget, baseCurrency)}</strong></div>
+                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What's left to spend, spread across the days remaining (remaining ÷ days left)"><span style="color:var(--text-muted);">🟢 Room per day (rest of month)</span><strong>${formatCurrency(Math.max(dailyRemaining, 0), baseCurrency)}</strong></div>
                     </div>
+                    <p style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">These compare your day-to-day pace against your budget — if "Spending pace" is above "Budgeted per day", you're on track to run out before the month ends.</p>
                     ${rec.carryoverEnabled ? `<div style="margin-top:10px; font-size:0.72rem; color:var(--text-muted);">Includes ${formatCurrency(rec.carryoverAmount || 0, baseCurrency)} carried over from ${escapeHtml(monthKeyLabel(shiftMonthKey(budgetViewMonthKey, -1)))}.</div>` : ""}
                 </div>
             `;
 
             const catRows = (rec.categoryBudgets || []).map(cb => {
                 const catSpent = byCategory[cb.cat] || 0;
-                const catPct = cb.amount > 0 ? Math.min((catSpent / cb.amount) * 100, 100) : (catSpent > 0 ? 100 : 0);
+                const catPct = cb.amount > 0 ? Math.max(Math.min((catSpent / cb.amount) * 100, 100), 0) : (catSpent > 0 ? 100 : 0);
                 const catOver = catSpent > cb.amount;
                 return `
                     <div class="config-item category-row-item" data-click="editCategoryBudget" data-cat="${escapeHtml(cb.cat)}" style="flex-direction:column; align-items:stretch; gap:4px;">
@@ -3104,7 +3113,7 @@
                                 <span class="split-cat-icon" style="background:${getCategoryAvatarColor(cb.cat)};">${getCategoryIcon(cb.cat, "expense")}</span>
                                 <strong>${escapeHtml(cb.cat)}</strong>
                             </span>
-                            <span style="font-size:0.8rem; ${catOver ? "color:var(--expense-color); font-weight:700;" : "color:var(--text-muted);"}">${formatCurrency(catSpent, baseCurrency)} / ${formatCurrency(cb.amount, baseCurrency)}</span>
+                            <span style="font-size:0.8rem; ${catOver ? "color:var(--expense-color); font-weight:700;" : "color:var(--text-muted);"}">${formatCurrency(Math.max(catSpent, 0), baseCurrency)} / ${formatCurrency(cb.amount, baseCurrency)}</span>
                         </div>
                         <div class="progress-bar-container">
                             <div class="progress-bar-fill" style="width:${catPct}%; ${catOver ? "background:var(--expense-color);" : ""}"></div>
@@ -3142,7 +3151,7 @@
             }
             const effectiveTotal = budgetEffectiveTotal(rec);
             const remaining = effectiveTotal - spent;
-            const pctUsed = effectiveTotal > 0 ? Math.min((spent / effectiveTotal) * 100, 100) : (spent > 0 ? 100 : 0);
+            const pctUsed = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
             const overBudget = remaining < 0;
             const daysLeft = daysLeftInMonthKey(currentMonthKey());
             wrap.innerHTML = `
