@@ -13128,7 +13128,7 @@
                 const shade = opts.shade ? "background:rgba(127,127,127,0.06);" : "";
                 const clickable = opts.year != null;
                 const balanceAttrs = clickable
-                    ? `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight} cursor:pointer; text-decoration:underline; text-decoration-style:dotted; text-underline-offset:3px;" onclick="navigateToSavingsPage('${opts.year}')" title="View Net Savings Statement"`
+                    ? `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight} cursor:pointer; text-decoration:underline; text-decoration-style:dotted; text-underline-offset:3px;" data-click="totalSummaryBalanceClick" data-year="${escapeHtml(opts.year)}" title="View Net Savings Statement"`
                     : `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight}"`;
                 return `
                     <tr style="${shade}">
@@ -13679,6 +13679,10 @@
             openCurrencyConfig: () => openCurrencyConfig(),
             lockAppNow: () => lockAppNow(),
             navigateToSavingsPage: () => navigateToSavingsPage(),
+            // v269: Total Bill Summary's Balance column drills into the Net Savings Statement
+            // scoped to that row's year (data-year is "all" for the Total row, or a specific
+            // year string for a year row) — see rowHTML() in renderTotalSummaryPage().
+            totalSummaryBalanceClick: (el) => navigateToSavingsPage(el.dataset.year),
             reportCardClickDirectType: (el) => reportCardClickDirectType(el),
             reportCardClickTotal: (el) => reportCardClickTotal(el),
             clearSavingsMonthScope: () => clearSavingsMonthScope(),
