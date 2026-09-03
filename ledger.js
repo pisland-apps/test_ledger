@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v268";
+        const APP_VERSION = "v269";
         const APP_VERSION_DATE = "2026-09-04";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -13117,25 +13117,34 @@
             years.forEach(y => { gIncome += byYear[y].income; gExpense += byYear[y].expense; });
 
             const balanceColor = (v) => v >= 0 ? "var(--income-color)" : "var(--expense-color)";
+            // v268: the Balance cell drills through to the Net Savings Statement (income/expense
+            // by category) scoped to that same row's year — "Total" maps to "all" years, and each
+            // year row maps to that specific year. "Yearly Average" is a computed metric with no
+            // real period behind it (it isn't "all years" data, just their average), so it's left
+            // non-clickable rather than drilling into a statement that wouldn't actually match it.
             const rowHTML = (label, income, expense, opts = {}) => {
                 const balance = income - expense;
                 const weight = opts.bold ? "font-weight:800;" : "";
                 const shade = opts.shade ? "background:rgba(127,127,127,0.06);" : "";
+                const clickable = opts.year != null;
+                const balanceAttrs = clickable
+                    ? `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight} cursor:pointer; text-decoration:underline; text-decoration-style:dotted; text-underline-offset:3px;" onclick="navigateToSavingsPage('${opts.year}')" title="View Net Savings Statement"`
+                    : `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight}"`;
                 return `
                     <tr style="${shade}">
                         <td style="padding:9px 10px; ${weight}">${escapeHtml(label)}</td>
                         <td style="padding:9px 10px; text-align:right; color:var(--income-color); ${weight}">${formatCurrency(income, baseCurrency)}</td>
                         <td style="padding:9px 10px; text-align:right; color:var(--expense-color); ${weight}">${formatCurrency(expense, baseCurrency)}</td>
-                        <td style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight}">${formatCurrency(balance, baseCurrency)}</td>
+                        <td ${balanceAttrs}>${formatCurrency(balance, baseCurrency)}</td>
                     </tr>`;
             };
 
-            let rows = rowHTML("Total", gIncome, gExpense, { bold: true });
+            let rows = rowHTML("Total", gIncome, gExpense, { bold: true, year: "all" });
             // Averaged only across years that actually have at least one transaction, so a
             // partial current year just counts as one more data point rather than needing
             // special-casing (mirrors how the year list itself is built).
             rows += rowHTML("Yearly Average", gIncome / years.length, gExpense / years.length, { shade: true });
-            years.forEach(y => { rows += rowHTML(String(y), byYear[y].income, byYear[y].expense); });
+            years.forEach(y => { rows += rowHTML(String(y), byYear[y].income, byYear[y].expense, { year: String(y) }); });
 
             wrap.innerHTML = `
                 <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
