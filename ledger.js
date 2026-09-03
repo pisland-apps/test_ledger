@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v267";
+        const APP_VERSION = "v268";
         const APP_VERSION_DATE = "2026-09-03";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -3269,16 +3269,29 @@
             const yearPct = yearRec ? (yearTotal > 0 ? Math.max(Math.min((yearSpent / yearTotal) * 100, 100), 0) : (yearSpent > 0 ? 100 : 0)) : null;
             const yearOver = yearRec ? (yearTotal - yearSpent) < 0 : false;
 
-            wrap.innerHTML = `
-                <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage" data-scope="month">
+            // A month can genuinely have no budget while a year does (or vice versa) — e.g. the
+            // monthly one got deleted, or was never set up. Rather than falling through to a bare
+            // "—" and an empty progress bar (looked like an error), show a plain "not set" line
+            // with its own way in, same idea as the full empty-state above just scoped to one row.
+            const monthRowHTML = monthRec ? `
                     <div style="display:flex; justify-content:space-between; align-items:baseline;">
                         <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Remaining Budget · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left</span>
                         <span style="font-size:0.72rem; color:var(--text-muted);">View →</span>
                     </div>
-                    <div style="font-size:1.35rem; font-weight:800; ${monthOver ? "color:var(--expense-color);" : ""}">${monthRec ? formatBalanceHTML(monthRemaining, baseCurrency) : "—"}</div>
+                    <div style="font-size:1.35rem; font-weight:800; ${monthOver ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(monthRemaining, baseCurrency)}</div>
                     <div class="progress-bar-container" style="height:8px; margin-top:6px;">
-                        <div class="progress-bar-fill" style="width:${monthRec ? monthPct : 0}%; ${monthOver ? "background:var(--expense-color);" : ""}"></div>
+                        <div class="progress-bar-fill" style="width:${monthPct}%; ${monthOver ? "background:var(--expense-color);" : ""}"></div>
                     </div>
+            ` : `
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <span style="font-size:0.8rem; color:var(--text-muted);">No budget set for ${escapeHtml(periodKeyLabel(currentMonthKey()))}</span>
+                        <span style="font-size:0.72rem; color:var(--primary); font-weight:700;">Set Up →</span>
+                    </div>
+            `;
+
+            wrap.innerHTML = `
+                <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage" data-scope="month">
+                    ${monthRowHTML}
                     ${yearRec ? `
                     <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:10px; padding-top:8px; border-top:1px solid var(--border-color);" data-click="navigateToBudgetPage" data-scope="year">
                         <span style="font-size:0.7rem; color:var(--text-muted);">This Year</span>
@@ -3287,7 +3300,12 @@
                     <div class="progress-bar-container" style="height:5px; margin-top:4px;">
                         <div class="progress-bar-fill" style="width:${yearPct}%; ${yearOver ? "background:var(--expense-color);" : ""}"></div>
                     </div>
-                    ` : ""}
+                    ` : `
+                    <div style="margin-top:10px; padding-top:8px; border-top:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;" data-click="navigateToBudgetPage" data-scope="year">
+                        <span style="font-size:0.7rem; color:var(--text-muted);">No yearly budget set</span>
+                        <span style="font-size:0.7rem; color:var(--primary); font-weight:700;">Set Up →</span>
+                    </div>
+                    `}
                 </div>
             `;
         }
