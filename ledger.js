@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v266";
+        const APP_VERSION = "v267";
         const APP_VERSION_DATE = "2026-09-03";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -3309,7 +3309,29 @@
             document.getElementById("budgetCarryoverAmountInput").value = rec ? (rec.carryoverAmount || 0) : suggestion;
             document.getElementById("budgetCarryoverHint").textContent = `Defaults to last ${isYear ? "year" : "month"}'s leftover (${formatCurrency(suggestion, baseCurrency)} from ${periodKeyLabel(prevKey)}) — adjust freely.`;
             document.getElementById("budgetCarryoverRow").classList.toggle("hidden", !carryoverEnabled);
+            document.getElementById("budgetSetupDeleteBtn").classList.toggle("hidden", !rec);
             openModal("budgetSetupModal");
+        }
+
+        // Deletes the whole budget record for whichever period the setup modal is currently
+        // editing (budgetViewPeriodKey) — a Monthly or Yearly budget, category budgets included.
+        // Only offered once a record actually exists (see openBudgetSetupModal's hidden toggle
+        // above); the page falls back to its normal "Set Up Budget" empty state afterward. This
+        // does NOT touch any transactions — it only removes the budget you set, not the spending
+        // it was tracking.
+        async function deleteBudgetRecord() {
+            const isYear = budgetViewScope === "year";
+            const ok = await customConfirm(`Delete the ${isYear ? "yearly" : "monthly"} budget for ${periodKeyLabel(budgetViewPeriodKey)}? This removes the budget and any category budgets under it — your actual transactions are unaffected.`);
+            if (!ok) return;
+            try {
+                await deleteDB(STORES.BUDGETS, budgetViewPeriodKey);
+            } catch (err) {
+                alert("Could not delete budget: " + (err && err.message ? err.message : err));
+                return;
+            }
+            closeModal("budgetSetupModal");
+            renderBudgetPage();
+            showToast("🗑️ Budget deleted");
         }
 
         function toggleBudgetCarryover(el) {
@@ -14258,6 +14280,7 @@
             budgetPageNextPeriod: () => budgetPageNextPeriod(),
             openBudgetSetupModal: () => openBudgetSetupModal(),
             handleSaveBudgetSetup: () => handleSaveBudgetSetup(),
+            deleteBudgetRecord: () => deleteBudgetRecord(),
             copyBudgetFromPreviousPeriod: () => copyBudgetFromPreviousPeriod(),
             copyBudgetOneTwelfthOfYear: () => copyBudgetOneTwelfthOfYear(),
             openCategoryBudgetModal: () => openCategoryBudgetModal(),
