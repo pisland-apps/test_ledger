@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v269";
+        const APP_VERSION = "v270";
         const APP_VERSION_DATE = "2026-09-04";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1708,8 +1708,12 @@
                 // which ignored where Accounts was actually opened from (e.g. Net Worth
                 // Statement) — same gap as the on-screen "← Back" button, fixed the same way.
                 handleAccountsBackClick();
+            } else if (!savingsPage.classList.contains("hidden")) {
+                // v269: mirrors handleAccountsBackClick — Total Bill Summary's Balance-cell
+                // drill-in sets savingsPageBackTarget so a hardware/gesture back press lands
+                // back on that page instead of always jumping to the Dashboard.
+                handleSavingsBackClick();
             } else if (
-                !savingsPage.classList.contains("hidden") ||
                 !networthStatementPage.classList.contains("hidden") ||
                 !categoriesPage.classList.contains("hidden") ||
                 !templatesPage.classList.contains("hidden") ||
@@ -2884,10 +2888,11 @@
         // exactly as the user last left it; passing a real value (or explicit "all") forces the
         // Year select to that value instead. savingsFilterMonth defaults back to "all" on every
         // call so the month scope never lingers into an unrelated visit.
-        function navigateToSavingsPage(yearOverride = null, month = "all") {
+        function navigateToSavingsPage(yearOverride = null, month = "all", backTarget = "workspace") {
             workspaceScrollY = window.scrollY;
             savingsFilterMonth = month;
             if (yearOverride !== null) pendingSavingsYearOverride = yearOverride;
+            savingsPageBackTarget = backTarget;
             showPage("page-savings");
             window.scrollTo(0,0);
             pushVirtualState("savings");
@@ -3320,6 +3325,12 @@
             await renderAccountsPage();
         }
 
+        // v269: Savings Statement's "← Back" target — mirrors accountsPageBackTarget above.
+        // Defaults to "workspace" for every pre-v269 caller (sidebar, dashboard report card);
+        // Total Bill Summary's Balance-cell drill-in (navigateToSavingsPage's 3rd arg) is the
+        // only caller that ever passes "total-summary".
+        let savingsPageBackTarget = "workspace"; // "workspace" | "total-summary"
+
         // v222 fix: Accounts page's "← Back" button target — previously hardcoded to
         // navigateToWorkspace(), which stranded users on the Dashboard when Accounts was
         // opened from the new Net Worth Statement page instead of the sidebar/dashboard.
@@ -3328,6 +3339,12 @@
         // sidebarNavPending (set in sidebarFilterAccountsByType() for the type shortcuts).
         function handleAccountsBackClick() {
             if (accountsPageBackTarget === "networth-statement") navigateToNetWorthStatementPage();
+            else navigateToWorkspace();
+        }
+
+        // v269: Savings Statement's "← Back" button target — see savingsPageBackTarget above.
+        function handleSavingsBackClick() {
+            if (savingsPageBackTarget === "total-summary") navigateToTotalSummaryPage();
             else navigateToWorkspace();
         }
 
@@ -13679,10 +13696,11 @@
             openCurrencyConfig: () => openCurrencyConfig(),
             lockAppNow: () => lockAppNow(),
             navigateToSavingsPage: () => navigateToSavingsPage(),
+            handleSavingsBackClick: () => handleSavingsBackClick(),
             // v269: Total Bill Summary's Balance column drills into the Net Savings Statement
             // scoped to that row's year (data-year is "all" for the Total row, or a specific
             // year string for a year row) — see rowHTML() in renderTotalSummaryPage().
-            totalSummaryBalanceClick: (el) => navigateToSavingsPage(el.dataset.year),
+            totalSummaryBalanceClick: (el) => navigateToSavingsPage(el.dataset.year, "all", "total-summary"),
             reportCardClickDirectType: (el) => reportCardClickDirectType(el),
             reportCardClickTotal: (el) => reportCardClickTotal(el),
             clearSavingsMonthScope: () => clearSavingsMonthScope(),
