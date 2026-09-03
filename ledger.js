@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v265";
+        const APP_VERSION = "v266";
         const APP_VERSION_DATE = "2026-09-03";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2914,30 +2914,49 @@
             renderSavingsStatement();
         }
 
-        // --- BUDGET (v264) ---
-        // One record per calendar month (STORES.BUDGETS, keyPath "id" = "YYYY-MM"). A month with
-        // no record simply has no budget set yet — the page shows a "Set Up Budget" empty state
-        // instead of zeros. Shape: { id, totalBudget, carryoverEnabled, carryoverAmount,
-        // categoryBudgets: [{cat, amount}] }. categoryBudgets stores the Category as a plain name
-        // string (same convention as a transaction's own `cat` — see the STORES comment near the
-        // top of this file), so renaming/deleting a Category later never retroactively breaks a
-        // saved category budget; it just stops matching new spending under the old name.
+        // --- BUDGET (v264, extended v266 with Yearly scope) ---
+        // One record per period (STORES.BUDGETS, keyPath "id") — the id's shape says its scope:
+        // "YYYY-MM" (7 chars, e.g. "2026-09") = a Monthly budget, "YYYY" (4 chars, e.g. "2026") =
+        // a Yearly budget. Same store, same record shape, no schema difference — every function
+        // below just branches on `key.length` (see isYearKey()) so Monthly and Yearly share one
+        // code path end-to-end (rendering, actuals, carryover, setup) instead of being two
+        // parallel features. A period with no record simply has no budget set yet — the page
+        // shows a "Set Up Budget" empty state instead of zeros. Record shape: { id, totalBudget,
+        // carryoverEnabled, carryoverAmount, categoryBudgets: [{cat, amount}] }. categoryBudgets
+        // stores the Category as a plain name string (same convention as a transaction's own
+        // `cat` — see the STORES comment near the top of this file), so renaming/deleting a
+        // Category later never retroactively breaks a saved category budget; it just stops
+        // matching new spending under the old name. A month's category budgets and a year's are
+        // independent lists (different records) — deliberately not merged/prorated, since a
+        // monthly "Dining Out" budget and a yearly "Travel" budget serve different purposes.
         //
-        // "Effective" total budget for a month = totalBudget + (carryoverEnabled ? carryoverAmount
-        // : 0). carryoverAmount is always user-editable, not auto-recomputed once saved — opening
-        // the setup modal for a month with no record yet pre-fills it with last month's leftover
-        // (effective budget − actual spend) as a *suggestion* only, mirroring the reference app's
-        // "defaults to last month's leftover + this month's budget, adjustable" carryover field.
+        // "Effective" total budget for a period = totalBudget + (carryoverEnabled ?
+        // carryoverAmount : 0). carryoverAmount is always user-editable, not auto-recomputed once
+        // saved — opening the setup modal for a period with no record yet pre-fills it with the
+        // PREVIOUS period's leftover (effective budget − actual spend) as a *suggestion* only,
+        // mirroring the reference app's "defaults to last period's leftover, adjustable" field.
+        // This works identically for Yearly (rolls last year's leftover into this year) since
+        // shiftPeriodKey() below handles both key shapes.
+        //
+        // The two scopes are connected one more way: setting up a new month, if a Yearly budget
+        // already exists for that month's year, offers a "Use 1/12 of yearly budget" quick-fill
+        // alongside "Copy from Last Month" — but a month's actual tracked spend/remaining is
+        // always computed independently from real transactions, never derived from the yearly
+        // number, so the two stay accurate regardless of how (or whether) they were seeded.
+        function isYearKey(key) { return key.length === 4; }
         function monthKeyFor(date) { return localDateStr(date).slice(0, 7); }
         function currentMonthKey() { return monthKeyFor(new Date()); }
-        function monthKeyLabel(monthKey) {
-            const [y, m] = monthKey.split("-").map(Number);
+        function currentYearKey() { return String(new Date().getFullYear()); }
+        function currentPeriodKey(scope) { return scope === "year" ? currentYearKey() : currentMonthKey(); }
+        function periodKeyLabel(key) {
+            if (isYearKey(key)) return key;
+            const [y, m] = key.split("-").map(Number);
             return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
         }
-        function shiftMonthKey(monthKey, delta) {
-            const [y, m] = monthKey.split("-").map(Number);
-            const d = new Date(y, m - 1 + delta, 1);
-            return monthKeyFor(d);
+        function shiftPeriodKey(key, delta) {
+            if (isYearKey(key)) return String(Number(key) + delta);
+            const [y, m] = key.split("-").map(Number);
+            return monthKeyFor(new Date(y, m - 1 + delta, 1));
         }
         function daysInMonthKey(monthKey) {
             const [y, m] = monthKey.split("-").map(Number);
@@ -2955,24 +2974,39 @@
             if (monthKey !== currentMonthKey()) return daysInMonthKey(monthKey);
             return new Date().getDate();
         }
-
-        async function getBudgetRecord(monthKey) {
-            return readKeyDB(STORES.BUDGETS, monthKey);
+        // Yearly equivalents of the day-based helpers above, but counting in MONTHS — a daily
+        // pace figure isn't meaningful over a 12-month span, so the Yearly view of the Budget page
+        // uses "per month" stats instead of "per day" ones (see renderBudgetPage()).
+        function monthsLeftInYearKey(yearKey) {
+            if (yearKey !== currentYearKey()) return 12;
+            return 12 - new Date().getMonth();
+        }
+        function monthsElapsedInYearKey(yearKey) {
+            if (yearKey !== currentYearKey()) return 12;
+            return new Date().getMonth() + 1;
         }
 
-        // Sums actual Expense spend (base currency) for a month, netting refunds against their
-        // own category exactly like renderDesktopInsightsRail/renderSpendingBreakdownPage do, and
-        // excluding any category flagged "Exclude from Net Savings Report" — same convention the
-        // rest of the app's reporting already uses, so a Budget total reconciles with what the
-        // Net Savings Statement / Financial Report Card call "Expense" for the same month.
-        function computeMonthActuals(monthKey, txs, accounts) {
+        async function getBudgetRecord(periodKey) {
+            return readKeyDB(STORES.BUDGETS, periodKey);
+        }
+
+        // Sums actual Expense spend (base currency) for a period — a month ("YYYY-MM") or a whole
+        // year ("YYYY") — netting refunds against their own category exactly like
+        // renderDesktopInsightsRail/renderSpendingBreakdownPage do, and excluding any category
+        // flagged "Exclude from Net Savings Report" — same convention the rest of the app's
+        // reporting already uses, so a Budget total reconciles with what the Net Savings
+        // Statement / Financial Report Card call "Expense" for the same period. A transaction's
+        // date ("YYYY-MM-DD") matches a "YYYY" periodKey by its first 4 characters and a
+        // "YYYY-MM" periodKey by its first 7 — same comparison, just sliced to periodKey's own
+        // length, so this one function serves both scopes.
+        function computePeriodActuals(periodKey, txs, accounts) {
             const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
             let total = 0;
             const byCategory = {};
             txs.forEach(t => {
                 const isRefundCredit = t.type === "income" && t.isRefund;
                 if (t.type !== "expense" && !isRefundCredit) return;
-                if (t.date.slice(0, 7) !== monthKey) return;
+                if (t.date.slice(0, periodKey.length) !== periodKey) return;
                 const cat = t.cat || "Other Expenses";
                 if (excludedCatNames.has(cat)) return;
                 const base = convertTxAmountToBase(t, accounts);
@@ -2988,66 +3022,96 @@
             return (rec.totalBudget || 0) + (rec.carryoverEnabled ? (rec.carryoverAmount || 0) : 0);
         }
 
-        // Suggested carryover for `monthKey`'s setup modal: last month's effective budget minus
-        // last month's actual spend, floored at 0 (a month that ran OVER budget suggests rolling
-        // forward $0, not a negative starting budget — the user can still type a negative amount
-        // themselves if that's genuinely what they want to model). Returns 0 if last month has no
-        // saved budget at all.
-        async function suggestedCarryover(monthKey, txs, accounts) {
-            const prevKey = shiftMonthKey(monthKey, -1);
+        // Suggested carryover for `periodKey`'s setup modal: the PREVIOUS period's (same scope —
+        // previous month, or previous year) effective budget minus its actual spend, floored at 0
+        // (a period that ran OVER budget suggests rolling forward $0, not a negative starting
+        // budget — the user can still type a negative amount themselves if that's genuinely what
+        // they want to model). Returns 0 if the previous period has no saved budget at all.
+        async function suggestedCarryover(periodKey, txs, accounts) {
+            const prevKey = shiftPeriodKey(periodKey, -1);
             const prevRec = await getBudgetRecord(prevKey);
             if (!prevRec) return 0;
             const prevEffective = budgetEffectiveTotal(prevRec);
-            const { total: prevActual } = computeMonthActuals(prevKey, txs, accounts);
+            const { total: prevActual } = computePeriodActuals(prevKey, txs, accounts);
             return Math.max(prevEffective - prevActual, 0);
         }
 
-        // Which month the Budget page is currently browsing (independent of the dashboard card,
-        // which always shows the current month) — navigated with the ‹ › arrows.
-        let budgetViewMonthKey = currentMonthKey();
+        // Which scope/period the Budget page is currently browsing — switched with the Monthly/
+        // Yearly toggle and navigated with the ‹ › arrows. The Dashboard's own widget always shows
+        // the CURRENT month + CURRENT year regardless of what this page happens to be browsing.
+        let budgetViewScope = "month";
+        let budgetViewPeriodKey = currentMonthKey();
 
-        function navigateToBudgetPage() {
+        function navigateToBudgetPage(scope) {
             workspaceScrollY = window.scrollY;
-            budgetViewMonthKey = currentMonthKey();
+            budgetViewScope = scope === "year" ? "year" : "month";
+            budgetViewPeriodKey = currentPeriodKey(budgetViewScope);
             showPage("page-budget");
             window.scrollTo(0, 0);
             pushVirtualState("budget");
             renderBudgetPage();
         }
 
-        function budgetPagePrevMonth() {
-            budgetViewMonthKey = shiftMonthKey(budgetViewMonthKey, -1);
-            renderBudgetPage();
-        }
-        function budgetPageNextMonth() {
-            budgetViewMonthKey = shiftMonthKey(budgetViewMonthKey, 1);
+        function budgetSetScope(el) {
+            const scope = el.dataset.scope === "year" ? "year" : "month";
+            if (scope === budgetViewScope) return;
+            budgetViewScope = scope;
+            budgetViewPeriodKey = currentPeriodKey(scope);
             renderBudgetPage();
         }
 
-        // Renders the whole Budget page body (summary card + category list) for
-        // budgetViewMonthKey — the single entry point called on navigation, month-arrow taps, and
-        // after any save/delete inside the page's own modals.
+        function budgetPagePrevPeriod() {
+            budgetViewPeriodKey = shiftPeriodKey(budgetViewPeriodKey, -1);
+            renderBudgetPage();
+        }
+        function budgetPageNextPeriod() {
+            budgetViewPeriodKey = shiftPeriodKey(budgetViewPeriodKey, 1);
+            renderBudgetPage();
+        }
+
+        // Renders the whole Budget page body — the scope toggle's active state, the "This Month /
+        // This Year" dual-progress strip (always both, regardless of which one is being browsed
+        // below), and the summary card + category list for budgetViewPeriodKey. Single entry point
+        // called on navigation, scope-toggle taps, month/year-arrow taps, and after any save/
+        // delete inside the page's own modals.
         async function renderBudgetPage() {
-            document.getElementById("budgetPageMonthLabel").textContent = monthKeyLabel(budgetViewMonthKey);
+            document.getElementById("budgetScopeMonthBtn").classList.toggle("active", budgetViewScope === "month");
+            document.getElementById("budgetScopeYearBtn").classList.toggle("active", budgetViewScope === "year");
+            document.getElementById("budgetPageMonthLabel").textContent = periodKeyLabel(budgetViewPeriodKey);
             const nextBtn = document.getElementById("budgetPageNextBtn");
-            if (nextBtn) nextBtn.disabled = budgetViewMonthKey >= currentMonthKey();
+            if (nextBtn) nextBtn.disabled = budgetViewPeriodKey >= currentPeriodKey(budgetViewScope);
 
             const { accounts, txs } = await computeAccountBalances();
-            const rec = await getBudgetRecord(budgetViewMonthKey);
+
+            // Dual-progress strip: always both scopes, always the CURRENT month/year (not
+            // whatever's being browsed below), so you can never lose sight of the other one.
+            const curMonthRec = await getBudgetRecord(currentMonthKey());
+            const curYearRec = await getBudgetRecord(currentYearKey());
+            const { total: curMonthSpent } = computePeriodActuals(currentMonthKey(), txs, accounts);
+            const { total: curYearSpent } = computePeriodActuals(currentYearKey(), txs, accounts);
+            document.getElementById("budgetDualStrip").innerHTML = budgetDualStripHTML(curMonthRec, curMonthSpent, curYearRec, curYearSpent);
+
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
             const contentEl = document.getElementById("budgetPageContent");
+            const isYear = budgetViewScope === "year";
 
             if (!rec) {
-                const suggestion = await suggestedCarryover(budgetViewMonthKey, txs, accounts);
-                const prevKey = shiftMonthKey(budgetViewMonthKey, -1);
+                const suggestion = await suggestedCarryover(budgetViewPeriodKey, txs, accounts);
+                const prevKey = shiftPeriodKey(budgetViewPeriodKey, -1);
                 const prevRec = await getBudgetRecord(prevKey);
+                // Only offered on the Monthly empty state, for a month whose year already has a
+                // Yearly budget — see the file-header comment for why this is the one place the
+                // two scopes actively hand data to each other.
+                const yearRecForSeed = !isYear ? await getBudgetRecord(budgetViewPeriodKey.slice(0, 4)) : null;
                 contentEl.innerHTML = `
                     <div class="report-card-mini" style="text-align:center; padding:28px 16px;">
                         <div style="font-size:2rem; margin-bottom:8px;">🎯</div>
-                        <p style="font-weight:700; margin-bottom:4px;">No budget set for ${escapeHtml(monthKeyLabel(budgetViewMonthKey))}</p>
-                        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:16px;">Set a total monthly budget, then optionally break it down by category.</p>
+                        <p style="font-weight:700; margin-bottom:4px;">No ${isYear ? "yearly" : ""} budget set for ${escapeHtml(periodKeyLabel(budgetViewPeriodKey))}</p>
+                        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:16px;">Set a total budget for ${isYear ? "the year" : "the month"}, then optionally break it down by category.</p>
                         <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
                             <button type="button" class="submit-btn" style="width:auto; margin-top:0; padding:10px 20px;" data-click="openBudgetSetupModal">Set Up Budget</button>
-                            ${prevRec ? `<button type="button" class="text-btn" data-click="copyBudgetFromLastMonth" style="padding:10px 16px;">Copy from ${escapeHtml(monthKeyLabel(prevKey))}${suggestion > 0 ? ` (+${formatCurrency(suggestion, baseCurrency)} left over)` : ""}</button>` : ""}
+                            ${prevRec ? `<button type="button" class="text-btn" data-click="copyBudgetFromPreviousPeriod" style="padding:10px 16px;">Copy from ${escapeHtml(periodKeyLabel(prevKey))}${suggestion > 0 ? ` (+${formatCurrency(suggestion, baseCurrency)} left over)` : ""}</button>` : ""}
+                            ${yearRecForSeed ? `<button type="button" class="text-btn" data-click="copyBudgetOneTwelfthOfYear" style="padding:10px 16px;">Use 1/12 of ${escapeHtml(yearRecForSeed.id)} Budget (${formatCurrency(budgetEffectiveTotal(yearRecForSeed) / 12, baseCurrency)})</button>` : ""}
                         </div>
                     </div>
                 `;
@@ -3055,23 +3119,47 @@
             }
 
             const effectiveTotal = budgetEffectiveTotal(rec);
-            const { total: spent, byCategory } = computeMonthActuals(budgetViewMonthKey, txs, accounts);
+            const { total: spent, byCategory } = computePeriodActuals(budgetViewPeriodKey, txs, accounts);
             const remaining = effectiveTotal - spent;
             const pctUsed = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
             const overBudget = remaining < 0;
-            const daysLeft = daysLeftInMonthKey(budgetViewMonthKey);
-            const daysElapsed = Math.max(daysElapsedInMonthKey(budgetViewMonthKey), 1);
-            const dailyAvgSpent = spent / daysElapsed;
-            const dailyBudget = effectiveTotal / daysInMonthKey(budgetViewMonthKey);
-            const dailyRemaining = daysLeft > 0 ? remaining / daysLeft : remaining;
             const barColor = overBudget ? "var(--expense-color)" : "var(--primary)";
-            // A refund posted this month that's bigger than what was actually spent in its own
-            // category (e.g. a refund with no matching purchase this month) can net the month's
+            // A refund posted this period that's bigger than what was actually spent in its own
+            // category (e.g. a refund with no matching purchase this period) can net the period's
             // total spend below zero — same convention the Financial Report Card/Spending
             // Breakdown already use (refunds net against their own category), just surfaced here
             // too. formatBalanceHTML (parens + red) makes that read as "net refund", not a broken
             // number, and the note below spells it out.
-            const netRefundMonth = spent < 0;
+            const netRefundPeriod = spent < 0;
+
+            let leftLabel, leftValue, paceRows;
+            if (isYear) {
+                const monthsLeft = monthsLeftInYearKey(budgetViewPeriodKey);
+                const monthsElapsed = Math.max(monthsElapsedInYearKey(budgetViewPeriodKey), 1);
+                const paceSpent = spent / monthsElapsed;
+                const paceBudget = effectiveTotal / 12;
+                const paceRemaining = monthsLeft > 0 ? remaining / monthsLeft : remaining;
+                leftLabel = "Months Left";
+                leftValue = monthsLeft;
+                paceRows = `
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per month so far this year (spent ÷ months elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per month so far)</span><strong>${formatBalanceHTML(paceSpent, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across the 12 months of the year (budget ÷ 12)"><span style="color:var(--text-muted);">🔵 Budgeted per month (whole year)</span><strong>${formatCurrency(paceBudget, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What's left to spend, spread across the months remaining (remaining ÷ months left)"><span style="color:var(--text-muted);">🟢 Room per month (rest of year)</span><strong>${formatCurrency(Math.max(paceRemaining, 0), baseCurrency)}</strong></div>
+                `;
+            } else {
+                const daysLeft = daysLeftInMonthKey(budgetViewPeriodKey);
+                const daysElapsed = Math.max(daysElapsedInMonthKey(budgetViewPeriodKey), 1);
+                const dailyAvgSpent = spent / daysElapsed;
+                const dailyBudget = effectiveTotal / daysInMonthKey(budgetViewPeriodKey);
+                const dailyRemaining = daysLeft > 0 ? remaining / daysLeft : remaining;
+                leftLabel = "Days Left";
+                leftValue = daysLeft;
+                paceRows = `
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per day so far this month (spent ÷ days elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per day so far)</span><strong>${formatBalanceHTML(dailyAvgSpent, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across every day of the month (budget ÷ days in month)"><span style="color:var(--text-muted);">🔵 Budgeted per day (whole month)</span><strong>${formatCurrency(dailyBudget, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What's left to spend, spread across the days remaining (remaining ÷ days left)"><span style="color:var(--text-muted);">🟢 Room per day (rest of month)</span><strong>${formatCurrency(Math.max(dailyRemaining, 0), baseCurrency)}</strong></div>
+                `;
+            }
 
             const summaryHTML = `
                 <div class="report-card-mini" style="margin-bottom:14px;">
@@ -3089,16 +3177,14 @@
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Spent</div><div style="font-weight:700; font-size:0.85rem; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(spent, baseCurrency)}</div></div>
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Budget</div><div style="font-weight:700; font-size:0.85rem;">${formatCurrency(effectiveTotal, baseCurrency)}</div></div>
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Used</div><div style="font-weight:700; font-size:0.85rem;">${pctUsed.toFixed(0)}%</div></div>
-                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Days Left</div><div style="font-weight:700; font-size:0.85rem;">${daysLeft}</div></div>
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">${leftLabel}</div><div style="font-weight:700; font-size:0.85rem;">${leftValue}</div></div>
                     </div>
-                    ${netRefundMonth ? `<p style="font-size:0.72rem; color:var(--text-muted); margin-top:8px;">Spent is negative because a refund posted this month is larger than what was actually spent in its category — so this month is a net inflow so far.</p>` : ""}
+                    ${netRefundPeriod ? `<p style="font-size:0.72rem; color:var(--text-muted); margin-top:8px;">Spent is negative because a refund posted this ${isYear ? "year" : "month"} is larger than what was actually spent in its category — so this ${isYear ? "year" : "month"} is a net inflow so far.</p>` : ""}
                     <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:10px;">
-                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per day so far this month (spent ÷ days elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per day so far)</span><strong>${formatBalanceHTML(dailyAvgSpent, baseCurrency)}</strong></div>
-                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across every day of the month (budget ÷ days in month)"><span style="color:var(--text-muted);">🔵 Budgeted per day (whole month)</span><strong>${formatCurrency(dailyBudget, baseCurrency)}</strong></div>
-                        <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What's left to spend, spread across the days remaining (remaining ÷ days left)"><span style="color:var(--text-muted);">🟢 Room per day (rest of month)</span><strong>${formatCurrency(Math.max(dailyRemaining, 0), baseCurrency)}</strong></div>
+                        ${paceRows}
                     </div>
-                    <p style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">These compare your day-to-day pace against your budget — if "Spending pace" is above "Budgeted per day", you're on track to run out before the month ends.</p>
-                    ${rec.carryoverEnabled ? `<div style="margin-top:10px; font-size:0.72rem; color:var(--text-muted);">Includes ${formatCurrency(rec.carryoverAmount || 0, baseCurrency)} carried over from ${escapeHtml(monthKeyLabel(shiftMonthKey(budgetViewMonthKey, -1)))}.</div>` : ""}
+                    <p style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">These compare your ${isYear ? "month-to-month" : "day-to-day"} pace against your budget — if "Spending pace" is above "Budgeted per ${isYear ? "month" : "day"}", you're on track to run out before the ${isYear ? "year" : "month"} ends.</p>
+                    ${rec.carryoverEnabled ? `<div style="margin-top:10px; font-size:0.72rem; color:var(--text-muted);">Includes ${formatCurrency(rec.carryoverAmount || 0, baseCurrency)} carried over from ${escapeHtml(periodKeyLabel(shiftPeriodKey(budgetViewPeriodKey, -1)))}.</div>` : ""}
                 </div>
             `;
 
@@ -3124,63 +3210,104 @@
 
             const catSectionHTML = `
                 <div class="section-header">
-                    <span class="section-title">Category Budgets</span>
+                    <span class="section-title">${isYear ? "Yearly" : ""} Category Budgets</span>
                 </div>
                 <div class="config-list" style="padding-bottom:88px;">
-                    ${catRows || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No category budgets yet — tap the + button to break this month's total down by category.</p>`}
+                    ${catRows || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No category budgets yet — tap the + button to break this ${isYear ? "year" : "month"}'s total down by category.</p>`}
                 </div>
             `;
 
             contentEl.innerHTML = summaryHTML + catSectionHTML;
         }
 
-        // Dashboard summary card (always shows the CURRENT month, regardless of what the full
-        // Budget page happens to be browsing) — a lightweight teaser, not a second copy of every
-        // stat: remaining amount, progress bar, days left, and a link into the full page.
-        function renderDashboardBudgetWidget(rec, spent) {
+        // Compact "This Month · This Year" dual-progress strip shown at the top of the Budget page
+        // regardless of which scope is currently being browsed below — tapping either half jumps
+        // the toggle (and resets the browsed period back to "now") into that scope.
+        function budgetDualStripHTML(monthRec, monthSpent, yearRec, yearSpent) {
+            const chip = (rec, spent, label, scope) => {
+                if (!rec) return `<div class="config-item" data-click="navigateToBudgetPage" data-scope="${scope}" style="flex:1; justify-content:center; text-align:center; font-size:0.75rem; color:var(--text-muted);">${label}: not set</div>`;
+                const effectiveTotal = budgetEffectiveTotal(rec);
+                const pct = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
+                const over = spent > effectiveTotal;
+                return `
+                    <div data-click="navigateToBudgetPage" data-scope="${scope}" style="flex:1; cursor:pointer;">
+                        <div style="font-size:0.72rem; color:var(--text-muted); text-align:center;">${label}</div>
+                        <div style="font-size:0.85rem; font-weight:700; text-align:center; ${over ? "color:var(--expense-color);" : ""}">${pct.toFixed(0)}% used</div>
+                        <div class="progress-bar-container" style="height:6px; margin-top:4px;"><div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div></div>
+                    </div>
+                `;
+            };
+            return `<div style="display:flex; gap:16px; padding:12px; background:var(--card-bg); border-radius:12px; margin-bottom:12px; border:1px solid var(--border-color);">
+                ${chip(monthRec, monthSpent, "This Month", "month")}
+                <div style="width:1px; background:var(--border-color);"></div>
+                ${chip(yearRec, yearSpent, "This Year", "year")}
+            </div>`;
+        }
+
+        // Dashboard summary card — a lightweight teaser, not a second copy of every stat: the
+        // current month's remaining amount + progress bar (headline), plus a smaller current-year
+        // line underneath so the year's progress is never out of sight from the dashboard either.
+        function renderDashboardBudgetWidget(monthRec, monthSpent, yearRec, yearSpent) {
             const wrap = document.getElementById("dashboardBudgetWidget");
             if (!wrap) return;
-            if (!rec) {
+            if (!monthRec && !yearRec) {
                 wrap.innerHTML = `
                     <div class="report-card-mini" style="text-align:center; padding:16px;">
-                        <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px;">No budget set for ${escapeHtml(monthKeyLabel(currentMonthKey()))} yet.</p>
+                        <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px;">No budget set for ${escapeHtml(periodKeyLabel(currentMonthKey()))} yet.</p>
                         <button type="button" class="text-btn" data-click="navigateToBudgetPage">Set Up Budget →</button>
                     </div>
                 `;
                 return;
             }
-            const effectiveTotal = budgetEffectiveTotal(rec);
-            const remaining = effectiveTotal - spent;
-            const pctUsed = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
-            const overBudget = remaining < 0;
+            const monthTotal = budgetEffectiveTotal(monthRec);
+            const monthRemaining = monthTotal - monthSpent;
+            const monthPct = monthTotal > 0 ? Math.max(Math.min((monthSpent / monthTotal) * 100, 100), 0) : (monthSpent > 0 ? 100 : 0);
+            const monthOver = monthRemaining < 0;
             const daysLeft = daysLeftInMonthKey(currentMonthKey());
+
+            const yearTotal = budgetEffectiveTotal(yearRec);
+            const yearPct = yearRec ? (yearTotal > 0 ? Math.max(Math.min((yearSpent / yearTotal) * 100, 100), 0) : (yearSpent > 0 ? 100 : 0)) : null;
+            const yearOver = yearRec ? (yearTotal - yearSpent) < 0 : false;
+
             wrap.innerHTML = `
-                <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage">
+                <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage" data-scope="month">
                     <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                        <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Remaining Budget · ${escapeHtml(daysLeft)} day${daysLeft === 1 ? "" : "s"} left</span>
+                        <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Remaining Budget · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left</span>
                         <span style="font-size:0.72rem; color:var(--text-muted);">View →</span>
                     </div>
-                    <div style="font-size:1.35rem; font-weight:800; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(remaining, baseCurrency)}</div>
+                    <div style="font-size:1.35rem; font-weight:800; ${monthOver ? "color:var(--expense-color);" : ""}">${monthRec ? formatBalanceHTML(monthRemaining, baseCurrency) : "—"}</div>
                     <div class="progress-bar-container" style="height:8px; margin-top:6px;">
-                        <div class="progress-bar-fill" style="width:${pctUsed}%; ${overBudget ? "background:var(--expense-color);" : ""}"></div>
+                        <div class="progress-bar-fill" style="width:${monthRec ? monthPct : 0}%; ${monthOver ? "background:var(--expense-color);" : ""}"></div>
                     </div>
+                    ${yearRec ? `
+                    <div style="display:flex; justify-content:space-between; align-items:baseline; margin-top:10px; padding-top:8px; border-top:1px solid var(--border-color);" data-click="navigateToBudgetPage" data-scope="year">
+                        <span style="font-size:0.7rem; color:var(--text-muted);">This Year</span>
+                        <span style="font-size:0.75rem; font-weight:700; ${yearOver ? "color:var(--expense-color);" : ""}">${yearPct.toFixed(0)}% used</span>
+                    </div>
+                    <div class="progress-bar-container" style="height:5px; margin-top:4px;">
+                        <div class="progress-bar-fill" style="width:${yearPct}%; ${yearOver ? "background:var(--expense-color);" : ""}"></div>
+                    </div>
+                    ` : ""}
                 </div>
             `;
         }
 
-        // --- Budget Setup Modal (total budget + carryover) ---
+        // --- Budget Setup Modal (total budget + carryover) — works for whichever period
+        // (budgetViewPeriodKey / budgetViewScope) the Budget page is currently browsing. ---
         async function openBudgetSetupModal() {
             const { accounts, txs } = await computeAccountBalances();
-            const rec = await getBudgetRecord(budgetViewMonthKey);
-            const prevKey = shiftMonthKey(budgetViewMonthKey, -1);
-            document.getElementById("budgetSetupMonthLabel").textContent = monthKeyLabel(budgetViewMonthKey);
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            const prevKey = shiftPeriodKey(budgetViewPeriodKey, -1);
+            const isYear = budgetViewScope === "year";
+            document.getElementById("budgetSetupMonthLabel").textContent = periodKeyLabel(budgetViewPeriodKey);
             document.getElementById("budgetSetupCurrLabel").textContent = baseCurrency;
             document.getElementById("budgetTotalInput").value = rec ? rec.totalBudget : "";
             const carryoverEnabled = rec ? !!rec.carryoverEnabled : false;
             document.getElementById("budgetCarryoverToggle").checked = carryoverEnabled;
-            const suggestion = await suggestedCarryover(budgetViewMonthKey, txs, accounts);
+            document.getElementById("budgetCarryoverLabel").textContent = `Carry over last ${isYear ? "year's" : "month's"} leftover`;
+            const suggestion = await suggestedCarryover(budgetViewPeriodKey, txs, accounts);
             document.getElementById("budgetCarryoverAmountInput").value = rec ? (rec.carryoverAmount || 0) : suggestion;
-            document.getElementById("budgetCarryoverHint").textContent = `Defaults to last month's leftover (${formatCurrency(suggestion, baseCurrency)} from ${monthKeyLabel(prevKey)}) — adjust freely.`;
+            document.getElementById("budgetCarryoverHint").textContent = `Defaults to last ${isYear ? "year" : "month"}'s leftover (${formatCurrency(suggestion, baseCurrency)} from ${periodKeyLabel(prevKey)}) — adjust freely.`;
             document.getElementById("budgetCarryoverRow").classList.toggle("hidden", !carryoverEnabled);
             openModal("budgetSetupModal");
         }
@@ -3194,9 +3321,9 @@
             if (isNaN(totalBudget) || totalBudget < 0) { alert("Please enter a valid budget amount."); return; }
             const carryoverEnabled = document.getElementById("budgetCarryoverToggle").checked;
             const carryoverAmount = parseFloat(document.getElementById("budgetCarryoverAmountInput").value) || 0;
-            const existing = await getBudgetRecord(budgetViewMonthKey);
+            const existing = await getBudgetRecord(budgetViewPeriodKey);
             const record = {
-                id: budgetViewMonthKey,
+                id: budgetViewPeriodKey,
                 totalBudget,
                 carryoverEnabled,
                 carryoverAmount,
@@ -3213,17 +3340,19 @@
             showToast("💰 Budget saved");
         }
 
-        // Quick-start action from the empty state: clones last month's total + carryover setting
-        // (NOT its carryoverAmount, which is recomputed fresh below) and category budgets as-is,
-        // so a recurring monthly budget doesn't need re-typing every category amount by hand.
-        async function copyBudgetFromLastMonth() {
+        // Quick-start action from the empty state: clones the PREVIOUS period's (same scope) total
+        // + carryover setting (NOT its carryoverAmount, which is recomputed fresh below) and
+        // category budgets as-is, so a recurring budget doesn't need re-typing every category
+        // amount by hand. Works for both Monthly (copies last month) and Yearly (copies last
+        // year) since it's built entirely on shiftPeriodKey().
+        async function copyBudgetFromPreviousPeriod() {
             const { accounts, txs } = await computeAccountBalances();
-            const prevKey = shiftMonthKey(budgetViewMonthKey, -1);
+            const prevKey = shiftPeriodKey(budgetViewPeriodKey, -1);
             const prevRec = await getBudgetRecord(prevKey);
             if (!prevRec) return;
-            const suggestion = await suggestedCarryover(budgetViewMonthKey, txs, accounts);
+            const suggestion = await suggestedCarryover(budgetViewPeriodKey, txs, accounts);
             const record = {
-                id: budgetViewMonthKey,
+                id: budgetViewPeriodKey,
                 totalBudget: prevRec.totalBudget || 0,
                 carryoverEnabled: !!prevRec.carryoverEnabled,
                 carryoverAmount: prevRec.carryoverEnabled ? suggestion : 0,
@@ -3236,13 +3365,38 @@
                 return;
             }
             renderBudgetPage();
-            showToast("💰 Budget copied from " + monthKeyLabel(prevKey));
+            showToast("💰 Budget copied from " + periodKeyLabel(prevKey));
         }
 
-        // --- Category Budget Modal (add/edit/delete one row of rec.categoryBudgets) ---
+        // Quick-start action from the Monthly empty state only, when the month's year already has
+        // a Yearly budget: fills this month's total with 1/12 of the yearly effective budget (no
+        // carryover, no category budgets — just a starting total the user can refine from there).
+        async function copyBudgetOneTwelfthOfYear() {
+            const yearKey = budgetViewPeriodKey.slice(0, 4);
+            const yearRec = await getBudgetRecord(yearKey);
+            if (!yearRec) return;
+            const record = {
+                id: budgetViewPeriodKey,
+                totalBudget: Math.round((budgetEffectiveTotal(yearRec) / 12) * 100) / 100,
+                carryoverEnabled: false,
+                carryoverAmount: 0,
+                categoryBudgets: []
+            };
+            try {
+                await writeDB(STORES.BUDGETS, record);
+            } catch (err) {
+                alert("Could not set up budget: " + (err && err.message ? err.message : err));
+                return;
+            }
+            renderBudgetPage();
+            showToast("💰 Budget set from " + yearKey + "'s yearly budget");
+        }
+
+        // --- Category Budget Modal (add/edit/delete one row of rec.categoryBudgets) — scoped to
+        // whichever period (budgetViewPeriodKey) the Budget page is currently browsing. ---
         async function openCategoryBudgetModal() {
-            const rec = await getBudgetRecord(budgetViewMonthKey);
-            if (!rec) { alert("Set up a total budget for this month first."); return; }
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            if (!rec) { alert("Set up a total budget for this period first."); return; }
             document.getElementById("categoryBudgetModalTitle").textContent = "Add Category Budget";
             document.getElementById("categoryBudgetSubmitBtn").textContent = "Save";
             document.getElementById("categoryBudgetEditCat").value = "";
@@ -3258,7 +3412,7 @@
 
         async function editCategoryBudget(el) {
             const cat = el.dataset.cat;
-            const rec = await getBudgetRecord(budgetViewMonthKey);
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
             if (!rec) return;
             const cb = (rec.categoryBudgets || []).find(c => c.cat === cat);
             if (!cb) return;
@@ -3281,7 +3435,7 @@
             if (!cat) { alert("Please select a category."); return; }
             if (isNaN(amount) || amount < 0) { alert("Please enter a valid amount."); return; }
             const editCat = document.getElementById("categoryBudgetEditCat").value;
-            const rec = await getBudgetRecord(budgetViewMonthKey);
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
             if (!rec) return;
             const list = (rec.categoryBudgets || []).filter(cb => cb.cat !== editCat && cb.cat !== cat);
             list.push({ cat, amount });
@@ -3299,9 +3453,9 @@
         async function removeCategoryBudget() {
             const editCat = document.getElementById("categoryBudgetEditCat").value;
             if (!editCat) return;
-            const ok = await customConfirm(`Remove the budget for "${editCat}"? This month's spending in that category is unaffected.`);
+            const ok = await customConfirm(`Remove the budget for "${editCat}"? This period's spending in that category is unaffected.`);
             if (!ok) return;
-            const rec = await getBudgetRecord(budgetViewMonthKey);
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
             if (!rec) return;
             rec.categoryBudgets = (rec.categoryBudgets || []).filter(cb => cb.cat !== editCat);
             try {
@@ -11511,12 +11665,14 @@
             applyDashboardWidgetOrder();
             renderDesktopInsightsRail(accounts, txs);
 
-            // v264: Dashboard "Remaining Budget" teaser — always the CURRENT month regardless of
-            // what the full Budget page (if open elsewhere) is browsing.
+            // v264/v266: Dashboard "Remaining Budget" teaser — always the CURRENT month + CURRENT
+            // year, regardless of what the full Budget page (if open elsewhere) is browsing.
             {
-                const curBudgetRec = await getBudgetRecord(currentMonthKey());
-                const { total: curBudgetSpent } = computeMonthActuals(currentMonthKey(), txs, accounts);
-                renderDashboardBudgetWidget(curBudgetRec, curBudgetSpent);
+                const curMonthRec = await getBudgetRecord(currentMonthKey());
+                const curYearRec = await getBudgetRecord(currentYearKey());
+                const { total: curMonthSpent } = computePeriodActuals(currentMonthKey(), txs, accounts);
+                const { total: curYearSpent } = computePeriodActuals(currentYearKey(), txs, accounts);
+                renderDashboardBudgetWidget(curMonthRec, curMonthSpent, curYearRec, curYearSpent);
             }
 
             // --- Fixed Deposit maturity reminders ---
@@ -14096,12 +14252,14 @@
             editTag: (el) => editTag(el.dataset.id),
             removeTag: (el) => removeTag(el.dataset.id),
             handleSaveTagMobile: () => handleSaveTagMobile(),
-            navigateToBudgetPage: () => navigateToBudgetPage(),
-            budgetPagePrevMonth: () => budgetPagePrevMonth(),
-            budgetPageNextMonth: () => budgetPageNextMonth(),
+            navigateToBudgetPage: (el) => navigateToBudgetPage(el && el.dataset ? el.dataset.scope : undefined),
+            budgetSetScope: (el) => budgetSetScope(el),
+            budgetPagePrevPeriod: () => budgetPagePrevPeriod(),
+            budgetPageNextPeriod: () => budgetPageNextPeriod(),
             openBudgetSetupModal: () => openBudgetSetupModal(),
             handleSaveBudgetSetup: () => handleSaveBudgetSetup(),
-            copyBudgetFromLastMonth: () => copyBudgetFromLastMonth(),
+            copyBudgetFromPreviousPeriod: () => copyBudgetFromPreviousPeriod(),
+            copyBudgetOneTwelfthOfYear: () => copyBudgetOneTwelfthOfYear(),
             openCategoryBudgetModal: () => openCategoryBudgetModal(),
             editCategoryBudget: (el) => editCategoryBudget(el),
             handleSaveCategoryBudget: () => handleSaveCategoryBudget(),
