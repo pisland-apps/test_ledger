@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v270";
-        const APP_VERSION_DATE = "2026-09-04";
+        const APP_VERSION = "v269";
+        const APP_VERSION_DATE = "2026-09-03";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -56,12 +56,14 @@
         // v257: DB_VERSION 7→8 adds the TAGS store (trip/claim labels — e.g. "Japan Holiday Aug
         // 2026" — a transaction can carry alongside its Category; see renderTagsPage()/
         // createTag() and the Tags row on the Add/Edit Transaction form).
-        const DB_VERSION = 8;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags" };
+        // v264: DB_VERSION 8→9 adds the BUDGETS store (one record per calendar month — a total
+        // budget plus an optional per-category breakdown; see the "--- BUDGET ---" section below).
+        const DB_VERSION = 9;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags", BUDGETS: "budgets" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id", budgets: "id" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -1422,7 +1424,7 @@
             { name: "Investments", type: "income", icon: "📈" },
             { name: "Freelance", type: "income", icon: "💻" },
             { name: "Dividend ASNB", type: "income", icon: "📈" },
-            { name: "Dividend EPF", type: "income", icon: "🏦" },
+            { name: "Divident EPF", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(ER)", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(EE)", type: "income", icon: "🏦" },
             { name: "CPF Contrib.(ER)", type: "income", icon: "🏦" },
@@ -1435,7 +1437,6 @@
             { name: "Dividend Unit Trust", type: "income", icon: "🧺" },
             { name: "Rental Income", type: "income", icon: "🏠" },
             { name: "Bank Charges", type: "expense", icon: "💳" },
-            { name: "Books & Stationery", type: "expense", icon: "📚" },
             { name: "Mortgage Interest", type: "expense", icon: "🏠" },
             { name: "Education", type: "expense", icon: "🎓" },
             { name: "Family", type: "expense", icon: "👨‍👩‍👧‍👦" },
@@ -1460,7 +1461,6 @@
             { name: "Car Upkeep", type: "expense", icon: "🔧", parent: "Vehicle Expenses" },
             { name: "Fuel", type: "expense", icon: "⛽", parent: "Vehicle Expenses" },
             { name: "Ins & Road Tax", type: "expense", icon: "📄", parent: "Vehicle Expenses" },
-            { name: "Parking", type: "expense", icon: "🅿️", parent: "Vehicle Expenses" },
             { name: "Transportation", type: "expense", icon: "🚌", parent: "Vehicle Expenses" },
             // Property Expenses (Main) + its Subcategories
             { name: "Property Expenses", type: "expense", icon: "🏢" },
@@ -1475,12 +1475,12 @@
         // Dynamic Rich Catalog of Preset Icons grouped logically
         const emojiDirectory = {
             "Money & Fin.": ["💵", "💰", "💳", "📈", "📉", "🪙", "💎", "💸"],
-            "Food & Dining": ["🍔", "🍜", "🍕", "☕", "🍺", "🍏", "🍣", "🍩", "🍷", "🧺", "🥕"],
+            "Food & Dining": ["🍔", "🍜", "🍕", "☕", "🍺", "🍏", "🍣", "🍩", "🍷", "🧺"],
             "Transport": ["🚗", "🚌", "🚆", "✈️", "🚲", "⛽", "🚕", "🚢"],
             "Home & Living": ["🏠", "🔌", "📡", "🛋️", "🧹", "💧", "📦", "🔑"],
-            "Life & Leisure": ["🎬", "🎮", "⚽", "🏖️", "🛒", "👕", "🎁", "💊", "🎭", "🪶"],
+            "Life & Leisure": ["🎬", "🎮", "⚽", "🏖️", "🛒", "👕", "🎁", "💊", "🎭"],
             "Income & Business": ["🏢", "💼", "💻", "🛠️", "🤝", "🏡", "🎓", "👑", "📋"],
-            "Family & Pets": ["👨‍👩‍👧‍👦", "🐹", "🐄", "🐶", "🐱", "🐻", "🐮", "🐑", "🦊"]
+            "Family & Pets": ["👨‍👩‍👧‍👦", "🐹", "🐄", "🐶", "🐱"]
         };
 
         // Fallback default system icons if not found
@@ -1504,7 +1504,7 @@
             "fixed deposit": "🏦",
             "interest income": "💰",
             "dividend asnb": "📈",
-            "dividend epf": "🏦",
+            "divident epf": "🏦",
             "epf contrib.(er)": "🏦",
             "epf contrib.(ee)": "🏦",
             "cpf contrib.(er)": "🏦",
@@ -1516,8 +1516,6 @@
             "rebate": "💸",
             "grants": "🎓",
             "bank charges": "💳",
-            "books & stationery": "📚",
-            "parking": "🅿️",
             "education": "🎓",
             "family": "👨‍👩‍👧‍👦",
             "betting": "🎰",
@@ -1555,7 +1553,7 @@
         // on existing transactions, so a renamed/deleted category doesn't vanish from its own
         // transaction's dropdown) — merged with the full legacy + DEFAULT_CATEGORIES fallback set.
         function buildCategoryOptionsHTML(type, namesToInclude) {
-            const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+            const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
             const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === type).map(c => c.name)];
             const allNames = new Set([...(namesToInclude || []), ...fallbackGroup]);
 
@@ -1677,10 +1675,10 @@
             const templatesPage = document.getElementById("page-templates");
             const tagsPage = document.getElementById("page-tags");
             const tagReportPage = document.getElementById("page-tag-report");
+            const budgetPage = document.getElementById("page-budget");
             const backupPage = document.getElementById("page-backup");
             const autolockPage = document.getElementById("page-autolock");
             const databasePage = document.getElementById("page-database");
-            const totalSummaryPage = document.getElementById("page-total-summary");
             const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
             const portfolioReportPage = document.getElementById("page-portfolio-report");
@@ -1708,21 +1706,17 @@
                 // which ignored where Accounts was actually opened from (e.g. Net Worth
                 // Statement) — same gap as the on-screen "← Back" button, fixed the same way.
                 handleAccountsBackClick();
-            } else if (!savingsPage.classList.contains("hidden")) {
-                // v269: mirrors handleAccountsBackClick — Total Bill Summary's Balance-cell
-                // drill-in sets savingsPageBackTarget so a hardware/gesture back press lands
-                // back on that page instead of always jumping to the Dashboard.
-                handleSavingsBackClick();
             } else if (
+                !savingsPage.classList.contains("hidden") ||
                 !networthStatementPage.classList.contains("hidden") ||
                 !categoriesPage.classList.contains("hidden") ||
                 !templatesPage.classList.contains("hidden") ||
                 !tagsPage.classList.contains("hidden") ||
                 !tagReportPage.classList.contains("hidden") ||
+                !budgetPage.classList.contains("hidden") ||
                 !backupPage.classList.contains("hidden") ||
                 !autolockPage.classList.contains("hidden") ||
                 !databasePage.classList.contains("hidden") ||
-                !totalSummaryPage.classList.contains("hidden") ||
                 !spendingBreakdownPage.classList.contains("hidden") ||
                 !incomeBreakdownPage.classList.contains("hidden") ||
                 !portfolioReportPage.classList.contains("hidden") ||
@@ -1784,6 +1778,14 @@
                         // convention as `cat` — see the STORES comment above), not a reference to
                         // this store's ids, so renaming/deleting a tag here never rewrites history.
                         database.createObjectStore(STORES.TAGS, { keyPath: "id" });
+                    }
+                    if (!database.objectStoreNames.contains(STORES.BUDGETS)) {
+                        // v264: one record per calendar month, keyPath "id" = "YYYY-MM" (e.g.
+                        // "2026-09") — re-saving the same month overwrites it rather than creating a
+                        // duplicate, same convention as NAV_HISTORY's date keyPath above. Shape:
+                        // { id, totalBudget, carryoverEnabled, carryoverAmount, categoryBudgets:
+                        // [{cat, amount}] }. See the "--- BUDGET ---" section for the full model.
+                        database.createObjectStore(STORES.BUDGETS, { keyPath: "id" });
                     }
                 };
                 request.onerror = (e) => reject(e.target.error);
@@ -2335,7 +2337,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-backup", "page-autolock", "page-database", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -2362,10 +2364,10 @@
                 case "page-templates": return "Transaction Templates";
                 case "page-tags": return "Manage Tags";
                 case "page-tag-report": return document.getElementById("tagReportTitle")?.textContent || "Spending by Tag";
+                case "page-budget": return "Budget — " + (document.getElementById("budgetPageMonthLabel")?.textContent || "");
                 case "page-backup": return "Export & Import";
                 case "page-autolock": return "Auto-Lock Settings";
                 case "page-database": return "Database";
-                case "page-total-summary": return "Total Bill Summary";
                 case "page-spending-breakdown": return "Spending Breakdown";
                 case "page-income-breakdown": return "Income Breakdown";
                 case "page-savings": return "Savings Statement";
@@ -2397,9 +2399,6 @@
             };
             let parts;
             switch (pageId) {
-                case "page-total-summary":
-                    parts = [selectedText("totalSummaryMemberFilter")];
-                    break;
                 case "page-spending-breakdown":
                     parts = [selectedText("spendingYearFilter"), selectedText("spendingMonthFilter"), selectedText("spendingMemberFilter")];
                     break;
@@ -2888,11 +2887,10 @@
         // exactly as the user last left it; passing a real value (or explicit "all") forces the
         // Year select to that value instead. savingsFilterMonth defaults back to "all" on every
         // call so the month scope never lingers into an unrelated visit.
-        function navigateToSavingsPage(yearOverride = null, month = "all", backTarget = "workspace") {
+        function navigateToSavingsPage(yearOverride = null, month = "all") {
             workspaceScrollY = window.scrollY;
             savingsFilterMonth = month;
             if (yearOverride !== null) pendingSavingsYearOverride = yearOverride;
-            savingsPageBackTarget = backTarget;
             showPage("page-savings");
             window.scrollTo(0,0);
             pushVirtualState("savings");
@@ -2914,6 +2912,670 @@
         function clearSavingsMonthScope() {
             savingsFilterMonth = "all";
             renderSavingsStatement();
+        }
+
+        // --- BUDGET (v264, extended v266 with Yearly scope) ---
+        // One record per period (STORES.BUDGETS, keyPath "id") — the id's shape says its scope:
+        // "YYYY-MM" (7 chars, e.g. "2026-09") = a Monthly budget, "YYYY" (4 chars, e.g. "2026") =
+        // a Yearly budget. Same store, same record shape, no schema difference — every function
+        // below just branches on `key.length` (see isYearKey()) so Monthly and Yearly share one
+        // code path end-to-end (rendering, actuals, carryover, setup) instead of being two
+        // parallel features. A period with no record simply has no budget set yet — the page
+        // shows a "Set Up Budget" empty state instead of zeros. Record shape: { id, totalBudget,
+        // carryoverEnabled, carryoverAmount, categoryBudgets: [{cat, amount}] }. categoryBudgets
+        // stores the Category as a plain name string (same convention as a transaction's own
+        // `cat` — see the STORES comment near the top of this file), so renaming/deleting a
+        // Category later never retroactively breaks a saved category budget; it just stops
+        // matching new spending under the old name. A month's category budgets and a year's are
+        // independent lists (different records) — deliberately not merged/prorated, since a
+        // monthly "Dining Out" budget and a yearly "Travel" budget serve different purposes.
+        //
+        // "Effective" total budget for a period = totalBudget + (carryoverEnabled ?
+        // carryoverAmount : 0). carryoverAmount is always user-editable, not auto-recomputed once
+        // saved — opening the setup modal for a period with no record yet pre-fills it with the
+        // PREVIOUS period's leftover (effective budget − actual spend) as a *suggestion* only,
+        // mirroring the reference app's "defaults to last period's leftover, adjustable" field.
+        // This works identically for Yearly (rolls last year's leftover into this year) since
+        // shiftPeriodKey() below handles both key shapes.
+        //
+        // The two scopes are connected one more way: setting up a new month, if a Yearly budget
+        // already exists for that month's year, offers a "Use 1/12 of yearly budget" quick-fill
+        // alongside "Copy from Last Month" — but a month's actual tracked spend/remaining is
+        // always computed independently from real transactions, never derived from the yearly
+        // number, so the two stay accurate regardless of how (or whether) they were seeded.
+        function isYearKey(key) { return key.length === 4; }
+        function monthKeyFor(date) { return localDateStr(date).slice(0, 7); }
+        function currentMonthKey() { return monthKeyFor(new Date()); }
+        function currentYearKey() { return String(new Date().getFullYear()); }
+        function currentPeriodKey(scope) { return scope === "year" ? currentYearKey() : currentMonthKey(); }
+        function periodKeyLabel(key) {
+            if (isYearKey(key)) return key;
+            const [y, m] = key.split("-").map(Number);
+            return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+        }
+        function shiftPeriodKey(key, delta) {
+            if (isYearKey(key)) return String(Number(key) + delta);
+            const [y, m] = key.split("-").map(Number);
+            return monthKeyFor(new Date(y, m - 1 + delta, 1));
+        }
+        function daysInMonthKey(monthKey) {
+            const [y, m] = monthKey.split("-").map(Number);
+            return new Date(y, m, 0).getDate();
+        }
+        // Days remaining INCLUDING today, for the current month; for a past/future month being
+        // browsed on the Budget page, just the month's full length (there's no "days left" for a
+        // month you're not currently in).
+        function daysLeftInMonthKey(monthKey) {
+            if (monthKey !== currentMonthKey()) return daysInMonthKey(monthKey);
+            const today = new Date();
+            return daysInMonthKey(monthKey) - today.getDate() + 1;
+        }
+        function daysElapsedInMonthKey(monthKey) {
+            if (monthKey !== currentMonthKey()) return daysInMonthKey(monthKey);
+            return new Date().getDate();
+        }
+        // Yearly equivalents of the day-based helpers above, but counting in MONTHS — a daily
+        // pace figure isn't meaningful over a 12-month span, so the Yearly view of the Budget page
+        // uses "per month" stats instead of "per day" ones (see renderBudgetPage()).
+        function monthsLeftInYearKey(yearKey) {
+            if (yearKey !== currentYearKey()) return 12;
+            return 12 - new Date().getMonth();
+        }
+        function monthsElapsedInYearKey(yearKey) {
+            if (yearKey !== currentYearKey()) return 12;
+            return new Date().getMonth() + 1;
+        }
+
+        async function getBudgetRecord(periodKey) {
+            return readKeyDB(STORES.BUDGETS, periodKey);
+        }
+
+        // Sums actual Expense spend (base currency) for a period — a month ("YYYY-MM") or a whole
+        // year ("YYYY") — netting refunds against their own category exactly like
+        // renderDesktopInsightsRail/renderSpendingBreakdownPage do, and excluding any category
+        // flagged "Exclude from Net Savings Report" — same convention the rest of the app's
+        // reporting already uses, so a Budget total reconciles with what the Net Savings
+        // Statement / Financial Report Card call "Expense" for the same period. A transaction's
+        // date ("YYYY-MM-DD") matches a "YYYY" periodKey by its first 4 characters and a
+        // "YYYY-MM" periodKey by its first 7 — same comparison, just sliced to periodKey's own
+        // length, so this one function serves both scopes.
+        function computePeriodActuals(periodKey, txs, accounts) {
+            const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
+            let total = 0;
+            const byCategory = {};
+            txs.forEach(t => {
+                const isRefundCredit = t.type === "income" && t.isRefund;
+                if (t.type !== "expense" && !isRefundCredit) return;
+                if (t.date.slice(0, periodKey.length) !== periodKey) return;
+                const cat = t.cat || "Other Expenses";
+                if (excludedCatNames.has(cat)) return;
+                const base = convertTxAmountToBase(t, accounts);
+                const signed = isRefundCredit ? -base : base;
+                total += signed;
+                byCategory[cat] = (byCategory[cat] || 0) + signed;
+            });
+            return { total, byCategory };
+        }
+
+        function budgetEffectiveTotal(rec) {
+            if (!rec) return 0;
+            return (rec.totalBudget || 0) + (rec.carryoverEnabled ? (rec.carryoverAmount || 0) : 0);
+        }
+
+        // Suggested carryover for `periodKey`'s setup modal: the PREVIOUS period's (same scope —
+        // previous month, or previous year) effective budget minus its actual spend, floored at 0
+        // (a period that ran OVER budget suggests rolling forward $0, not a negative starting
+        // budget — the user can still type a negative amount themselves if that's genuinely what
+        // they want to model). Returns 0 if the previous period has no saved budget at all.
+        async function suggestedCarryover(periodKey, txs, accounts) {
+            const prevKey = shiftPeriodKey(periodKey, -1);
+            const prevRec = await getBudgetRecord(prevKey);
+            if (!prevRec) return 0;
+            const prevEffective = budgetEffectiveTotal(prevRec);
+            const { total: prevActual } = computePeriodActuals(prevKey, txs, accounts);
+            return Math.max(prevEffective - prevActual, 0);
+        }
+
+        // --- Yearly → Monthly auto-derivation (v269) ---
+        // Setting only a Yearly budget is meant to be enough — you shouldn't also have to set a
+        // Monthly one, and the two should never be able to show conflicting numbers (e.g. a
+        // Monthly budget of RM2,000 sitting next to a Yearly one of RM100,000, which don't agree
+        // even roughly). So: for any month with no budget record of its own, its effective budget
+        // is DERIVED from that month's Yearly budget rather than left unset — see
+        // resolveMonthBudget() below, which every renderer (Dashboard widget, dual-progress strip,
+        // Budget page Monthly tab) calls instead of reading getBudgetRecord() directly.
+        //
+        // The derivation also folds in "auto carry over last month's leftover" for free, with no
+        // separate toggle: computeVirtualMonthlyBudget() takes whatever's left of the year's
+        // budget AFTER all fully-elapsed prior months' real spend, and splits it evenly across
+        // this month plus the remaining months. Overspend one month quietly tightens the derived
+        // budget for the following months; underspend loosens it — it's always live, recomputed
+        // from actual transactions, never a stored/stale number. (Carrying LAST YEAR's leftover
+        // into this year is a different, deliberately manual thing — that's rec.carryoverEnabled/
+        // carryoverAmount on the Yearly record itself, unchanged from before.)
+        //
+        // A month that has its OWN explicit budget record always wins over this derivation — that
+        // record is a deliberate override for just that month (see openBudgetSetupModal, which
+        // pre-fills the derived number as a *starting point* so "override this month" and "start
+        // from the yearly average" are the same action, not two different flows).
+        function monthIndexInYear(monthKey) { return Number(monthKey.split("-")[1]); }
+        function monthsRemainingInYearFrom(monthKey) { return 13 - monthIndexInYear(monthKey); }
+        function priorMonthsActualSpend(monthKey, txs, accounts) {
+            const yearKey = monthKey.slice(0, 4);
+            const monthIdx = monthIndexInYear(monthKey);
+            let sum = 0;
+            for (let m = 1; m < monthIdx; m++) {
+                const mk = yearKey + "-" + String(m).padStart(2, "0");
+                sum += computePeriodActuals(mk, txs, accounts).total;
+            }
+            return sum;
+        }
+        function computeVirtualMonthlyBudget(monthKey, yearRec, txs, accounts) {
+            const yearlyEffective = budgetEffectiveTotal(yearRec);
+            const priorSpend = priorMonthsActualSpend(monthKey, txs, accounts);
+            const monthsRemaining = monthsRemainingInYearFrom(monthKey);
+            return (yearlyEffective - priorSpend) / monthsRemaining;
+        }
+
+        // The single source of truth every renderer uses for "what is this month's budget right
+        // now" — never read getBudgetRecord(monthKey) directly for display purposes, use this.
+        // Returns null if there's genuinely nothing to show (no explicit record AND no Yearly
+        // budget for that month's year). Otherwise: { source: "explicit"|"virtual", effectiveTotal,
+        // spent, rec (only when source is "explicit"), yearRec (only when source is "virtual") }.
+        async function resolveMonthBudget(monthKey, txs, accounts) {
+            const rec = await getBudgetRecord(monthKey);
+            const { total: spent } = computePeriodActuals(monthKey, txs, accounts);
+            if (rec) {
+                return { source: "explicit", effectiveTotal: budgetEffectiveTotal(rec), spent, rec };
+            }
+            const yearRec = await getBudgetRecord(monthKey.slice(0, 4));
+            if (yearRec) {
+                return { source: "virtual", effectiveTotal: computeVirtualMonthlyBudget(monthKey, yearRec, txs, accounts), spent, yearRec };
+            }
+            return null;
+        }
+
+        // Which scope/period the Budget page is currently browsing — switched with the Monthly/
+        // Yearly toggle and navigated with the ‹ › arrows. The Dashboard's own widget always shows
+        // the CURRENT month + CURRENT year regardless of what this page happens to be browsing.
+        let budgetViewScope = "month";
+        let budgetViewPeriodKey = currentMonthKey();
+
+        function navigateToBudgetPage(scope) {
+            workspaceScrollY = window.scrollY;
+            budgetViewScope = scope === "year" ? "year" : "month";
+            budgetViewPeriodKey = currentPeriodKey(budgetViewScope);
+            showPage("page-budget");
+            window.scrollTo(0, 0);
+            pushVirtualState("budget");
+            renderBudgetPage();
+        }
+
+        function budgetSetScope(el) {
+            const scope = el.dataset.scope === "year" ? "year" : "month";
+            if (scope === budgetViewScope) return;
+            budgetViewScope = scope;
+            budgetViewPeriodKey = currentPeriodKey(scope);
+            renderBudgetPage();
+        }
+
+        function budgetPagePrevPeriod() {
+            budgetViewPeriodKey = shiftPeriodKey(budgetViewPeriodKey, -1);
+            renderBudgetPage();
+        }
+        function budgetPageNextPeriod() {
+            budgetViewPeriodKey = shiftPeriodKey(budgetViewPeriodKey, 1);
+            renderBudgetPage();
+        }
+
+        // Renders the whole Budget page body — the scope toggle's active state, the "This Month /
+        // This Year" dual-progress strip (always both, regardless of which one is being browsed
+        // below), and the summary card + category list for budgetViewPeriodKey. Single entry point
+        // called on navigation, scope-toggle taps, month/year-arrow taps, and after any save/
+        // delete inside the page's own modals.
+        async function renderBudgetPage() {
+            document.getElementById("budgetScopeMonthBtn").classList.toggle("active", budgetViewScope === "month");
+            document.getElementById("budgetScopeYearBtn").classList.toggle("active", budgetViewScope === "year");
+            document.getElementById("budgetPageMonthLabel").textContent = periodKeyLabel(budgetViewPeriodKey);
+            const nextBtn = document.getElementById("budgetPageNextBtn");
+            if (nextBtn) nextBtn.disabled = budgetViewPeriodKey >= currentPeriodKey(budgetViewScope);
+
+            const { accounts, txs } = await computeAccountBalances();
+
+            // Dual-progress strip: always both scopes, always the CURRENT month/year (not
+            // whatever's being browsed below), so you can never lose sight of the other one. "This
+            // Month" goes through resolveMonthBudget() too, so it reflects a Yearly-derived number
+            // the same way the rest of the page does — never "not set" while a derived budget is
+            // actually in effect just below it.
+            const curMonthResolved = await resolveMonthBudget(currentMonthKey(), txs, accounts);
+            const curYearRec = await getBudgetRecord(currentYearKey());
+            const { total: curYearSpent } = computePeriodActuals(currentYearKey(), txs, accounts);
+            document.getElementById("budgetDualStrip").innerHTML = budgetDualStripHTML(curMonthResolved, curYearRec, curYearSpent);
+
+            const contentEl = document.getElementById("budgetPageContent");
+            const isYear = budgetViewScope === "year";
+
+            // resolved: unified { source, effectiveTotal, spent, rec?, yearRec? } for whichever
+            // period is being browsed — see resolveMonthBudget() for Monthly; Yearly has nothing
+            // "above" it to derive from, so it's just its own explicit record (or nothing).
+            let resolved = null;
+            if (isYear) {
+                const yearRec = await getBudgetRecord(budgetViewPeriodKey);
+                if (yearRec) {
+                    const { total: spent } = computePeriodActuals(budgetViewPeriodKey, txs, accounts);
+                    resolved = { source: "explicit", effectiveTotal: budgetEffectiveTotal(yearRec), spent, rec: yearRec };
+                }
+            } else {
+                resolved = await resolveMonthBudget(budgetViewPeriodKey, txs, accounts);
+            }
+
+            if (!resolved) {
+                const suggestion = await suggestedCarryover(budgetViewPeriodKey, txs, accounts);
+                const prevKey = shiftPeriodKey(budgetViewPeriodKey, -1);
+                const prevRec = await getBudgetRecord(prevKey);
+                contentEl.innerHTML = `
+                    <div class="report-card-mini" style="text-align:center; padding:28px 16px;">
+                        <div style="font-size:2rem; margin-bottom:8px;">🎯</div>
+                        <p style="font-weight:700; margin-bottom:4px;">No ${isYear ? "yearly" : ""} budget set for ${escapeHtml(periodKeyLabel(budgetViewPeriodKey))}</p>
+                        <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:16px;">Set a total budget for ${isYear ? "the year" : "the month"}, then optionally break it down by category.${!isYear ? " Or set a Yearly Budget instead — months are then worked out for you automatically." : ""}</p>
+                        <div style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+                            <button type="button" class="submit-btn" style="width:auto; margin-top:0; padding:10px 20px;" data-click="openBudgetSetupModal">Set Up Budget</button>
+                            ${prevRec ? `<button type="button" class="text-btn" data-click="copyBudgetFromPreviousPeriod" style="padding:10px 16px;">Copy from ${escapeHtml(periodKeyLabel(prevKey))}${suggestion > 0 ? ` (+${formatCurrency(suggestion, baseCurrency)} left over)` : ""}</button>` : ""}
+                        </div>
+                    </div>
+                `;
+                return;
+            }
+
+            const isVirtual = resolved.source === "virtual";
+            const effectiveTotal = resolved.effectiveTotal;
+            const spent = resolved.spent;
+            const byCategory = computePeriodActuals(budgetViewPeriodKey, txs, accounts).byCategory;
+            const remaining = effectiveTotal - spent;
+            const pctUsed = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
+            const overBudget = remaining < 0;
+            const barColor = overBudget ? "var(--expense-color)" : "var(--primary)";
+            // A refund posted this period that's bigger than what was actually spent in its own
+            // category (e.g. a refund with no matching purchase this period) can net the period's
+            // total spend below zero — same convention the Financial Report Card/Spending
+            // Breakdown already use (refunds net against their own category), just surfaced here
+            // too. formatBalanceHTML (parens + red) makes that read as "net refund", not a broken
+            // number, and the note below spells it out.
+            const netRefundPeriod = spent < 0;
+
+            let leftLabel, leftValue, paceRows;
+            if (isYear) {
+                const monthsLeft = monthsLeftInYearKey(budgetViewPeriodKey);
+                const monthsElapsed = Math.max(monthsElapsedInYearKey(budgetViewPeriodKey), 1);
+                const paceSpent = spent / monthsElapsed;
+                const paceBudget = effectiveTotal / 12;
+                const paceRemaining = monthsLeft > 0 ? remaining / monthsLeft : remaining;
+                leftLabel = "Months Left";
+                leftValue = monthsLeft;
+                paceRows = `
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per month so far this year (spent ÷ months elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per month so far)</span><strong>${formatBalanceHTML(paceSpent, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across the 12 months of the year (budget ÷ 12)"><span style="color:var(--text-muted);">🔵 Budgeted per month (whole year)</span><strong>${formatCurrency(paceBudget, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What's left to spend, spread across the months remaining (remaining ÷ months left)"><span style="color:var(--text-muted);">🟢 Room per month (rest of year)</span><strong>${formatCurrency(Math.max(paceRemaining, 0), baseCurrency)}</strong></div>
+                `;
+            } else {
+                const daysLeft = daysLeftInMonthKey(budgetViewPeriodKey);
+                const daysElapsed = Math.max(daysElapsedInMonthKey(budgetViewPeriodKey), 1);
+                const dailyAvgSpent = spent / daysElapsed;
+                const dailyBudget = effectiveTotal / daysInMonthKey(budgetViewPeriodKey);
+                const dailyRemaining = daysLeft > 0 ? remaining / daysLeft : remaining;
+                leftLabel = "Days Left";
+                leftValue = daysLeft;
+                paceRows = `
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per day so far this month (spent ÷ days elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per day so far)</span><strong>${formatBalanceHTML(dailyAvgSpent, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across every day of the month (budget ÷ days in month)"><span style="color:var(--text-muted);">🔵 Budgeted per day (whole month)</span><strong>${formatCurrency(dailyBudget, baseCurrency)}</strong></div>
+                    <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What's left to spend, spread across the days remaining (remaining ÷ days left)"><span style="color:var(--text-muted);">🟢 Room per day (rest of month)</span><strong>${formatCurrency(Math.max(dailyRemaining, 0), baseCurrency)}</strong></div>
+                `;
+            }
+
+            const summaryHTML = `
+                <div class="report-card-mini" style="margin-bottom:14px;">
+                    ${isVirtual ? `<div style="font-size:0.68rem; font-weight:700; color:var(--primary); background:var(--chip-bg); display:inline-block; padding:3px 8px; border-radius:6px; margin-bottom:8px;">🔄 Auto-calculated from your ${escapeHtml(resolved.yearRec.id)} Yearly Budget</div>` : ""}
+                    <div style="display:flex; justify-content:space-between; align-items:flex-start;">
+                        <div>
+                            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Remaining Budget</span>
+                            <div style="font-size:1.7rem; font-weight:800; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(remaining, baseCurrency)}</div>
+                        </div>
+                        <button type="button" class="trash-btn" data-click="openBudgetSetupModal" title="${isVirtual ? "Set a specific budget for this month" : "Edit total budget"}">✏️</button>
+                    </div>
+                    <div class="progress-bar-container" style="height:10px; margin-top:10px;">
+                        <div class="progress-bar-fill" style="width:${pctUsed}%; background:${barColor};"></div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:14px; text-align:center;">
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Spent</div><div style="font-weight:700; font-size:0.85rem; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(spent, baseCurrency)}</div></div>
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Budget</div><div style="font-weight:700; font-size:0.85rem;">${formatCurrency(effectiveTotal, baseCurrency)}</div></div>
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Used</div><div style="font-weight:700; font-size:0.85rem;">${pctUsed.toFixed(0)}%</div></div>
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">${leftLabel}</div><div style="font-weight:700; font-size:0.85rem;">${leftValue}</div></div>
+                    </div>
+                    ${netRefundPeriod ? `<p style="font-size:0.72rem; color:var(--text-muted); margin-top:8px;">Spent is negative because a refund posted this ${isYear ? "year" : "month"} is larger than what was actually spent in its category — so this ${isYear ? "year" : "month"} is a net inflow so far.</p>` : ""}
+                    <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:10px;">
+                        ${paceRows}
+                    </div>
+                    <p style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">These compare your ${isYear ? "month-to-month" : "day-to-day"} pace against your budget — if "Spending pace" is above "Budgeted per ${isYear ? "month" : "day"}", you're on track to run out before the ${isYear ? "year" : "month"} ends.</p>
+                    ${!isVirtual && resolved.rec.carryoverEnabled ? `<div style="margin-top:10px; font-size:0.72rem; color:var(--text-muted);">Includes ${formatCurrency(resolved.rec.carryoverAmount || 0, baseCurrency)} carried over from ${escapeHtml(periodKeyLabel(shiftPeriodKey(budgetViewPeriodKey, -1)))}.</div>` : ""}
+                    ${isVirtual ? `<div style="margin-top:10px; font-size:0.72rem; color:var(--text-muted);">Automatically accounts for prior months' actual spend this year — this month isn't set as its own budget, so it's an even share of what's left of the year.</div>` : ""}
+                </div>
+            `;
+
+            let catSectionHTML;
+            if (isVirtual) {
+                catSectionHTML = `
+                    <div class="section-header">
+                        <span class="section-title">Category Budgets</span>
+                    </div>
+                    <div class="config-list" style="padding-bottom:88px;">
+                        <p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">Not available for an auto-calculated month. <button type="button" class="text-btn" style="padding:0; font-size:0.85rem;" data-click="openBudgetSetupModal">Set a specific budget for this month</button> to break it down by category.</p>
+                    </div>
+                `;
+            } else {
+                const catRows = (resolved.rec.categoryBudgets || []).map(cb => {
+                    const catSpent = byCategory[cb.cat] || 0;
+                    const catPct = cb.amount > 0 ? Math.max(Math.min((catSpent / cb.amount) * 100, 100), 0) : (catSpent > 0 ? 100 : 0);
+                    const catOver = catSpent > cb.amount;
+                    return `
+                        <div class="config-item category-row-item" data-click="editCategoryBudget" data-cat="${escapeHtml(cb.cat)}" style="flex-direction:column; align-items:stretch; gap:4px;">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span style="display:flex; align-items:center; gap:8px;">
+                                    <span class="split-cat-icon" style="background:${getCategoryAvatarColor(cb.cat)};">${getCategoryIcon(cb.cat, "expense")}</span>
+                                    <strong>${escapeHtml(cb.cat)}</strong>
+                                </span>
+                                <span style="font-size:0.8rem; ${catOver ? "color:var(--expense-color); font-weight:700;" : "color:var(--text-muted);"}">${formatCurrency(Math.max(catSpent, 0), baseCurrency)} / ${formatCurrency(cb.amount, baseCurrency)}</span>
+                            </div>
+                            <div class="progress-bar-container">
+                                <div class="progress-bar-fill" style="width:${catPct}%; ${catOver ? "background:var(--expense-color);" : ""}"></div>
+                            </div>
+                        </div>
+                    `;
+                }).join("");
+                catSectionHTML = `
+                    <div class="section-header">
+                        <span class="section-title">${isYear ? "Yearly" : ""} Category Budgets</span>
+                    </div>
+                    <div class="config-list" style="padding-bottom:88px;">
+                        ${catRows || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No category budgets yet — tap the + button to break this ${isYear ? "year" : "month"}'s total down by category.</p>`}
+                    </div>
+                `;
+            }
+
+            contentEl.innerHTML = summaryHTML + catSectionHTML;
+        }
+
+        function budgetDualStripHTML(monthResolved, yearRec, yearSpent) {
+            const monthChip = () => {
+                if (!monthResolved) return `<div class="config-item" data-click="navigateToBudgetPage" data-scope="month" style="flex:1; justify-content:center; text-align:center; font-size:0.75rem; color:var(--text-muted);">This Month: not set</div>`;
+                const { effectiveTotal, spent, source } = monthResolved;
+                const pct = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
+                const over = spent > effectiveTotal;
+                return `
+                    <div data-click="navigateToBudgetPage" data-scope="month" style="flex:1; cursor:pointer;">
+                        <div style="font-size:0.72rem; color:var(--text-muted); text-align:center;">This Month${source === "virtual" ? " 🔄" : ""}</div>
+                        <div style="font-size:0.85rem; font-weight:700; text-align:center; ${over ? "color:var(--expense-color);" : ""}">${pct.toFixed(0)}% used</div>
+                        <div class="progress-bar-container" style="height:6px; margin-top:4px;"><div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div></div>
+                    </div>
+                `;
+            };
+            const yearChip = () => {
+                if (!yearRec) return `<div class="config-item" data-click="navigateToBudgetPage" data-scope="year" style="flex:1; justify-content:center; text-align:center; font-size:0.75rem; color:var(--text-muted);">This Year: not set</div>`;
+                const effectiveTotal = budgetEffectiveTotal(yearRec);
+                const pct = effectiveTotal > 0 ? Math.max(Math.min((yearSpent / effectiveTotal) * 100, 100), 0) : (yearSpent > 0 ? 100 : 0);
+                const over = yearSpent > effectiveTotal;
+                return `
+                    <div data-click="navigateToBudgetPage" data-scope="year" style="flex:1; cursor:pointer;">
+                        <div style="font-size:0.72rem; color:var(--text-muted); text-align:center;">This Year</div>
+                        <div style="font-size:0.85rem; font-weight:700; text-align:center; ${over ? "color:var(--expense-color);" : ""}">${pct.toFixed(0)}% used</div>
+                        <div class="progress-bar-container" style="height:6px; margin-top:4px;"><div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div></div>
+                    </div>
+                `;
+            };
+            return `<div style="display:flex; gap:16px; padding:12px; background:var(--card-bg); border-radius:12px; margin-bottom:12px; border:1px solid var(--border-color);">
+                ${monthChip()}
+                <div style="width:1px; background:var(--border-color);"></div>
+                ${yearChip()}
+            </div>`;
+        }
+
+        // Dashboard summary card — a lightweight teaser, not a second copy of every stat. Shows
+        // exactly ONE bar: the current month's effective budget, resolved the same way as the
+        // Budget page itself (an explicit Monthly record if one exists, else auto-derived from a
+        // Yearly one, else nothing) — see resolveMonthBudget(). Deliberately never shows a second,
+        // independent Yearly bar alongside it: two numbers that could disagree (e.g. RM2,000/month
+        // next to RM100,000/year) reads as broken, not informative. If the month's number IS
+        // derived from a Yearly budget, a small note says so instead of duplicating a whole bar.
+        function renderDashboardBudgetWidget(monthResolved, yearRec, yearSpent) {
+            const wrap = document.getElementById("dashboardBudgetWidget");
+            if (!wrap) return;
+            if (!monthResolved) {
+                wrap.innerHTML = `
+                    <div class="report-card-mini" style="text-align:center; padding:16px;">
+                        <p style="font-size:0.85rem; color:var(--text-muted); margin-bottom:8px;">No budget set for ${escapeHtml(periodKeyLabel(currentMonthKey()))} yet.</p>
+                        <button type="button" class="text-btn" data-click="navigateToBudgetPage">Set Up Budget →</button>
+                    </div>
+                `;
+                return;
+            }
+            const { effectiveTotal, spent, source, yearRec: sourceYearRec } = monthResolved;
+            const remaining = effectiveTotal - spent;
+            const pct = effectiveTotal > 0 ? Math.max(Math.min((spent / effectiveTotal) * 100, 100), 0) : (spent > 0 ? 100 : 0);
+            const over = remaining < 0;
+            const daysLeft = daysLeftInMonthKey(currentMonthKey());
+            const isVirtual = source === "virtual";
+
+            wrap.innerHTML = `
+                <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage" data-scope="month">
+                    <div style="display:flex; justify-content:space-between; align-items:baseline;">
+                        <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Remaining Budget · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left</span>
+                        <span style="font-size:0.72rem; color:var(--text-muted);">View →</span>
+                    </div>
+                    <div style="font-size:1.35rem; font-weight:800; ${over ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(remaining, baseCurrency)}</div>
+                    <div class="progress-bar-container" style="height:8px; margin-top:6px;">
+                        <div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div>
+                    </div>
+                    ${isVirtual ? `<div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">🔄 From your ${escapeHtml(sourceYearRec.id)} Yearly Budget</div>` : ""}
+                </div>
+            `;
+        }
+
+
+        // --- Budget Setup Modal (total budget + carryover) — works for whichever period
+        // (budgetViewPeriodKey / budgetViewScope) the Budget page is currently browsing. ---
+        async function openBudgetSetupModal() {
+            const { accounts, txs } = await computeAccountBalances();
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            const prevKey = shiftPeriodKey(budgetViewPeriodKey, -1);
+            const isYear = budgetViewScope === "year";
+            document.getElementById("budgetSetupMonthLabel").textContent = periodKeyLabel(budgetViewPeriodKey);
+            document.getElementById("budgetSetupCurrLabel").textContent = baseCurrency;
+            // If there's no explicit record yet but a Yearly budget covers this month, pre-fill
+            // with the auto-derived amount (see computeVirtualMonthlyBudget()) as a starting point
+            // — hitting Save as-is just locks in this month's share of the year; editing it first
+            // makes this month a deliberate override. This is the ONE way to turn a Yearly-derived
+            // month into its own explicit budget — there's no separate "copy 1/12" action anymore.
+            let totalDefault = "";
+            let totalHint = "";
+            if (rec) {
+                totalDefault = rec.totalBudget;
+            } else if (!isYear) {
+                const yearRec = await getBudgetRecord(budgetViewPeriodKey.slice(0, 4));
+                if (yearRec) {
+                    totalDefault = Math.round(computeVirtualMonthlyBudget(budgetViewPeriodKey, yearRec, txs, accounts) * 100) / 100;
+                    totalHint = `Pre-filled from your ${escapeHtml(yearRec.id)} Yearly Budget — adjust it, or just Save to lock in this amount for ${periodKeyLabel(budgetViewPeriodKey)} only.`;
+                }
+            }
+            document.getElementById("budgetTotalInput").value = totalDefault;
+            document.getElementById("budgetTotalHint").textContent = totalHint;
+            const carryoverEnabled = rec ? !!rec.carryoverEnabled : false;
+            document.getElementById("budgetCarryoverToggle").checked = carryoverEnabled;
+            document.getElementById("budgetCarryoverLabel").textContent = `Carry over last ${isYear ? "year's" : "month's"} leftover`;
+            const suggestion = await suggestedCarryover(budgetViewPeriodKey, txs, accounts);
+            document.getElementById("budgetCarryoverAmountInput").value = rec ? (rec.carryoverAmount || 0) : suggestion;
+            document.getElementById("budgetCarryoverHint").textContent = `Defaults to last ${isYear ? "year" : "month"}'s leftover (${formatCurrency(suggestion, baseCurrency)} from ${periodKeyLabel(prevKey)}) — adjust freely.`;
+            document.getElementById("budgetCarryoverRow").classList.toggle("hidden", !carryoverEnabled);
+            document.getElementById("budgetSetupDeleteBtn").classList.toggle("hidden", !rec);
+            openModal("budgetSetupModal");
+        }
+
+        // Deletes the whole budget record for whichever period the setup modal is currently
+        // editing (budgetViewPeriodKey) — a Monthly or Yearly budget, category budgets included.
+        // Only offered once a record actually exists (see openBudgetSetupModal's hidden toggle
+        // above); the page falls back to its normal "Set Up Budget" empty state afterward. This
+        // does NOT touch any transactions — it only removes the budget you set, not the spending
+        // it was tracking.
+        async function deleteBudgetRecord() {
+            const isYear = budgetViewScope === "year";
+            const ok = await customConfirm(`Delete the ${isYear ? "yearly" : "monthly"} budget for ${periodKeyLabel(budgetViewPeriodKey)}? This removes the budget and any category budgets under it — your actual transactions are unaffected.`);
+            if (!ok) return;
+            try {
+                await deleteDB(STORES.BUDGETS, budgetViewPeriodKey);
+            } catch (err) {
+                alert("Could not delete budget: " + (err && err.message ? err.message : err));
+                return;
+            }
+            closeModal("budgetSetupModal");
+            renderBudgetPage();
+            showToast("🗑️ Budget deleted");
+        }
+
+        function toggleBudgetCarryover(el) {
+            document.getElementById("budgetCarryoverRow").classList.toggle("hidden", !el.checked);
+        }
+
+        async function handleSaveBudgetSetup() {
+            const totalBudget = parseFloat(document.getElementById("budgetTotalInput").value);
+            if (isNaN(totalBudget) || totalBudget < 0) { alert("Please enter a valid budget amount."); return; }
+            const carryoverEnabled = document.getElementById("budgetCarryoverToggle").checked;
+            const carryoverAmount = parseFloat(document.getElementById("budgetCarryoverAmountInput").value) || 0;
+            const existing = await getBudgetRecord(budgetViewPeriodKey);
+            const record = {
+                id: budgetViewPeriodKey,
+                totalBudget,
+                carryoverEnabled,
+                carryoverAmount,
+                categoryBudgets: existing ? (existing.categoryBudgets || []) : []
+            };
+            try {
+                await writeDB(STORES.BUDGETS, record);
+            } catch (err) {
+                alert("Could not save budget: " + (err && err.message ? err.message : err));
+                return;
+            }
+            closeModal("budgetSetupModal");
+            renderBudgetPage();
+            showToast("💰 Budget saved");
+        }
+
+        // Quick-start action from the empty state: clones the PREVIOUS period's (same scope) total
+        // + carryover setting (NOT its carryoverAmount, which is recomputed fresh below) and
+        // category budgets as-is, so a recurring budget doesn't need re-typing every category
+        // amount by hand. Works for both Monthly (copies last month) and Yearly (copies last
+        // year) since it's built entirely on shiftPeriodKey().
+        async function copyBudgetFromPreviousPeriod() {
+            const { accounts, txs } = await computeAccountBalances();
+            const prevKey = shiftPeriodKey(budgetViewPeriodKey, -1);
+            const prevRec = await getBudgetRecord(prevKey);
+            if (!prevRec) return;
+            const suggestion = await suggestedCarryover(budgetViewPeriodKey, txs, accounts);
+            const record = {
+                id: budgetViewPeriodKey,
+                totalBudget: prevRec.totalBudget || 0,
+                carryoverEnabled: !!prevRec.carryoverEnabled,
+                carryoverAmount: prevRec.carryoverEnabled ? suggestion : 0,
+                categoryBudgets: (prevRec.categoryBudgets || []).map(cb => ({ cat: cb.cat, amount: cb.amount }))
+            };
+            try {
+                await writeDB(STORES.BUDGETS, record);
+            } catch (err) {
+                alert("Could not copy budget: " + (err && err.message ? err.message : err));
+                return;
+            }
+            renderBudgetPage();
+            showToast("💰 Budget copied from " + periodKeyLabel(prevKey));
+        }
+
+        // --- Category Budget Modal (add/edit/delete one row of rec.categoryBudgets) — scoped to
+        // whichever period (budgetViewPeriodKey) the Budget page is currently browsing. ---
+        async function openCategoryBudgetModal() {
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            if (!rec) {
+                if (budgetViewScope === "month" && await getBudgetRecord(budgetViewPeriodKey.slice(0, 4))) {
+                    alert("This month's budget is auto-calculated from your Yearly Budget. Tap the ✏️ pencil and Save to set a specific budget for this month first — then you can add category budgets to it.");
+                } else {
+                    alert("Set up a total budget for this period first.");
+                }
+                return;
+            }
+            document.getElementById("categoryBudgetModalTitle").textContent = "Add Category Budget";
+            document.getElementById("categoryBudgetSubmitBtn").textContent = "Save";
+            document.getElementById("categoryBudgetEditCat").value = "";
+            document.getElementById("categoryBudgetDeleteBtn").classList.add("hidden");
+            const usedCats = (rec.categoryBudgets || []).map(cb => cb.cat);
+            const select = document.getElementById("budgetCatSelect");
+            select.innerHTML = buildCategoryOptionsHTML("expense", usedCats);
+            select.value = "";
+            syncAccountPickerButtonText("budgetCatSelect");
+            document.getElementById("budgetCatAmountInput").value = "";
+            openModal("categoryBudgetModal");
+        }
+
+        async function editCategoryBudget(el) {
+            const cat = el.dataset.cat;
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            if (!rec) return;
+            const cb = (rec.categoryBudgets || []).find(c => c.cat === cat);
+            if (!cb) return;
+            document.getElementById("categoryBudgetModalTitle").textContent = "Edit Category Budget";
+            document.getElementById("categoryBudgetSubmitBtn").textContent = "Save Changes";
+            document.getElementById("categoryBudgetEditCat").value = cat;
+            document.getElementById("categoryBudgetDeleteBtn").classList.remove("hidden");
+            const usedCats = (rec.categoryBudgets || []).map(c => c.cat);
+            const select = document.getElementById("budgetCatSelect");
+            select.innerHTML = buildCategoryOptionsHTML("expense", usedCats);
+            select.value = cat;
+            syncAccountPickerButtonText("budgetCatSelect");
+            document.getElementById("budgetCatAmountInput").value = cb.amount;
+            openModal("categoryBudgetModal");
+        }
+
+        async function handleSaveCategoryBudget() {
+            const cat = document.getElementById("budgetCatSelect").value;
+            const amount = parseFloat(document.getElementById("budgetCatAmountInput").value);
+            if (!cat) { alert("Please select a category."); return; }
+            if (isNaN(amount) || amount < 0) { alert("Please enter a valid amount."); return; }
+            const editCat = document.getElementById("categoryBudgetEditCat").value;
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            if (!rec) return;
+            const list = (rec.categoryBudgets || []).filter(cb => cb.cat !== editCat && cb.cat !== cat);
+            list.push({ cat, amount });
+            rec.categoryBudgets = list;
+            try {
+                await writeDB(STORES.BUDGETS, rec);
+            } catch (err) {
+                alert("Could not save category budget: " + (err && err.message ? err.message : err));
+                return;
+            }
+            closeModal("categoryBudgetModal");
+            renderBudgetPage();
+        }
+
+        async function removeCategoryBudget() {
+            const editCat = document.getElementById("categoryBudgetEditCat").value;
+            if (!editCat) return;
+            const ok = await customConfirm(`Remove the budget for "${editCat}"? This period's spending in that category is unaffected.`);
+            if (!ok) return;
+            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            if (!rec) return;
+            rec.categoryBudgets = (rec.categoryBudgets || []).filter(cb => cb.cat !== editCat);
+            try {
+                await writeDB(STORES.BUDGETS, rec);
+            } catch (err) {
+                alert("Could not remove category budget: " + (err && err.message ? err.message : err));
+                return;
+            }
+            closeModal("categoryBudgetModal");
+            renderBudgetPage();
         }
 
         // --- FINANCIAL REPORT CARD (v147) ---
@@ -3325,12 +3987,6 @@
             await renderAccountsPage();
         }
 
-        // v269: Savings Statement's "← Back" target — mirrors accountsPageBackTarget above.
-        // Defaults to "workspace" for every pre-v269 caller (sidebar, dashboard report card);
-        // Total Bill Summary's Balance-cell drill-in (navigateToSavingsPage's 3rd arg) is the
-        // only caller that ever passes "total-summary".
-        let savingsPageBackTarget = "workspace"; // "workspace" | "total-summary"
-
         // v222 fix: Accounts page's "← Back" button target — previously hardcoded to
         // navigateToWorkspace(), which stranded users on the Dashboard when Accounts was
         // opened from the new Net Worth Statement page instead of the sidebar/dashboard.
@@ -3339,12 +3995,6 @@
         // sidebarNavPending (set in sidebarFilterAccountsByType() for the type shortcuts).
         function handleAccountsBackClick() {
             if (accountsPageBackTarget === "networth-statement") navigateToNetWorthStatementPage();
-            else navigateToWorkspace();
-        }
-
-        // v269: Savings Statement's "← Back" button target — see savingsPageBackTarget above.
-        function handleSavingsBackClick() {
-            if (savingsPageBackTarget === "total-summary") navigateToTotalSummaryPage();
             else navigateToWorkspace();
         }
 
@@ -3512,7 +4162,6 @@
             const backupHidden = document.getElementById("page-backup").classList.contains("hidden");
             const autolockHidden = document.getElementById("page-autolock").classList.contains("hidden");
             const databaseHidden = document.getElementById("page-database").classList.contains("hidden");
-            const totalSummaryHidden = document.getElementById("page-total-summary").classList.contains("hidden");
             const spendingHidden = document.getElementById("page-spending-breakdown").classList.contains("hidden");
             const incomeHidden = document.getElementById("page-income-breakdown").classList.contains("hidden");
             const portfolioReportHidden = document.getElementById("page-portfolio-report").classList.contains("hidden");
@@ -3526,7 +4175,6 @@
             else if (!backupHidden) target = "backup";
             else if (!autolockHidden) target = "autolock";
             else if (!databaseHidden) target = "database";
-            else if (!totalSummaryHidden) target = "total-summary";
             else if (!spendingHidden) target = "spending-breakdown";
             else if (!incomeHidden) target = "income-breakdown";
             else if (!portfolioReportHidden) target = "portfolio-report";
@@ -3562,13 +4210,13 @@
             else if (target === "members") navigateToMembersPage();
             else if (target === "autolock") navigateToAutoLockPage();
             else if (target === "database") navigateToDatabasePage();
-            else if (target === "total-summary") navigateToTotalSummaryPage();
             else if (target === "spending-breakdown") navigateToSpendingBreakdownPage();
             else if (target === "income-breakdown") navigateToIncomeBreakdownPage();
             else if (target === "portfolio-report") navigateToPortfolioReportPage();
             else if (target === "owner-networth-report") navigateToOwnerNetWorthReportPage();
             else if (target === "currency-report") navigateToCurrencyReportPage();
             else if (target === "tag-report") navigateToTagReportPage();
+            else if (target === "budget") navigateToBudgetPage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -5150,6 +5798,9 @@
             await renderApp();
             if (!document.getElementById("page-accounts").classList.contains("hidden")) {
                 await renderAccountsPage();
+            }
+            if (!document.getElementById("page-budget").classList.contains("hidden")) {
+                await renderBudgetPage();
             }
             await refreshFundActivityPageIfVisible();
             await refreshCurrencyActivityPageIfVisible();
@@ -7320,7 +7971,7 @@
         // "(None)" option, and selects whatever is currently saved as the default.
         function populateDefaultCategorySelects() {
             const incomeFallback = ["Salary", "Investments", "Freelance", "Other Income"];
-            const expenseFallback = ["Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+            const expenseFallback = ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
 
             const incomeNames = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), ...incomeFallback])];
             const expenseNames = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), ...expenseFallback])];
@@ -8064,24 +8715,6 @@
                 }
             }
 
-            // One-time migration: fixes the "Divident EPF" typo seeded before this version —
-            // renamed to "Dividend EPF". Only touches the record if it still has the auto-seeded
-            // id, never a category the user has since renamed away from "Divident EPF". Existing
-            // transactions filed under the old (misspelled) name are updated too, so nothing
-            // shows up as an orphaned "Divident EPF" string in reports.
-            const legacyDividentEpf = existing.find(c => c.id === "cat_divident_epf");
-            if (legacyDividentEpf && legacyDividentEpf.name.toLowerCase() === "divident epf") {
-                legacyDividentEpf.name = "Dividend EPF";
-                await writeDB(STORES.CATEGORIES, legacyDividentEpf);
-                const txs = await readAllDB(STORES.TRANSACTIONS);
-                for (const t of txs) {
-                    if (t.cat === "Divident EPF") {
-                        t.cat = "Dividend EPF";
-                        await writeDB(STORES.TRANSACTIONS, t);
-                    }
-                }
-            }
-
             const slugify = s => "cat_" + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
             // Matched by EITHER current name OR the deterministic id a DEFAULT_CATEGORIES entry
@@ -8114,40 +8747,9 @@
             await syncAndLoadCategories();
             await migrateOthersCategoryRename();
             await migrateFdInterestIncomeRename();
-            await migrateFdInterestDuplicateCleanup();
             await migrateStaleDestFieldCleanup();
             await migrateStaleCategoryOnTransfersCleanup();
             await migrateAccountGroupRename();
-            // migrateFdInterestDuplicateCleanup() may have deleted a Categories record (the
-            // legacy "FD Interest" duplicate), so dynamicCategories — loaded further above,
-            // before that migration ran — is re-synced here to reflect the deletion immediately
-            // rather than only on the next full app load.
-            await syncAndLoadCategories();
-        }
-
-        // One-time migration: an older version of the app (before "FD Interest Income" existed
-        // as a proper DEFAULT_CATEGORIES entry) let "FD Interest" get created/used as its own
-        // category, splitting FD interest transactions across two near-identical categories.
-        // Existing transactions still filed under the exact legacy name "FD Interest" are moved
-        // to "FD Interest Income" (mirrors migrateFdInterestIncomeRename() above), and the
-        // now-empty "FD Interest" category record itself is deleted so it stops showing up
-        // as a duplicate in Manage Categories / the transaction picker. Only ever touches a
-        // category record whose name is the exact legacy string "FD Interest" — never "FD
-        // Interest Income" itself, and never a category the user has since renamed to something
-        // else.
-        async function migrateFdInterestDuplicateCleanup() {
-            const txs = await readAllDB(STORES.TRANSACTIONS);
-            for (const t of txs) {
-                if (t.cat === "FD Interest") {
-                    t.cat = "FD Interest Income";
-                    await writeDB(STORES.TRANSACTIONS, t);
-                }
-            }
-            const cats = await readAllDB(STORES.CATEGORIES);
-            const legacyFdInterest = cats.find(c => c.name === "FD Interest");
-            if (legacyFdInterest) {
-                await deleteDB(STORES.CATEGORIES, legacyFdInterest.id);
-            }
         }
 
         // One-time migration: "Others" (the implicit income/expense fallback category — never a
@@ -10950,17 +11552,14 @@
             await deleteTransactionById(id);
         }
 
-        // Opens a new Income entry, pre-filled from the tapped expense with its exact category
-        // pre-selected (v263: manually changeable, previously forced/disabled — see below) — the
-        // category is built from the Expense list (not the Income category dropdown, which
-        // otherwise only ever lists Income categories) because the Spending/Income Breakdown +
-        // Net Savings Statement + dashboard totals all key their refund offset off `t.cat`
-        // matching an Expense category exactly (see the isRefund handling in
+        // Opens a new Income entry, pre-filled from the tapped expense and locked to its exact
+        // category — the category is forced (not just pre-selected) because the Income category
+        // dropdown otherwise only ever lists Income categories, and the Spending/Income Breakdown
+        // + Net Savings Statement + dashboard totals all key their refund offset off `t.cat`
+        // matching the original expense's category exactly (see the isRefund handling in
         // renderApp()/renderSavingsStatement()/renderSpendingBreakdownPage()/
-        // renderIncomeBreakdownPage()) — so whichever Expense category ends up chosen here is the
-        // one the refund nets against, not necessarily the original expense's own category.
-        // pendingRefundOf (read by handleTransactionSubmitMobile) is the actual flag that makes
-        // this save as a refund rather than an ordinary Income entry.
+        // renderIncomeBreakdownPage()). pendingRefundOf (read by handleTransactionSubmitMobile) is
+        // the actual flag that makes this save as a refund rather than an ordinary Income entry.
         function openRefundFromOptions() {
             const id = activeQuickViewTxId;
             closeTxOptionsMenu(); // v95 fix — see editTransactionFromOptions() above.
@@ -10977,23 +11576,20 @@
                 document.getElementById("srcAccount").value = tx.src || "";
                 syncAccountPickerButtonText("srcAccount"); // v99 — see comment in openTransactionForm().
 
-                // v263: category now pre-fills to the original expense's category but is left
-                // freely selectable (previously forced + disabled — see the removed comment
-                // block just above this function, which the "namesToInclude" call below still
-                // honors by guaranteeing catName itself is always present as an option even if
-                // it isn't among the current Expense categories, e.g. after a rename/delete). A
-                // refund still nets against whatever category ends up chosen here (the
-                // isRefund/t.cat matching described above), so picking a different Expense
-                // category on purpose is safe and simply offsets that category instead.
                 const catSelect = document.getElementById("txCategory");
                 const catName = tx.cat || "Other Expenses";
-                const currentExpenseCats = dynamicCategories.filter(c => c.type === "expense").map(c => c.name);
-                catSelect.innerHTML = buildCategoryOptionsHTML("expense", [...currentExpenseCats, catName]);
+                const icon = getCategoryIcon(catName, "expense");
+                catSelect.innerHTML = `<option value="${escapeHtml(catName)}">${icon} ${escapeHtml(catName)}</option>`;
                 catSelect.value = catName;
-                catSelect.disabled = false;
+                catSelect.disabled = true;
+                // v142: the button now stands in for the <select> (see openAccountPicker()) — a
+                // disabled button never dispatches click, so this alone stops openAccountPicker()
+                // from firing and re-opening a picker the user shouldn't be able to change; the
+                // dimmed opacity just makes that locked state visible, matching how a disabled
+                // <select> looks greyed out.
                 const catBtn = document.getElementById("txCategoryBtn");
-                catBtn.disabled = false;
-                catBtn.style.opacity = "";
+                catBtn.disabled = true;
+                catBtn.style.opacity = "0.6";
                 syncAccountPickerButtonText("txCategory");
 
                 document.getElementById("txDate").value = todayLocalStr();
@@ -11178,6 +11774,17 @@
             renderRecentTransactionsWidget(accounts, txs);
             applyDashboardWidgetOrder();
             renderDesktopInsightsRail(accounts, txs);
+
+            // v264/v266/v269: Dashboard "Remaining Budget" teaser — always the CURRENT month
+            // (resolved the same way as the Budget page: explicit, or auto-derived from a Yearly
+            // budget — see resolveMonthBudget()), regardless of what the full Budget page (if open
+            // elsewhere) is browsing.
+            {
+                const curMonthResolved = await resolveMonthBudget(currentMonthKey(), txs, accounts);
+                const curYearRec = await getBudgetRecord(currentYearKey());
+                const { total: curYearSpent } = computePeriodActuals(currentYearKey(), txs, accounts);
+                renderDashboardBudgetWidget(curMonthResolved, curYearRec, curYearSpent);
+            }
 
             // --- Fixed Deposit maturity reminders ---
             // FD terms now live on the individual deposit transaction (each "placement"), not the
@@ -12173,7 +12780,7 @@
             }
 
             const currentIncomeCategories = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), "Salary", "Investments", "Freelance", "Other Income"])];
-            const currentExpenseCategories = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"])];
+            const currentExpenseCategories = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), "Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"])];
 
             // v72: categories flagged "Exclude from Net Savings Report" (Manage Categories) —
             // their transactions are pulled out of incBaseTotal/expBaseTotal/catSummary below and
@@ -13093,98 +13700,6 @@
             renderCurrencyReportPage();
         }
 
-        // --- TOTAL BILL SUMMARY REPORT (v268) ---
-        // A single Date/Income/Expense/Balance table: Total (all-time), Yearly Average, then one
-        // row per year with data, newest first. Deliberately reuses computeReportCardTotals's
-        // exact rules (refund nets against Expense, excludeFromSavings categories left out)
-        // rather than a fresh accounting path, bucketed by calendar year instead of a single
-        // period — see that function's own comment for why those specific rules were chosen.
-        async function renderTotalSummaryPage() {
-            const txs = await readAllDB(STORES.TRANSACTIONS);
-            const accounts = await readAllDB(STORES.ACCOUNTS);
-            populateBreakdownMemberFilter("totalSummaryMemberFilter");
-            document.getElementById("totalSummaryBaseCurrLabel").textContent = baseCurrency;
-            const filterMember = document.getElementById("totalSummaryMemberFilter").value;
-            const memberAccountIds = filterMember !== "all" ? accountIdsForMemberFilter(accounts, filterMember) : null;
-
-            const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
-
-            const byYear = {};
-            txs.forEach(t => {
-                if (t.type !== "income" && t.type !== "expense") return;
-                if (excludedCatNames.has(t.cat)) return;
-                if (memberAccountIds && !memberAccountIds.has(t.src)) return;
-                const y = new Date(t.date + "T00:00:00").getFullYear();
-                if (isNaN(y)) return;
-                if (!byYear[y]) byYear[y] = { income: 0, expense: 0 };
-                const tBase = convertTxAmountToBase(t, accounts);
-                if (t.type === "income" && t.isRefund) byYear[y].expense -= tBase;
-                else if (t.type === "income") byYear[y].income += tBase;
-                else byYear[y].expense += tBase;
-            });
-
-            const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
-            const wrap = document.getElementById("totalSummaryTableWrap");
-            if (years.length === 0) {
-                wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem; text-align:center; padding:24px 0;">No income or expense transactions yet.</p>`;
-                return;
-            }
-
-            let gIncome = 0, gExpense = 0;
-            years.forEach(y => { gIncome += byYear[y].income; gExpense += byYear[y].expense; });
-
-            const balanceColor = (v) => v >= 0 ? "var(--income-color)" : "var(--expense-color)";
-            // v268: the Balance cell drills through to the Net Savings Statement (income/expense
-            // by category) scoped to that same row's year — "Total" maps to "all" years, and each
-            // year row maps to that specific year. "Yearly Average" is a computed metric with no
-            // real period behind it (it isn't "all years" data, just their average), so it's left
-            // non-clickable rather than drilling into a statement that wouldn't actually match it.
-            const rowHTML = (label, income, expense, opts = {}) => {
-                const balance = income - expense;
-                const weight = opts.bold ? "font-weight:800;" : "";
-                const shade = opts.shade ? "background:rgba(127,127,127,0.06);" : "";
-                const clickable = opts.year != null;
-                const balanceAttrs = clickable
-                    ? `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight} cursor:pointer; text-decoration:underline; text-decoration-style:dotted; text-underline-offset:3px;" data-click="totalSummaryBalanceClick" data-year="${escapeHtml(opts.year)}" title="View Net Savings Statement"`
-                    : `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight}"`;
-                return `
-                    <tr style="${shade}">
-                        <td style="padding:9px 10px; ${weight}">${escapeHtml(label)}</td>
-                        <td style="padding:9px 10px; text-align:right; color:var(--income-color); ${weight}">${formatCurrency(income, baseCurrency)}</td>
-                        <td style="padding:9px 10px; text-align:right; color:var(--expense-color); ${weight}">${formatCurrency(expense, baseCurrency)}</td>
-                        <td ${balanceAttrs}>${formatCurrency(balance, baseCurrency)}</td>
-                    </tr>`;
-            };
-
-            let rows = rowHTML("Total", gIncome, gExpense, { bold: true, year: "all" });
-            // Averaged only across years that actually have at least one transaction, so a
-            // partial current year just counts as one more data point rather than needing
-            // special-casing (mirrors how the year list itself is built).
-            rows += rowHTML("Yearly Average", gIncome / years.length, gExpense / years.length, { shade: true });
-            years.forEach(y => { rows += rowHTML(String(y), byYear[y].income, byYear[y].expense, { year: String(y) }); });
-
-            wrap.innerHTML = `
-                <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
-                    <thead>
-                        <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase; border-bottom:2px solid var(--border-color);">
-                            <th style="padding:6px 10px;">Period</th>
-                            <th style="padding:6px 10px; text-align:right;">Income</th>
-                            <th style="padding:6px 10px; text-align:right;">Expense</th>
-                            <th style="padding:6px 10px; text-align:right;">Balance</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rows}</tbody>
-                </table>`;
-        }
-
-        function navigateToTotalSummaryPage() {
-            workspaceScrollY = window.scrollY;
-            showPage("page-total-summary");
-            window.scrollTo(0, 0);
-            pushVirtualState("total-summary");
-            renderTotalSummaryPage();
-        }
-
         function navigateToAutoLockPage() {
             workspaceScrollY = window.scrollY;
             showPage("page-autolock");
@@ -13401,6 +13916,8 @@
                 // definitions themselves (so Manage Tags / the on-the-fly picker still lists
                 // them, even ones with zero tagged transactions right now) need their own entry.
                 tags: await readAllDB(STORES.TAGS),
+                // v264: one record per month with a saved Budget (see the "--- BUDGET ---" section).
+                budgets: await readAllDB(STORES.BUDGETS),
                 // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
                 // defaultReceiveAccount, defaultIncomeCategory, defaultExpenseCategory, recentTx*
                 // widget filters, expandedAccountSubrows, plus baseCurrency/fxRates which are
@@ -13557,6 +14074,9 @@
                     if (db.objectStoreNames.contains(STORES.TAGS)) {
                         await clearStoreDB(STORES.TAGS);
                     }
+                    if (db.objectStoreNames.contains(STORES.BUDGETS)) {
+                        await clearStoreDB(STORES.BUDGETS);
+                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -13696,11 +14216,6 @@
             openCurrencyConfig: () => openCurrencyConfig(),
             lockAppNow: () => lockAppNow(),
             navigateToSavingsPage: () => navigateToSavingsPage(),
-            handleSavingsBackClick: () => handleSavingsBackClick(),
-            // v269: Total Bill Summary's Balance column drills into the Net Savings Statement
-            // scoped to that row's year (data-year is "all" for the Total row, or a specific
-            // year string for a year row) — see rowHTML() in renderTotalSummaryPage().
-            totalSummaryBalanceClick: (el) => navigateToSavingsPage(el.dataset.year, "all", "total-summary"),
             reportCardClickDirectType: (el) => reportCardClickDirectType(el),
             reportCardClickTotal: (el) => reportCardClickTotal(el),
             clearSavingsMonthScope: () => clearSavingsMonthScope(),
@@ -13848,6 +14363,18 @@
             editTag: (el) => editTag(el.dataset.id),
             removeTag: (el) => removeTag(el.dataset.id),
             handleSaveTagMobile: () => handleSaveTagMobile(),
+            navigateToBudgetPage: (el) => navigateToBudgetPage(el && el.dataset ? el.dataset.scope : undefined),
+            budgetSetScope: (el) => budgetSetScope(el),
+            budgetPagePrevPeriod: () => budgetPagePrevPeriod(),
+            budgetPageNextPeriod: () => budgetPageNextPeriod(),
+            openBudgetSetupModal: () => openBudgetSetupModal(),
+            handleSaveBudgetSetup: () => handleSaveBudgetSetup(),
+            deleteBudgetRecord: () => deleteBudgetRecord(),
+            copyBudgetFromPreviousPeriod: () => copyBudgetFromPreviousPeriod(),
+            openCategoryBudgetModal: () => openCategoryBudgetModal(),
+            editCategoryBudget: (el) => editCategoryBudget(el),
+            handleSaveCategoryBudget: () => handleSaveCategoryBudget(),
+            removeCategoryBudget: () => removeCategoryBudget(),
             removeTxTagChip: (el) => removeTxTagChip(el),
             selectTxTagSuggestion: (el) => selectTxTagSuggestion(el),
             createAndAddTxTag: (el) => createAndAddTxTag(el),
@@ -13862,6 +14389,7 @@
         const CHANGE_ACTIONS = {
             resetLedgerPageAndRender: () => { ledgerRenderLimit = LEDGER_PAGE_SIZE; renderApp(); },
             renderTagReportPage: () => renderTagReportPage(),
+            toggleBudgetCarryover: (el) => toggleBudgetCarryover(el),
             importBackup: (el, e) => importBackup(e),
             handleExportEncryptToggleChange: () => handleExportEncryptToggleChange(),
             handleBiometricToggleChange: () => handleBiometricToggleChange(),
@@ -13885,7 +14413,6 @@
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             renderPortfolioReportPage: () => renderPortfolioReportPage(),
             renderCurrencyReportPage: () => renderCurrencyReportPage(),
-            renderTotalSummaryPage: () => renderTotalSummaryPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
             handlePinnedAccountCountChange: () => handlePinnedAccountCountChange(),

@@ -2540,13 +2540,6 @@
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
-            <!-- v268: "Total Bill Summary" — user referenced a reference-app screenshot (a
-                 Date/Income/Expense/Balance table: grand total row + one row per year). Placed
-                 first in Reports since it's the highest-level overview, above the narrower
-                 category/currency/tag-scoped reports below it. See renderTotalSummaryPage(). -->
-            <button class="sidebar-item" data-click="sidebarGo" data-target="total-summary">
-                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg></span> Total Bill Summary
-            </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="spending-breakdown">
                 <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span> Spending Breakdown
             </button>
@@ -2567,6 +2560,9 @@
                  transaction carrying it (see renderTagReportPage()). -->
             <button class="sidebar-item" data-click="sidebarGo" data-target="tag-report">
                 <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.59 13.41L13.42 20.58a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span> Spending by Tag
+            </button>
+            <button class="sidebar-item" data-click="sidebarGo" data-target="budget">
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg></span> Budget
             </button>
 
             <div class="sidebar-divider"></div>
@@ -2713,6 +2709,12 @@
 
         <div id="fdReminderContainer"></div>
         <div id="ccReminderContainer"></div>
+
+        <div class="section-header">
+            <span class="section-title">Budget</span>
+            <button class="text-btn" data-click="navigateToBudgetPage">Manage →</button>
+        </div>
+        <div id="dashboardBudgetWidget" style="margin-bottom:16px;"></div>
 
         <div class="section-header">
             <span class="section-title">Financial Report Card</span>
@@ -3096,6 +3098,38 @@
         <button class="fab-btn" data-click="openTagFormModal" aria-label="Add tag" title="Add tag">+</button>
     </div>
 
+    <!-- ================= PAGE: BUDGET (v264, Monthly/Yearly toggle v266) ================= -->
+    <div id="page-budget" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Budget</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Monthly &amp; yearly spending budgets, by category</p>
+            </div>
+        </div>
+
+        <!-- Always-visible "This Month · This Year" progress, regardless of which scope is being
+             browsed below — tapping either half jumps the toggle into that scope. -->
+        <div id="budgetDualStrip"></div>
+
+        <div class="nav-view-toggle" style="margin:0 0 14px;">
+            <button type="button" class="nav-view-toggle-btn active" id="budgetScopeMonthBtn" data-click="budgetSetScope" data-scope="month" style="flex:1;">Monthly</button>
+            <button type="button" class="nav-view-toggle-btn" id="budgetScopeYearBtn" data-click="budgetSetScope" data-scope="year" style="flex:1;">Yearly</button>
+        </div>
+
+        <div class="section-header" style="margin-top:0;">
+            <span class="section-title" id="budgetPageMonthLabel">—</span>
+            <div style="display:flex; gap:6px;">
+                <button type="button" class="text-btn" data-click="budgetPagePrevPeriod" title="Previous period" style="padding:4px 10px;">‹</button>
+                <button type="button" class="text-btn" id="budgetPageNextBtn" data-click="budgetPageNextPeriod" title="Next period" style="padding:4px 10px;">›</button>
+            </div>
+        </div>
+
+        <div id="budgetPageContent"></div>
+
+        <button class="fab-btn" data-click="openCategoryBudgetModal" aria-label="Add category budget" title="Add category budget">+</button>
+    </div>
+
 
     <!-- ================= PAGE 6: BACKUP & RESTORE ================= -->
     <div id="page-backup" class="page hidden">
@@ -3183,37 +3217,6 @@
             <div id="systemQuotaText">Total browser quota limit: ~10240.00 MB, Used: 0.00 MB (across local sandboxes)</div>
         </div>
         <p style="font-size:0.75rem; color:var(--text-muted); margin-top:8px;">Everything is stored locally in this browser's IndexedDB — nothing is sent to a server. Use Backup &amp; Restore to export a copy.</p>
-    </div>
-
-    <!-- ================= PAGE: TOTAL BILL SUMMARY (v268) =================
-         Date/Income/Expense/Balance rollup: a Total row (all-time), a Yearly Average row, then
-         one row per year with data (newest first). Same Income/Expense rules as the dashboard
-         Report Card tiles (see computeReportCardTotals) — refund nets against Expense, categories
-         flagged "Exclude from Net Savings Report" are left out — so this always ties out to the
-         rest of the app rather than being a second accounting path. See renderTotalSummaryPage(). -->
-    <div id="page-total-summary" class="page hidden">
-        <div class="nav-header">
-            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
-            <div>
-                <h3 style="font-weight:800; font-size:1.2rem;">Total Bill Summary</h3>
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Income, expense and balance, year by year</p>
-            </div>
-        </div>
-
-        <div class="form-row print-filter-row" style="margin-bottom:14px;">
-            <label>Member</label>
-            <select id="totalSummaryMemberFilter" class="form-input" data-change="renderTotalSummaryPage">
-                <option value="all">All Members (everyone, incl. joint)</option>
-            </select>
-        </div>
-
-        <div class="report-card" id="totalSummaryTableWrap" style="overflow-x:auto;"></div>
-
-        <p style="font-size:0.68rem; color:var(--text-muted); margin-top:10px;">
-            Figures are in <span id="totalSummaryBaseCurrLabel">base currency</span>, converted at
-            today's rates. Uses the same refund and category-exclusion rules as the dashboard's
-            Report Card tiles, so the Total row always matches your all-time Income/Expense.
-        </p>
     </div>
 
     <!-- ================= PAGE: SPENDING BREAKDOWN (moved out of Dashboard, v32) ================= -->
@@ -3332,7 +3335,7 @@
     <!-- ================= PAGE 3: NET SAVINGS STATEMENT SHEET ================= -->
     <div id="page-savings" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="handleSavingsBackClick">&larr; Back</button>
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">Net Savings Statement</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Balanced Category Sheet</p>
@@ -4304,6 +4307,64 @@
                     <input type="text" id="tagName" placeholder="e.g. Japan Holiday Aug 2026" required>
                 </div>
                 <button type="button" data-click="handleSaveTagMobile" class="submit-btn" id="tagSubmitBtn">Save Tag</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Budget Setup (v264) — total budget + optional carryover for whichever month the
+         Budget page (#page-budget) is currently browsing (budgetViewPeriodKey). -->
+    <div class="modal" id="budgetSetupModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;">Budget — <span id="budgetSetupMonthLabel">—</span></h3>
+                <button data-click="closeModal" data-modal="budgetSetupModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div>
+                <div class="form-row">
+                    <label>Total Budget (<span id="budgetSetupCurrLabel"></span>)</label>
+                    <input type="number" id="budgetTotalInput" placeholder="e.g. 4000" min="0" step="0.01" inputmode="decimal">
+                    <p id="budgetTotalHint" style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;"></p>
+                </div>
+                <div class="form-row" style="flex-direction:row; align-items:center; justify-content:space-between;">
+                    <label style="margin:0;" id="budgetCarryoverLabel">Carry over last month's leftover</label>
+                    <input type="checkbox" id="budgetCarryoverToggle" data-change="toggleBudgetCarryover" style="width:auto;">
+                </div>
+                <div class="form-row" id="budgetCarryoverRow">
+                    <label>Carryover Amount</label>
+                    <input type="number" id="budgetCarryoverAmountInput" min="0" step="0.01" inputmode="decimal">
+                    <p id="budgetCarryoverHint" style="font-size:0.72rem; color:var(--text-muted); margin-top:4px;"></p>
+                </div>
+                <button type="button" data-click="handleSaveBudgetSetup" class="submit-btn">Save Budget</button>
+                <button type="button" data-click="deleteBudgetRecord" id="budgetSetupDeleteBtn" class="hidden" style="width:100%; margin-top:8px; padding:10px; border:none; border-radius:8px; background:none; color:var(--expense-color); font-weight:700; cursor:pointer;">Delete This Budget</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Category Budget (v264) — add/edit/delete one row of the current month's
+         categoryBudgets. Category picker reuses the app's generic openAccountPicker() popup
+         (buildCategoryOptionsHTML restricted to type "expense" — budgets track spending, not
+         income). -->
+    <div class="modal" id="categoryBudgetModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight: 800;" id="categoryBudgetModalTitle">Add Category Budget</h3>
+                <button data-click="closeModal" data-modal="categoryBudgetModal" style="background:none; border:none; font-size: 1.5rem; padding: 8px;">&times;</button>
+            </div>
+            <div>
+                <input type="hidden" id="categoryBudgetEditCat" value="">
+                <div class="form-row">
+                    <label>Category</label>
+                    <button type="button" id="budgetCatSelectBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="budgetCatSelect" data-title="Select Category">
+                        <span id="budgetCatSelectBtnText">Select category</span><span class="account-picker-chevron">▾</span>
+                    </button>
+                    <select id="budgetCatSelect" style="display:none;"></select>
+                </div>
+                <div class="form-row">
+                    <label>Budget Amount</label>
+                    <input type="number" id="budgetCatAmountInput" placeholder="e.g. 300" min="0" step="0.01" inputmode="decimal">
+                </div>
+                <button type="button" id="categoryBudgetSubmitBtn" data-click="handleSaveCategoryBudget" class="submit-btn">Save</button>
+                <button type="button" data-click="removeCategoryBudget" id="categoryBudgetDeleteBtn" class="hidden" style="width:100%; margin-top:8px; padding:10px; border:none; border-radius:8px; background:none; color:var(--expense-color); font-weight:700; cursor:pointer;">Delete Category Budget</button>
             </div>
         </div>
     </div>
