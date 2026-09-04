@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v269";
+        const APP_VERSION = "v270";
         const APP_VERSION_DATE = "2026-09-03";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -3364,6 +3364,22 @@
             const daysLeft = daysLeftInMonthKey(currentMonthKey());
             const isVirtual = source === "virtual";
 
+            // v270: a small text line (not a second bar/percentage) for the Yearly remaining
+            // balance, shown only when a Yearly budget actually exists — never shown for people
+            // who only use Monthly. Deliberately lightweight: a bare number doesn't compete with
+            // the month's own bar for attention, it just adds one more fact underneath it.
+            let yearLineHTML = "";
+            if (yearRec) {
+                const yearEffective = budgetEffectiveTotal(yearRec);
+                const yearRemaining = yearEffective - yearSpent;
+                yearLineHTML = `
+                    <div data-click="navigateToBudgetPage" data-scope="year" style="font-size:0.72rem; color:var(--text-muted); margin-top:6px; display:flex; justify-content:space-between;">
+                        <span>This Year</span>
+                        <span style="${yearRemaining < 0 ? "color:var(--expense-color); font-weight:700;" : ""}">${formatBalanceHTML(yearRemaining, baseCurrency)} left</span>
+                    </div>
+                `;
+            }
+
             wrap.innerHTML = `
                 <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage" data-scope="month">
                     <div style="display:flex; justify-content:space-between; align-items:baseline;">
@@ -3375,6 +3391,7 @@
                         <div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div>
                     </div>
                     ${isVirtual ? `<div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">🔄 From your ${escapeHtml(sourceYearRec.id)} Yearly Budget</div>` : ""}
+                    ${yearLineHTML}
                 </div>
             `;
         }
