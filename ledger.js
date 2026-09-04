@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v271";
+        const APP_VERSION = "v273";
         const APP_VERSION_DATE = "2026-09-04";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -3257,8 +3257,11 @@
                         </div>
                         <button type="button" class="trash-btn" data-click="openBudgetSetupModal" title="${isVirtual ? "Set a specific budget for this month" : "Edit total budget"}">✏️</button>
                     </div>
-                    <div class="progress-bar-container" style="height:10px; margin-top:10px;">
-                        <div class="progress-bar-fill" style="width:${pctUsed}%; background:${barColor};"></div>
+                    <div class="progress-bar-wrap">
+                        <div class="progress-bar-container" style="height:10px; margin-top:10px;">
+                            <div class="progress-bar-fill" style="width:${pctUsed}%; background:${barColor};"></div>
+                        </div>
+                        <div class="progress-bar-marker" style="left:${pctUsed}%; border-color:${barColor};"></div>
                     </div>
                     <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:14px; text-align:center;">
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Spent</div><div style="font-weight:700; font-size:0.85rem; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(spent, baseCurrency)}</div></div>
@@ -3277,17 +3280,8 @@
             `;
 
             let catSectionHTML;
-            if (isVirtual) {
-                catSectionHTML = `
-                    <div class="section-header">
-                        <span class="section-title">Category Budgets</span>
-                    </div>
-                    <div class="config-list" style="padding-bottom:88px;">
-                        <p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">Not available for an auto-calculated month. <button type="button" class="text-btn" style="padding:0; font-size:0.85rem;" data-click="openBudgetSetupModal">Set a specific budget for this month</button> to break it down by category.</p>
-                    </div>
-                `;
-            } else {
-                const catRows = (resolved.rec.categoryBudgets || []).map(cb => {
+            {
+                const catRows = isVirtual ? "" : (resolved.rec.categoryBudgets || []).map(cb => {
                     const catSpent = byCategory[cb.cat] || 0;
                     const catPct = cb.amount > 0 ? Math.max(Math.min((catSpent / cb.amount) * 100, 100), 0) : (catSpent > 0 ? 100 : 0);
                     const catOver = catSpent > cb.amount;
@@ -3311,7 +3305,7 @@
                         <span class="section-title">${isYear ? "Yearly" : ""} Category Budgets</span>
                     </div>
                     <div class="config-list" style="padding-bottom:88px;">
-                        ${catRows || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No category budgets yet — tap the + button to break this ${isYear ? "year" : "month"}'s total down by category.</p>`}
+                        ${catRows || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No category budgets yet — tap the + button to break this ${isYear ? "year" : "month"}'s total down by category${isVirtual ? " (this will lock in this month's current auto-calculated amount as its own budget)" : ""}.</p>`}
                     </div>
                 `;
             }
@@ -3402,8 +3396,11 @@
                         <span style="font-size:0.72rem; color:var(--text-muted);">View →</span>
                     </div>
                     <div style="font-size:1.35rem; font-weight:800; ${over ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(remaining, baseCurrency)}</div>
-                    <div class="progress-bar-container" style="height:8px; margin-top:6px;">
-                        <div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div>
+                    <div class="progress-bar-wrap">
+                        <div class="progress-bar-container" style="height:8px; margin-top:6px;">
+                            <div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div>
+                        </div>
+                        <div class="progress-bar-marker" style="left:${pct}%; ${over ? "border-color:var(--expense-color);" : ""}"></div>
                     </div>
                     ${isVirtual ? `<div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">🔄 From your ${escapeHtml(sourceYearRec.id)} Yearly Budget</div>` : ""}
                     ${yearLineHTML}
@@ -3530,14 +3527,30 @@
         // --- Category Budget Modal (add/edit/delete one row of rec.categoryBudgets) — scoped to
         // whichever period (budgetViewPeriodKey) the Budget page is currently browsing. ---
         async function openCategoryBudgetModal() {
-            const rec = await getBudgetRecord(budgetViewPeriodKey);
+            let rec = await getBudgetRecord(budgetViewPeriodKey);
             if (!rec) {
-                if (budgetViewScope === "month" && await getBudgetRecord(budgetViewPeriodKey.slice(0, 4))) {
-                    alert("This month's budget is auto-calculated from your Yearly Budget. Tap the ✏️ pencil and Save to set a specific budget for this month first — then you can add category budgets to it.");
-                } else {
-                    alert("Set up a total budget for this period first.");
+                // Auto-calculated (virtual) month — adding a category budget needs a real record
+                // to attach to, so silently lock in this month's CURRENT derived amount as its
+                // explicit budget (same number already on screen — nothing changes visually
+                // besides the "Auto-calculated" badge going away) and carry straight on into the
+                // category picker below, instead of sending the user off to the setup modal first.
+                if (budgetViewScope === "month") {
+                    const yearRec = await getBudgetRecord(budgetViewPeriodKey.slice(0, 4));
+                    if (yearRec) {
+                        const { accounts, txs } = await computeAccountBalances();
+                        const virtualTotal = Math.round(computeVirtualMonthlyBudget(budgetViewPeriodKey, yearRec, txs, accounts) * 100) / 100;
+                        rec = { id: budgetViewPeriodKey, totalBudget: virtualTotal, carryoverEnabled: false, carryoverAmount: 0, categoryBudgets: [] };
+                        try {
+                            await writeDB(STORES.BUDGETS, rec);
+                        } catch (err) {
+                            alert("Could not set up this month's budget: " + (err && err.message ? err.message : err));
+                            return;
+                        }
+                        showToast(`📌 Locked in ${formatCurrency(virtualTotal, baseCurrency)} as this month's budget`);
+                        renderBudgetPage();
+                    }
                 }
-                return;
+                if (!rec) { alert("Set up a total budget for this period first."); return; }
             }
             document.getElementById("categoryBudgetModalTitle").textContent = "Add Category Budget";
             document.getElementById("categoryBudgetSubmitBtn").textContent = "Save";
@@ -4377,7 +4390,7 @@
                 return;
             }
 
-            document.getElementById("currentBasePill").textContent = baseCurrency;
+            document.getElementById("settingsBasePill").textContent = baseCurrency;
             closeModal("currencyModal");
             renderApp();
         }
@@ -11831,7 +11844,7 @@
 
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
 
-            document.getElementById("currentBasePill").textContent = baseCurrency;
+            document.getElementById("settingsBasePill").textContent = baseCurrency;
 
             let globalBaseNetWorth = 0;
             const currencyTotals = {}; // native (unconverted) sum per currency actually held, across every account

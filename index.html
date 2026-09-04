@@ -279,6 +279,35 @@
             gap: 8px;
         }
 
+        /* v273: the Portfolio Net Worth block gets its own gradient "hero" card, nested inside the
+           plain header (top-bar/hamburger/icons stay on the neutral background — recoloring those
+           for contrast wasn't worth the risk). Built from var(--primary) with color-mix() rather
+           than fixed hex stops, so it inherits whichever indigo the active preset already uses
+           for every other primary-colored element (buttons, active nav item, etc.) instead of
+           needing its own per-preset override across all ~17 BG_THEMES entries — the two ~3 dark
+           presets that already redefine --primary (slate, midnight) get a matching lighter
+           gradient automatically, for free. */
+        .net-worth-hero-card {
+            background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 100%, #000 28%));
+            border-radius: 14px;
+            padding: 18px 16px 16px;
+            box-shadow: 0 6px 16px -4px color-mix(in srgb, var(--primary) 55%, transparent);
+        }
+        .net-worth-hero-card #netWorthDisplay { color: #fff; }
+        .net-worth-hero-label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: rgba(255,255,255,0.8);
+        }
+        .net-worth-hero-card .net-worth-split-card {
+            background: rgba(255,255,255,0.14);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-left: 3px solid rgba(255,255,255,0.65);
+        }
+        .net-worth-hero-card .net-worth-split-card.net-worth-split-realestate { border-left-color: var(--salary-color); }
+        .net-worth-hero-card .net-worth-split-label { color: rgba(255,255,255,0.8); }
+        .net-worth-hero-card .net-worth-split-value { color: #fff; }
+
         /* v162: single flex cluster for Base/Save/Lock — sibling of .top-bar under
            .dashboard-header-row (see comment there). margin-left:auto is what actually pins it
            to the right, independent of whether .top-bar is visible (mobile) or hidden (desktop,
@@ -333,18 +362,6 @@
             font-size: 1.6rem;
             font-weight: 800;
             letter-spacing: -0.02em;
-        }
-
-        .currency-pill {
-            background: var(--press-bg);
-            border: 1px solid var(--border-color);
-            padding: 9px 10px; /* v160: tightened from 12px 14px to help the top-bar's right-hand
-                                  cluster (pill + save + lock) fit on one line on narrow phones —
-                                  still a reasonable touch target. */
-            border-radius: 8px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            cursor: pointer;
         }
 
         .auto-lock-wrap {
@@ -638,6 +655,23 @@
             margin-top: 4px;
         }
         .progress-bar-fill { background: var(--expense-color); height: 100%; border-radius: 4px; }
+        /* v272: optional marker "puck" that rides the leading edge of a progress bar (used on the
+           Budget page's headline bar) — needs a non-clipping wrapper since .progress-bar-container
+           itself is overflow:hidden and would cut the puck in half at 0%/100%. */
+        .progress-bar-wrap { position: relative; }
+        .progress-bar-marker {
+            position: absolute;
+            top: 50%;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: var(--card-bg);
+            border: 3px solid var(--primary);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            transition: left 0.2s;
+        }
 
         .category-row-item {
             cursor: pointer;
@@ -2662,9 +2696,12 @@
                     <span class="top-bar-title">Ledger</span>
                 </div>
                 <div class="header-controls-group">
-                    <button class="currency-pill" data-click="openCurrencyConfig" title="Base currency" aria-label="Base currency">
-                        <span id="currentBasePill">USD</span> ⚙
-                    </button>
+                    <!-- v273: Currency Setting (base currency picker, data-click="openCurrencyConfig")
+                         moved out of the header into the Settings sidebar page — see the
+                         "Currency Setting" row there — to declutter the header now that it's the
+                         gradient net-worth hero card's neighbor; #currentBasePill is no longer in
+                         the DOM, syncCurrentBasePill()-type calls now target #settingsBasePill
+                         instead (see openCurrencyConfig/handleBaseCurrencyChange). -->
                     <!-- v262: Save and Lock reordered to sit either side of Privacy Mode's eye
                          icon — was eye/save/lock, now save/eye/lock, so the eye toggle sits
                          directly beside Lock rather than out on its own at the left of the
@@ -2684,24 +2721,26 @@
                     <button class="lock-btn-header" title="Lock app now" data-click="lockAppNow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></button>
                 </div>
             </div>
-            <div class="net-worth-container">
-                <div style="cursor:pointer;" data-click="netWorthCardTap" title="Tap for the full Net Worth Statement (assets vs. liabilities breakdown)">
-                    <h1 id="netWorthDisplay" class="privacy-amount-value">0.00</h1>
-                    <p style="font-size: 0.75rem; color: var(--text-muted); font-weight: 600;">Portfolio Net Worth</p>
+            <div class="net-worth-hero-card">
+                <div class="net-worth-container">
+                    <div style="cursor:pointer;" data-click="netWorthCardTap" title="Tap for the full Net Worth Statement (assets vs. liabilities breakdown)">
+                        <h1 id="netWorthDisplay" class="privacy-amount-value">0.00</h1>
+                        <p class="net-worth-hero-label">Portfolio Net Worth</p>
+                    </div>
                 </div>
-            </div>
 
-            <!-- v157: Financial Assets / Real Estate split — only shown when at least one Real
-                 Estate account exists (toggled in renderApp()); otherwise stays hidden and the
-                 Portfolio Net Worth figure above is the only total shown, per design. -->
-            <div class="net-worth-split-row hidden" id="netWorthSplitRow">
-                <div class="net-worth-split-card net-worth-split-financial" data-click="togglePrivacyReveal" title="Tap to reveal">
-                    <span class="net-worth-split-label">💼 Financial Assets</span>
-                    <span class="net-worth-split-value privacy-amount-value" id="financialAssetsDisplay">0.00</span>
-                </div>
-                <div class="net-worth-split-card net-worth-split-realestate" data-click="togglePrivacyReveal" title="Tap to reveal">
-                    <span class="net-worth-split-label">🏠 Real Estate</span>
-                    <span class="net-worth-split-value privacy-amount-value" id="realEstateDisplay">0.00</span>
+                <!-- v157: Financial Assets / Real Estate split — only shown when at least one Real
+                     Estate account exists (toggled in renderApp()); otherwise stays hidden and the
+                     Portfolio Net Worth figure above is the only total shown, per design. -->
+                <div class="net-worth-split-row hidden" id="netWorthSplitRow">
+                    <div class="net-worth-split-card net-worth-split-financial" data-click="togglePrivacyReveal" title="Tap to reveal">
+                        <span class="net-worth-split-label">💼 Financial Assets</span>
+                        <span class="net-worth-split-value privacy-amount-value" id="financialAssetsDisplay">0.00</span>
+                    </div>
+                    <div class="net-worth-split-card net-worth-split-realestate" data-click="togglePrivacyReveal" title="Tap to reveal">
+                        <span class="net-worth-split-label">🏠 Real Estate</span>
+                        <span class="net-worth-split-value privacy-amount-value" id="realEstateDisplay">0.00</span>
+                    </div>
                 </div>
             </div>
         </header>
@@ -2719,7 +2758,6 @@
 
         <div class="section-header">
             <span class="section-title">Budget</span>
-            <button class="text-btn" data-click="navigateToBudgetPage">Manage →</button>
         </div>
         <div id="dashboardBudgetWidget" style="margin-bottom:16px;"></div>
 
@@ -3771,6 +3809,10 @@
                         <select id="recentTxCountSelect" style="display:none;" data-change="handleRecentTxSettingChange"></select>
                     </div>
                 </div>
+            </div>
+            <div class="config-item" style="cursor:pointer;" data-click="openCurrencyConfig">
+                <span>💱 <strong>Currency Setting</strong></span>
+                <span style="color:var(--text-muted);"><span id="settingsBasePill">USD</span> ›</span>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDefaultAccountsSettings">
                 <span>💰 <strong>Default Accounts</strong></span>
