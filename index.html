@@ -2540,6 +2540,13 @@
 
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
+            <!-- v268: "Total Bill Summary" — user referenced a reference-app screenshot (a
+                 Date/Income/Expense/Balance table: grand total row + one row per year). Placed
+                 first in Reports since it's the highest-level overview, above the narrower
+                 category/currency/tag-scoped reports below it. See renderTotalSummaryPage(). -->
+            <button class="sidebar-item" data-click="sidebarGo" data-target="total-summary">
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg></span> Total Bill Summary
+            </button>
             <button class="sidebar-item" data-click="sidebarGo" data-target="spending-breakdown">
                 <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.21 15.89A10 10 0 1 1 8 2.83"/><path d="M22 12A10 10 0 0 0 12 2v10z"/></svg></span> Spending Breakdown
             </button>
@@ -3219,6 +3226,37 @@
         <p style="font-size:0.75rem; color:var(--text-muted); margin-top:8px;">Everything is stored locally in this browser's IndexedDB — nothing is sent to a server. Use Backup &amp; Restore to export a copy.</p>
     </div>
 
+    <!-- ================= PAGE: TOTAL BILL SUMMARY (v268) =================
+         Date/Income/Expense/Balance rollup: a Total row (all-time), a Yearly Average row, then
+         one row per year with data (newest first). Same Income/Expense rules as the dashboard
+         Report Card tiles (see computeReportCardTotals) — refund nets against Expense, categories
+         flagged "Exclude from Net Savings Report" are left out — so this always ties out to the
+         rest of the app rather than being a second accounting path. See renderTotalSummaryPage(). -->
+    <div id="page-total-summary" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Total Bill Summary</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Income, expense and balance, year by year</p>
+            </div>
+        </div>
+
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
+            <label>Member</label>
+            <select id="totalSummaryMemberFilter" class="form-input" data-change="renderTotalSummaryPage">
+                <option value="all">All Members (everyone, incl. joint)</option>
+            </select>
+        </div>
+
+        <div class="report-card" id="totalSummaryTableWrap" style="overflow-x:auto;"></div>
+
+        <p style="font-size:0.68rem; color:var(--text-muted); margin-top:10px;">
+            Figures are in <span id="totalSummaryBaseCurrLabel">base currency</span>, converted at
+            today's rates. Uses the same refund and category-exclusion rules as the dashboard's
+            Report Card tiles, so the Total row always matches your all-time Income/Expense.
+        </p>
+    </div>
+
     <!-- ================= PAGE: SPENDING BREAKDOWN (moved out of Dashboard, v32) ================= -->
     <div id="page-spending-breakdown" class="page hidden">
         <div class="nav-header">
@@ -3335,7 +3373,7 @@
     <!-- ================= PAGE 3: NET SAVINGS STATEMENT SHEET ================= -->
     <div id="page-savings" class="page hidden">
         <div class="nav-header">
-            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <button class="back-btn" data-click="handleSavingsBackClick">&larr; Back</button>
             <div>
                 <h3 style="font-weight:800; font-size:1.2rem;">Net Savings Statement</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Balanced Category Sheet</p>

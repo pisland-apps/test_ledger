@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v270";
-        const APP_VERSION_DATE = "2026-09-03";
+        const APP_VERSION = "v271";
+        const APP_VERSION_DATE = "2026-09-04";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -1424,7 +1424,7 @@
             { name: "Investments", type: "income", icon: "📈" },
             { name: "Freelance", type: "income", icon: "💻" },
             { name: "Dividend ASNB", type: "income", icon: "📈" },
-            { name: "Divident EPF", type: "income", icon: "🏦" },
+            { name: "Dividend EPF", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(ER)", type: "income", icon: "🏦" },
             { name: "EPF Contrib.(EE)", type: "income", icon: "🏦" },
             { name: "CPF Contrib.(ER)", type: "income", icon: "🏦" },
@@ -1437,6 +1437,7 @@
             { name: "Dividend Unit Trust", type: "income", icon: "🧺" },
             { name: "Rental Income", type: "income", icon: "🏠" },
             { name: "Bank Charges", type: "expense", icon: "💳" },
+            { name: "Books & Stationery", type: "expense", icon: "📚" },
             { name: "Mortgage Interest", type: "expense", icon: "🏠" },
             { name: "Education", type: "expense", icon: "🎓" },
             { name: "Family", type: "expense", icon: "👨‍👩‍👧‍👦" },
@@ -1461,6 +1462,7 @@
             { name: "Car Upkeep", type: "expense", icon: "🔧", parent: "Vehicle Expenses" },
             { name: "Fuel", type: "expense", icon: "⛽", parent: "Vehicle Expenses" },
             { name: "Ins & Road Tax", type: "expense", icon: "📄", parent: "Vehicle Expenses" },
+            { name: "Parking", type: "expense", icon: "🅿️", parent: "Vehicle Expenses" },
             { name: "Transportation", type: "expense", icon: "🚌", parent: "Vehicle Expenses" },
             // Property Expenses (Main) + its Subcategories
             { name: "Property Expenses", type: "expense", icon: "🏢" },
@@ -1475,12 +1477,12 @@
         // Dynamic Rich Catalog of Preset Icons grouped logically
         const emojiDirectory = {
             "Money & Fin.": ["💵", "💰", "💳", "📈", "📉", "🪙", "💎", "💸"],
-            "Food & Dining": ["🍔", "🍜", "🍕", "☕", "🍺", "🍏", "🍣", "🍩", "🍷", "🧺"],
+            "Food & Dining": ["🍔", "🍜", "🍕", "☕", "🍺", "🍏", "🍣", "🍩", "🍷", "🧺", "🥕"],
             "Transport": ["🚗", "🚌", "🚆", "✈️", "🚲", "⛽", "🚕", "🚢"],
             "Home & Living": ["🏠", "🔌", "📡", "🛋️", "🧹", "💧", "📦", "🔑"],
-            "Life & Leisure": ["🎬", "🎮", "⚽", "🏖️", "🛒", "👕", "🎁", "💊", "🎭"],
+            "Life & Leisure": ["🎬", "🎮", "⚽", "🏖️", "🛒", "👕", "🎁", "💊", "🎭", "🪶"],
             "Income & Business": ["🏢", "💼", "💻", "🛠️", "🤝", "🏡", "🎓", "👑", "📋"],
-            "Family & Pets": ["👨‍👩‍👧‍👦", "🐹", "🐄", "🐶", "🐱"]
+            "Family & Pets": ["👨‍👩‍👧‍👦", "🐹", "🐄", "🐶", "🐱", "🐻", "🐮", "🐑", "🦊"]
         };
 
         // Fallback default system icons if not found
@@ -1504,7 +1506,7 @@
             "fixed deposit": "🏦",
             "interest income": "💰",
             "dividend asnb": "📈",
-            "divident epf": "🏦",
+            "dividend epf": "🏦",
             "epf contrib.(er)": "🏦",
             "epf contrib.(ee)": "🏦",
             "cpf contrib.(er)": "🏦",
@@ -1516,6 +1518,8 @@
             "rebate": "💸",
             "grants": "🎓",
             "bank charges": "💳",
+            "books & stationery": "📚",
+            "parking": "🅿️",
             "education": "🎓",
             "family": "👨‍👩‍👧‍👦",
             "betting": "🎰",
@@ -1553,7 +1557,7 @@
         // on existing transactions, so a renamed/deleted category doesn't vanish from its own
         // transaction's dropdown) — merged with the full legacy + DEFAULT_CATEGORIES fallback set.
         function buildCategoryOptionsHTML(type, namesToInclude) {
-            const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+            const legacyFallback = type === "income" ? ["Salary", "Investments", "Freelance", "Other Income"] : ["Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
             const fallbackGroup = [...legacyFallback, ...DEFAULT_CATEGORIES.filter(c => c.type === type).map(c => c.name)];
             const allNames = new Set([...(namesToInclude || []), ...fallbackGroup]);
 
@@ -1679,6 +1683,7 @@
             const backupPage = document.getElementById("page-backup");
             const autolockPage = document.getElementById("page-autolock");
             const databasePage = document.getElementById("page-database");
+            const totalSummaryPage = document.getElementById("page-total-summary");
             const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
             const portfolioReportPage = document.getElementById("page-portfolio-report");
@@ -1706,8 +1711,12 @@
                 // which ignored where Accounts was actually opened from (e.g. Net Worth
                 // Statement) — same gap as the on-screen "← Back" button, fixed the same way.
                 handleAccountsBackClick();
+            } else if (!savingsPage.classList.contains("hidden")) {
+                // v269: mirrors handleAccountsBackClick — Total Bill Summary's Balance-cell
+                // drill-in sets savingsPageBackTarget so a hardware/gesture back press lands
+                // back on that page instead of always jumping to the Dashboard.
+                handleSavingsBackClick();
             } else if (
-                !savingsPage.classList.contains("hidden") ||
                 !networthStatementPage.classList.contains("hidden") ||
                 !categoriesPage.classList.contains("hidden") ||
                 !templatesPage.classList.contains("hidden") ||
@@ -1717,6 +1726,7 @@
                 !backupPage.classList.contains("hidden") ||
                 !autolockPage.classList.contains("hidden") ||
                 !databasePage.classList.contains("hidden") ||
+                !totalSummaryPage.classList.contains("hidden") ||
                 !spendingBreakdownPage.classList.contains("hidden") ||
                 !incomeBreakdownPage.classList.contains("hidden") ||
                 !portfolioReportPage.classList.contains("hidden") ||
@@ -2337,7 +2347,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -2368,6 +2378,7 @@
                 case "page-backup": return "Export & Import";
                 case "page-autolock": return "Auto-Lock Settings";
                 case "page-database": return "Database";
+                case "page-total-summary": return "Total Bill Summary";
                 case "page-spending-breakdown": return "Spending Breakdown";
                 case "page-income-breakdown": return "Income Breakdown";
                 case "page-savings": return "Savings Statement";
@@ -2399,6 +2410,9 @@
             };
             let parts;
             switch (pageId) {
+                case "page-total-summary":
+                    parts = [selectedText("totalSummaryMemberFilter")];
+                    break;
                 case "page-spending-breakdown":
                     parts = [selectedText("spendingYearFilter"), selectedText("spendingMonthFilter"), selectedText("spendingMemberFilter")];
                     break;
@@ -2887,10 +2901,11 @@
         // exactly as the user last left it; passing a real value (or explicit "all") forces the
         // Year select to that value instead. savingsFilterMonth defaults back to "all" on every
         // call so the month scope never lingers into an unrelated visit.
-        function navigateToSavingsPage(yearOverride = null, month = "all") {
+        function navigateToSavingsPage(yearOverride = null, month = "all", backTarget = "workspace") {
             workspaceScrollY = window.scrollY;
             savingsFilterMonth = month;
             if (yearOverride !== null) pendingSavingsYearOverride = yearOverride;
+            savingsPageBackTarget = backTarget;
             showPage("page-savings");
             window.scrollTo(0,0);
             pushVirtualState("savings");
@@ -4004,6 +4019,12 @@
             await renderAccountsPage();
         }
 
+        // v269: Savings Statement's "← Back" target — mirrors accountsPageBackTarget above.
+        // Defaults to "workspace" for every pre-v269 caller (sidebar, dashboard report card);
+        // Total Bill Summary's Balance-cell drill-in (navigateToSavingsPage's 3rd arg) is the
+        // only caller that ever passes "total-summary".
+        let savingsPageBackTarget = "workspace"; // "workspace" | "total-summary"
+
         // v222 fix: Accounts page's "← Back" button target — previously hardcoded to
         // navigateToWorkspace(), which stranded users on the Dashboard when Accounts was
         // opened from the new Net Worth Statement page instead of the sidebar/dashboard.
@@ -4012,6 +4033,12 @@
         // sidebarNavPending (set in sidebarFilterAccountsByType() for the type shortcuts).
         function handleAccountsBackClick() {
             if (accountsPageBackTarget === "networth-statement") navigateToNetWorthStatementPage();
+            else navigateToWorkspace();
+        }
+
+        // v269: Savings Statement's "← Back" button target — see savingsPageBackTarget above.
+        function handleSavingsBackClick() {
+            if (savingsPageBackTarget === "total-summary") navigateToTotalSummaryPage();
             else navigateToWorkspace();
         }
 
@@ -4179,6 +4206,7 @@
             const backupHidden = document.getElementById("page-backup").classList.contains("hidden");
             const autolockHidden = document.getElementById("page-autolock").classList.contains("hidden");
             const databaseHidden = document.getElementById("page-database").classList.contains("hidden");
+            const totalSummaryHidden = document.getElementById("page-total-summary").classList.contains("hidden");
             const spendingHidden = document.getElementById("page-spending-breakdown").classList.contains("hidden");
             const incomeHidden = document.getElementById("page-income-breakdown").classList.contains("hidden");
             const portfolioReportHidden = document.getElementById("page-portfolio-report").classList.contains("hidden");
@@ -4192,6 +4220,7 @@
             else if (!backupHidden) target = "backup";
             else if (!autolockHidden) target = "autolock";
             else if (!databaseHidden) target = "database";
+            else if (!totalSummaryHidden) target = "total-summary";
             else if (!spendingHidden) target = "spending-breakdown";
             else if (!incomeHidden) target = "income-breakdown";
             else if (!portfolioReportHidden) target = "portfolio-report";
@@ -4227,6 +4256,7 @@
             else if (target === "members") navigateToMembersPage();
             else if (target === "autolock") navigateToAutoLockPage();
             else if (target === "database") navigateToDatabasePage();
+            else if (target === "total-summary") navigateToTotalSummaryPage();
             else if (target === "spending-breakdown") navigateToSpendingBreakdownPage();
             else if (target === "income-breakdown") navigateToIncomeBreakdownPage();
             else if (target === "portfolio-report") navigateToPortfolioReportPage();
@@ -7988,7 +8018,7 @@
         // "(None)" option, and selects whatever is currently saved as the default.
         function populateDefaultCategorySelects() {
             const incomeFallback = ["Salary", "Investments", "Freelance", "Other Income"];
-            const expenseFallback = ["Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
+            const expenseFallback = ["Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"];
 
             const incomeNames = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), ...incomeFallback])];
             const expenseNames = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), ...expenseFallback])];
@@ -8732,6 +8762,24 @@
                 }
             }
 
+            // One-time migration: fixes the "Divident EPF" typo seeded before this version —
+            // renamed to "Dividend EPF". Only touches the record if it still has the auto-seeded
+            // id, never a category the user has since renamed away from "Divident EPF". Existing
+            // transactions filed under the old (misspelled) name are updated too, so nothing
+            // shows up as an orphaned "Divident EPF" string in reports.
+            const legacyDividentEpf = existing.find(c => c.id === "cat_divident_epf");
+            if (legacyDividentEpf && legacyDividentEpf.name.toLowerCase() === "divident epf") {
+                legacyDividentEpf.name = "Dividend EPF";
+                await writeDB(STORES.CATEGORIES, legacyDividentEpf);
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                for (const t of txs) {
+                    if (t.cat === "Divident EPF") {
+                        t.cat = "Dividend EPF";
+                        await writeDB(STORES.TRANSACTIONS, t);
+                    }
+                }
+            }
+
             const slugify = s => "cat_" + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
             // Matched by EITHER current name OR the deterministic id a DEFAULT_CATEGORIES entry
@@ -8764,9 +8812,40 @@
             await syncAndLoadCategories();
             await migrateOthersCategoryRename();
             await migrateFdInterestIncomeRename();
+            await migrateFdInterestDuplicateCleanup();
             await migrateStaleDestFieldCleanup();
             await migrateStaleCategoryOnTransfersCleanup();
             await migrateAccountGroupRename();
+            // migrateFdInterestDuplicateCleanup() may have deleted a Categories record (the
+            // legacy "FD Interest" duplicate), so dynamicCategories — loaded further above,
+            // before that migration ran — is re-synced here to reflect the deletion immediately
+            // rather than only on the next full app load.
+            await syncAndLoadCategories();
+        }
+
+        // One-time migration: an older version of the app (before "FD Interest Income" existed
+        // as a proper DEFAULT_CATEGORIES entry) let "FD Interest" get created/used as its own
+        // category, splitting FD interest transactions across two near-identical categories.
+        // Existing transactions still filed under the exact legacy name "FD Interest" are moved
+        // to "FD Interest Income" (mirrors migrateFdInterestIncomeRename() above), and the
+        // now-empty "FD Interest" category record itself is deleted so it stops showing up
+        // as a duplicate in Manage Categories / the transaction picker. Only ever touches a
+        // category record whose name is the exact legacy string "FD Interest" — never "FD
+        // Interest Income" itself, and never a category the user has since renamed to something
+        // else.
+        async function migrateFdInterestDuplicateCleanup() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            for (const t of txs) {
+                if (t.cat === "FD Interest") {
+                    t.cat = "FD Interest Income";
+                    await writeDB(STORES.TRANSACTIONS, t);
+                }
+            }
+            const cats = await readAllDB(STORES.CATEGORIES);
+            const legacyFdInterest = cats.find(c => c.name === "FD Interest");
+            if (legacyFdInterest) {
+                await deleteDB(STORES.CATEGORIES, legacyFdInterest.id);
+            }
         }
 
         // One-time migration: "Others" (the implicit income/expense fallback category — never a
@@ -11569,14 +11648,17 @@
             await deleteTransactionById(id);
         }
 
-        // Opens a new Income entry, pre-filled from the tapped expense and locked to its exact
-        // category — the category is forced (not just pre-selected) because the Income category
-        // dropdown otherwise only ever lists Income categories, and the Spending/Income Breakdown
-        // + Net Savings Statement + dashboard totals all key their refund offset off `t.cat`
-        // matching the original expense's category exactly (see the isRefund handling in
+        // Opens a new Income entry, pre-filled from the tapped expense with its exact category
+        // pre-selected (v263: manually changeable, previously forced/disabled — see below) — the
+        // category is built from the Expense list (not the Income category dropdown, which
+        // otherwise only ever lists Income categories) because the Spending/Income Breakdown +
+        // Net Savings Statement + dashboard totals all key their refund offset off `t.cat`
+        // matching an Expense category exactly (see the isRefund handling in
         // renderApp()/renderSavingsStatement()/renderSpendingBreakdownPage()/
-        // renderIncomeBreakdownPage()). pendingRefundOf (read by handleTransactionSubmitMobile) is
-        // the actual flag that makes this save as a refund rather than an ordinary Income entry.
+        // renderIncomeBreakdownPage()) — so whichever Expense category ends up chosen here is the
+        // one the refund nets against, not necessarily the original expense's own category.
+        // pendingRefundOf (read by handleTransactionSubmitMobile) is the actual flag that makes
+        // this save as a refund rather than an ordinary Income entry.
         function openRefundFromOptions() {
             const id = activeQuickViewTxId;
             closeTxOptionsMenu(); // v95 fix — see editTransactionFromOptions() above.
@@ -11593,20 +11675,23 @@
                 document.getElementById("srcAccount").value = tx.src || "";
                 syncAccountPickerButtonText("srcAccount"); // v99 — see comment in openTransactionForm().
 
+                // v263: category now pre-fills to the original expense's category but is left
+                // freely selectable (previously forced + disabled — see the removed comment
+                // block just above this function, which the "namesToInclude" call below still
+                // honors by guaranteeing catName itself is always present as an option even if
+                // it isn't among the current Expense categories, e.g. after a rename/delete). A
+                // refund still nets against whatever category ends up chosen here (the
+                // isRefund/t.cat matching described above), so picking a different Expense
+                // category on purpose is safe and simply offsets that category instead.
                 const catSelect = document.getElementById("txCategory");
                 const catName = tx.cat || "Other Expenses";
-                const icon = getCategoryIcon(catName, "expense");
-                catSelect.innerHTML = `<option value="${escapeHtml(catName)}">${icon} ${escapeHtml(catName)}</option>`;
+                const currentExpenseCats = dynamicCategories.filter(c => c.type === "expense").map(c => c.name);
+                catSelect.innerHTML = buildCategoryOptionsHTML("expense", [...currentExpenseCats, catName]);
                 catSelect.value = catName;
-                catSelect.disabled = true;
-                // v142: the button now stands in for the <select> (see openAccountPicker()) — a
-                // disabled button never dispatches click, so this alone stops openAccountPicker()
-                // from firing and re-opening a picker the user shouldn't be able to change; the
-                // dimmed opacity just makes that locked state visible, matching how a disabled
-                // <select> looks greyed out.
+                catSelect.disabled = false;
                 const catBtn = document.getElementById("txCategoryBtn");
-                catBtn.disabled = true;
-                catBtn.style.opacity = "0.6";
+                catBtn.disabled = false;
+                catBtn.style.opacity = "";
                 syncAccountPickerButtonText("txCategory");
 
                 document.getElementById("txDate").value = todayLocalStr();
@@ -12797,7 +12882,7 @@
             }
 
             const currentIncomeCategories = [...new Set([...dynamicCategories.filter(c => c.type === "income").map(c => c.name), "Salary", "Investments", "Freelance", "Other Income"])];
-            const currentExpenseCategories = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), "Groceries", "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"])];
+            const currentExpenseCategories = [...new Set([...dynamicCategories.filter(c => c.type === "expense").map(c => c.name), "Dining Out", "Utilities", "Rent", "Commute", "Entertainment", "Other Expenses"])];
 
             // v72: categories flagged "Exclude from Net Savings Report" (Manage Categories) —
             // their transactions are pulled out of incBaseTotal/expBaseTotal/catSummary below and
@@ -13717,6 +13802,98 @@
             renderCurrencyReportPage();
         }
 
+        // --- TOTAL BILL SUMMARY REPORT (v268) ---
+        // A single Date/Income/Expense/Balance table: Total (all-time), Yearly Average, then one
+        // row per year with data, newest first. Deliberately reuses computeReportCardTotals's
+        // exact rules (refund nets against Expense, excludeFromSavings categories left out)
+        // rather than a fresh accounting path, bucketed by calendar year instead of a single
+        // period — see that function's own comment for why those specific rules were chosen.
+        async function renderTotalSummaryPage() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            populateBreakdownMemberFilter("totalSummaryMemberFilter");
+            document.getElementById("totalSummaryBaseCurrLabel").textContent = baseCurrency;
+            const filterMember = document.getElementById("totalSummaryMemberFilter").value;
+            const memberAccountIds = filterMember !== "all" ? accountIdsForMemberFilter(accounts, filterMember) : null;
+
+            const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
+
+            const byYear = {};
+            txs.forEach(t => {
+                if (t.type !== "income" && t.type !== "expense") return;
+                if (excludedCatNames.has(t.cat)) return;
+                if (memberAccountIds && !memberAccountIds.has(t.src)) return;
+                const y = new Date(t.date + "T00:00:00").getFullYear();
+                if (isNaN(y)) return;
+                if (!byYear[y]) byYear[y] = { income: 0, expense: 0 };
+                const tBase = convertTxAmountToBase(t, accounts);
+                if (t.type === "income" && t.isRefund) byYear[y].expense -= tBase;
+                else if (t.type === "income") byYear[y].income += tBase;
+                else byYear[y].expense += tBase;
+            });
+
+            const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
+            const wrap = document.getElementById("totalSummaryTableWrap");
+            if (years.length === 0) {
+                wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem; text-align:center; padding:24px 0;">No income or expense transactions yet.</p>`;
+                return;
+            }
+
+            let gIncome = 0, gExpense = 0;
+            years.forEach(y => { gIncome += byYear[y].income; gExpense += byYear[y].expense; });
+
+            const balanceColor = (v) => v >= 0 ? "var(--income-color)" : "var(--expense-color)";
+            // v268: the Balance cell drills through to the Net Savings Statement (income/expense
+            // by category) scoped to that same row's year — "Total" maps to "all" years, and each
+            // year row maps to that specific year. "Yearly Average" is a computed metric with no
+            // real period behind it (it isn't "all years" data, just their average), so it's left
+            // non-clickable rather than drilling into a statement that wouldn't actually match it.
+            const rowHTML = (label, income, expense, opts = {}) => {
+                const balance = income - expense;
+                const weight = opts.bold ? "font-weight:800;" : "";
+                const shade = opts.shade ? "background:rgba(127,127,127,0.06);" : "";
+                const clickable = opts.year != null;
+                const balanceAttrs = clickable
+                    ? `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight} cursor:pointer; text-decoration:underline; text-decoration-style:dotted; text-underline-offset:3px;" data-click="totalSummaryBalanceClick" data-year="${escapeHtml(opts.year)}" title="View Net Savings Statement"`
+                    : `style="padding:9px 10px; text-align:right; color:${balanceColor(balance)}; ${weight}"`;
+                return `
+                    <tr style="${shade}">
+                        <td style="padding:9px 10px; ${weight}">${escapeHtml(label)}</td>
+                        <td style="padding:9px 10px; text-align:right; color:var(--income-color); ${weight}">${formatCurrency(income, baseCurrency)}</td>
+                        <td style="padding:9px 10px; text-align:right; color:var(--expense-color); ${weight}">${formatCurrency(expense, baseCurrency)}</td>
+                        <td ${balanceAttrs}>${formatCurrency(balance, baseCurrency)}</td>
+                    </tr>`;
+            };
+
+            let rows = rowHTML("Total", gIncome, gExpense, { bold: true, year: "all" });
+            // Averaged only across years that actually have at least one transaction, so a
+            // partial current year just counts as one more data point rather than needing
+            // special-casing (mirrors how the year list itself is built).
+            rows += rowHTML("Yearly Average", gIncome / years.length, gExpense / years.length, { shade: true });
+            years.forEach(y => { rows += rowHTML(String(y), byYear[y].income, byYear[y].expense, { year: String(y) }); });
+
+            wrap.innerHTML = `
+                <table style="width:100%; border-collapse:collapse; font-size:0.85rem;">
+                    <thead>
+                        <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase; border-bottom:2px solid var(--border-color);">
+                            <th style="padding:6px 10px;">Period</th>
+                            <th style="padding:6px 10px; text-align:right;">Income</th>
+                            <th style="padding:6px 10px; text-align:right;">Expense</th>
+                            <th style="padding:6px 10px; text-align:right;">Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody>${rows}</tbody>
+                </table>`;
+        }
+
+        function navigateToTotalSummaryPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-total-summary");
+            window.scrollTo(0, 0);
+            pushVirtualState("total-summary");
+            renderTotalSummaryPage();
+        }
+
         function navigateToAutoLockPage() {
             workspaceScrollY = window.scrollY;
             showPage("page-autolock");
@@ -14233,6 +14410,11 @@
             openCurrencyConfig: () => openCurrencyConfig(),
             lockAppNow: () => lockAppNow(),
             navigateToSavingsPage: () => navigateToSavingsPage(),
+            handleSavingsBackClick: () => handleSavingsBackClick(),
+            // v269: Total Bill Summary's Balance column drills into the Net Savings Statement
+            // scoped to that row's year (data-year is "all" for the Total row, or a specific
+            // year string for a year row) — see rowHTML() in renderTotalSummaryPage().
+            totalSummaryBalanceClick: (el) => navigateToSavingsPage(el.dataset.year, "all", "total-summary"),
             reportCardClickDirectType: (el) => reportCardClickDirectType(el),
             reportCardClickTotal: (el) => reportCardClickTotal(el),
             clearSavingsMonthScope: () => clearSavingsMonthScope(),
@@ -14430,6 +14612,7 @@
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             renderPortfolioReportPage: () => renderPortfolioReportPage(),
             renderCurrencyReportPage: () => renderCurrencyReportPage(),
+            renderTotalSummaryPage: () => renderTotalSummaryPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
             handlePinnedAccountCountChange: () => handlePinnedAccountCountChange(),
