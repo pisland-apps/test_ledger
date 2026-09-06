@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v301";
+        const APP_VERSION = "v302";
         const APP_VERSION_DATE = "2026-09-06";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -15300,7 +15300,18 @@
                 readAllDB(STORES.TRANSACTIONS),
                 readAllDB(STORES.ACCOUNTS)
             ]);
-            const accountName = (id) => (accounts.find(a => a.id === id) || {}).name || "(deleted account)";
+            // Opening Balance transfers deliberately store `src` blank ("") — the funds
+            // originate from outside the tracked system, before the account was tracked here —
+            // same convention (and same "(Opening Balance)" label) used everywhere else in the
+            // app that resolves an account id to a name (see e.g. renderLedgerPage's own
+            // `accountName` helper). Missing this check here was the bug: a blank id fell
+            // through to the "(deleted account)" fallback below, mislabeling every real Opening
+            // Balance row as if its account no longer existed.
+            const accountName = (id) => {
+                if (!id) return "(Opening Balance)";
+                const a = accounts.find(acc => acc.id === id);
+                return a ? a.name : "(deleted account)";
+            };
             const viewAccountId = activeLedgerAccountView;
 
             const scoped = viewAccountId === "all"
