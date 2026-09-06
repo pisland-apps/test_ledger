@@ -1298,6 +1298,7 @@
         .speed-dial-fab.sd-expense { background: linear-gradient(135deg, rgba(248, 113, 113, 0.9) 0%, rgba(239, 68, 68, 0.62) 55%, rgba(153, 27, 27, 0.78) 100%); }
         .speed-dial-fab.sd-transfer { background: linear-gradient(135deg, rgba(96, 165, 250, 0.9) 0%, rgba(59, 130, 246, 0.62) 55%, rgba(30, 64, 175, 0.78) 100%); }
         .speed-dial-fab.sd-salary { background: linear-gradient(135deg, rgba(251, 191, 36, 0.9) 0%, rgba(217, 119, 6, 0.62) 55%, rgba(146, 64, 14, 0.78) 100%); }
+        .speed-dial-fab.sd-claim { background: linear-gradient(135deg, rgba(56, 189, 248, 0.9) 0%, rgba(2, 132, 199, 0.62) 55%, rgba(3, 105, 161, 0.78) 100%); }
 
         /* Dashboard main toggle FAB, gradient-glass restyle (v177) — same layered look as the
            4 speed-dial circles above (gradient tint + glossy highlight + backdrop blur), applied
@@ -1652,6 +1653,24 @@
         .converted-subtext { font-size: 0.65rem; color: var(--text-muted); display: block; font-weight: 500; }
         .trash-btn { background: none; border: none; color: #cbd5e1; cursor: pointer; padding: 8px; font-size: 1.1rem; }
         .trash-btn:active { color: var(--expense-color); }
+
+        /* v276: plain month divider on a single account's Year-scoped Activity list (see the
+           showMonthDividers block in renderApp()/ledger.js) — purely a scroll landmark so it's
+           obvious which month you've scrolled into on a long year, no total/subtotal attached
+           (that's deliberate, see the comment in ledger.js for why). Not clickable/hoverable —
+           it's a label, not a row — so it's kept out of .ledger-item entirely rather than
+           reusing that class with an override. */
+        .ledger-month-divider {
+            padding: 10px 16px 4px;
+            font-size: 0.7rem;
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: var(--text-muted);
+            background: var(--bg-color);
+            user-select: none;
+            -webkit-user-select: none;
+        }
 
         /* v150: big round category icon + colored type bar on the main Transactions list rows
            (reference: a competing budget app's list, icon sitting beside the details instead of
@@ -2827,6 +2846,19 @@
             </div>
         </div>
 
+        <!-- v281: Tag Reminders — one row per tag with "Show on Dashboard" enabled (see the Tag
+             modal), each showing how many transactions currently carry that tag + outstanding
+             expense total. Hidden entirely when no such tag has any matching transaction, same
+             convention as the FD-maturity/Credit-Card-due reminders elsewhere in this app. Rows are
+             deliberately non-clickable (same restraint as buildTagReportCategoryListHTML() in the
+             Spending by Tag report) — this is a "check the list yourself" nudge, not a drill-in. -->
+        <div id="dashboardTagWidget" style="display:none;">
+        <div class="section-header">
+            <span class="section-title" style="cursor:pointer;" data-click="sidebarGo" data-target="tag-report">🔖 Tag Reminders</span>
+        </div>
+        <div class="ledger-container" id="tagReminderList"></div>
+        </div>
+
         <div id="dashboardAccountsWidget">
         <div class="section-header">
             <span class="section-title" style="cursor:pointer;" data-click="navigateToAccountsPage">Accounts</span>
@@ -2843,10 +2875,14 @@
 
         <!-- Quick-add speed-dial FAB (v173) — dashboard's "Quick Transaction Entry" moved from a
              static 4-button row to a floating "+" that expands into the Income/Expense/Transfer/
-             Salary options, mirroring the existing Account Activity page pattern above
+             Salary/Claim options, mirroring the existing Account Activity page pattern above
              (ledgerQuickAddSheet, v34) so both use the same visual language. -->
         <div id="dashboardQuickAddBackdrop" class="quick-add-backdrop" style="display:none;" data-click="closeDashboardQuickAddSheet"></div>
         <div id="dashboardQuickAddSheet" class="speed-dial-sheet" style="display:none;">
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Lend / Claim</span>
+                <button class="speed-dial-fab sd-claim" data-click="dashboardQuickAddChooseAction" data-action="claim" aria-label="Lend / Claim" title="Lend / Claim">🧾</button>
+            </div>
             <div class="speed-dial-row">
                 <span class="speed-dial-label">Transfer money</span>
                 <button class="speed-dial-fab sd-transfer" data-click="dashboardQuickAddChooseAction" data-action="transfer" aria-label="Transfer money" title="Transfer money">
@@ -2888,6 +2924,10 @@
                          groups this category's transactions by their Description text, e.g. every
                          entry described "mcd" collapsed into one row with a combined total and dates. -->
                     <button id="ledgerNoteSummaryBtn" class="icon-edit-btn" style="display:none;" data-click="openNoteSummaryModal" title="Group by description">📝</button>
+                    <!-- v300: exports either every transaction (activeLedgerAccountView === "all")
+                         or just the account currently open — see exportLedgerCsv()'s own comment
+                         for why it's plain CSV rather than a real xlsx library. -->
+                    <button id="ledgerExportCsvBtn" class="icon-edit-btn" data-click="exportLedgerCsv" title="Export to CSV">📤</button>
                 </div>
                 <div id="ledgerTargetOwnerTags" style="display:none; gap:8px; margin:2px 0 1px;"></div>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Transaction Log History (Click item to Edit)</p>
@@ -2961,11 +3001,16 @@
              icon speed-dial used by the Dashboard's "+" FAB (speed-dial-sheet/speed-dial-row/
              speed-dial-fab, sd-transfer/sd-income/sd-expense — v173-176), so every Activity
              page (Account/Currency/Portfolio, all sharing this #page-ledger markup) matches
-             the dashboard's visual language. Still only Income/Expense/Transfer (no Salary,
-             matching the pre-existing scope of this sheet) and still calls quickAddChooseType
-             via data-type, unchanged. -->
+             the dashboard's visual language. v295 added a "Claim" option (routes to
+             openClaimEntryForm() via quickAddChooseType's data-type="claim" branch) alongside
+             the original Income/Expense/Transfer (still no Salary, matching the pre-existing
+             scope of this sheet). -->
         <div id="ledgerQuickAddBackdrop" class="quick-add-backdrop" style="display:none;" data-click="closeLedgerQuickAddSheet"></div>
         <div id="ledgerQuickAddSheet" class="speed-dial-sheet" style="display:none;">
+            <div class="speed-dial-row">
+                <span class="speed-dial-label">Lend / Claim</span>
+                <button class="speed-dial-fab sd-claim" data-click="quickAddChooseType" data-type="claim" aria-label="Lend / Claim" title="Lend / Claim">🧾</button>
+            </div>
             <div class="speed-dial-row">
                 <span class="speed-dial-label">Transfer money</span>
                 <button class="speed-dial-fab sd-transfer" data-click="quickAddChooseType" data-type="transfer" aria-label="Transfer money" title="Transfer money">
@@ -3262,7 +3307,47 @@
             <div id="systemQuotaText">Total browser quota limit: ~10240.00 MB, Used: 0.00 MB (across local sandboxes)</div>
         </div>
         <p style="font-size:0.75rem; color:var(--text-muted); margin-top:8px;">Everything is stored locally in this browser's IndexedDB — nothing is sent to a server. Use Backup &amp; Restore to export a copy.</p>
+
+        <!-- v278: entry point into the new attachment review list — a first look at what's
+             taking up that "attachments" figure above before anything gets deleted. Cleanup
+             itself isn't built yet (this is review-only), see navigateToAttachmentReviewPage(). -->
+        <button type="button" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin-top:14px;" data-click="navigateToAttachmentReviewPage">🔍 Review Attachments</button>
     </div>
+
+    <!-- ================= PAGE: REVIEW ATTACHMENTS (v278) =================
+         Every transaction that carries at least one photo/PDF attachment, oldest first (the
+         reverse of every other list in the app — the point here is reviewing what's oldest,
+         since that's what a future cleanup pass would target), with an age filter so it's easy
+         to jump straight to "just show me what's older than 12 months". Review-only for now —
+         tapping a row opens the normal Quick View (same as everywhere else) so the actual photo
+         can be checked before anything is ever deleted; no delete action lives on this page yet.
+         See renderAttachmentReviewPage(). -->
+    <div id="page-attachment-review" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToDatabasePage">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Review Attachments</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Every transaction with a photo or PDF attached, oldest first</p>
+            </div>
+        </div>
+
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
+            <label>Show</label>
+            <select id="attachmentReviewCutoff" class="form-input" data-change="renderAttachmentReviewPage">
+                <option value="all">All attachments</option>
+                <option value="6">Older than 6 months</option>
+                <option value="12" selected>Older than 12 months</option>
+                <option value="24">Older than 24 months</option>
+            </select>
+        </div>
+
+        <p id="attachmentReviewSummary" style="font-size:0.75rem; color:var(--text-muted); margin-bottom:10px;"></p>
+
+        <div class="ledger-container" style="margin-bottom:24px;">
+            <div id="attachmentReviewList"></div>
+        </div>
+    </div>
+
 
     <!-- ================= PAGE: TOTAL BILL SUMMARY (v268) =================
          Date/Income/Expense/Balance rollup: a Total row (all-time), a Yearly Average row, then
@@ -3694,12 +3779,23 @@
                 <p style="font-size:0.72rem; color:var(--text-muted); margin-top:10px;" id="tagReportMeta"></p>
             </div>
 
-            <div class="section-header">
-                <span class="section-title">Expense Breakdown by Category</span>
-            </div>
-            <div class="report-card">
-                <div id="tagReportChartWrap"></div>
-                <div id="tagReportList" style="display:flex; flex-direction:column; gap:8px; margin-top:10px;"></div>
+            <!-- v291: only shown when the selected tag is exactly "Pending Claim" — opens the
+                 multi-bill settlement flow (openClaimSettleModal()/claimSettleModal below) so
+                 several claimable expenses can be settled against one lump-sum reimbursement
+                 instead of one-by-one via each expense's own 🔖 pill. -->
+            <button type="button" id="claimSettleTriggerBtn" data-click="openClaimSettleModal" class="submit-btn" style="display:none; margin-bottom:14px; background:var(--income-color);">🧾 Settle Multiple Bills as One Claim</button>
+
+            <!-- v295: hidden specifically for the Pending Claim tag (see renderTagReportPage()) —
+                 with claims always grouped into the one "Claims Receivable" bucket, a 100%-one-
+                 category donut adds nothing worth looking at; every other tag still shows this. -->
+            <div id="tagReportBreakdownWrap">
+                <div class="section-header">
+                    <span class="section-title">Expense Breakdown by Category</span>
+                </div>
+                <div class="report-card">
+                    <div id="tagReportChartWrap"></div>
+                    <div id="tagReportList" style="display:flex; flex-direction:column; gap:8px; margin-top:10px;"></div>
+                </div>
             </div>
 
             <div class="section-header">
@@ -4386,7 +4482,84 @@
                     <label>Tag Name</label>
                     <input type="text" id="tagName" placeholder="e.g. Japan Holiday Aug 2026" required>
                 </div>
+                <!-- v281: "Show on Dashboard" — when on, a Dashboard reminder widget shows how many
+                     transactions currently carry this tag (see renderTagReminderWidget()). Purely a
+                     filter on tags.includes(name), same as the existing Spending by Tag report — no
+                     new state on the transaction itself, so removing the tag from a transaction (e.g.
+                     once a reimbursement/refund has been settled and claimed) is what makes it drop
+                     out of this reminder, same as it already drops out of the Tag report. -->
+                <div class="toggle-switch-row">
+                    <span class="toggle-switch-label">📌 Show as reminder on Dashboard</span>
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="tagShowOnDashboard">
+                        <span class="toggle-slider"></span>
+                    </label>
+                </div>
                 <button type="button" data-click="handleSaveTagMobile" class="submit-btn" id="tagSubmitBtn">Save Tag</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Settle Multiple Claims (v291, redesigned v295) — settles several unclaimed
+         Transfers into the Claims Receivable account (still carrying PENDING_CLAIM_TAG, not yet
+         individually settled) against ONE lump-sum payment received back. Opened only
+         from the "Pending Claim" Spending by Tag view (see claimSettleTriggerBtn above) via
+         openClaimSettleModal(). On save this writes: (1) one isRefund Transfer moving
+         min(received, billed) OUT of Claims Receivable into whichever account received the
+         payment, with every selected bill's date/description/amount listed in its Notes; (2) if
+         the received amount doesn't exactly match the selected bills' total, a SEPARATE ordinary
+         record — an Expense sourced FROM Claims Receivable (short claim — less was received than
+         billed, finishing that draw-down and booking the loss as real spending) or an Income into
+         the settlement account (extra claim — more was received than billed), filed under an ordinary
+         (non-excluded) category so it DOES flow into Budget/Net Savings/Spending Breakdown as real
+         personal spending/income; and (3) removes PENDING_CLAIM_TAG from every settled bill. See
+         handleClaimSettleSubmit()/findReimbursementFor()'s refundOfIds handling in ledger.js. -->
+    <div class="modal" id="claimSettleModal">
+        <div class="modal-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
+                <h3 style="font-weight:800;">Settle Multiple Claims</h3>
+                <button data-click="closeModal" data-modal="claimSettleModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+            </div>
+            <div>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600; margin-bottom:10px;">Pick which bills this payment covers, then enter what actually landed in your account. Any short or extra amount is recorded separately so it still shows up in your normal Reports/Budget.</p>
+
+                <div class="form-row">
+                    <label>Bills Included</label>
+                    <div id="claimSettleBillList" style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; border:1.5px solid var(--border-color); border-radius:10px; padding:8px;"></div>
+                    <p id="claimSettleCurrencyWarning" style="display:none; font-size:0.72rem; color:var(--expense-color); font-weight:700; margin-top:6px;">⚠️ Selected bills use different currencies — please settle each currency as its own batch.</p>
+                    <p style="font-size:0.8rem; font-weight:700; margin-top:8px; display:flex; justify-content:space-between;">
+                        <span>Selected total</span>
+                        <span id="claimSettleSelectedTotal">0.00</span>
+                    </p>
+                </div>
+
+                <div class="form-row">
+                    <label>Amount Actually Received</label>
+                    <input type="number" id="claimSettleReceivedAmount" min="0" step="0.01" inputmode="decimal" data-input="recalcClaimSettlePreview">
+                </div>
+
+                <div class="form-row">
+                    <label>Date Received</label>
+                    <input type="date" id="claimSettleDate">
+                </div>
+
+                <div class="form-row">
+                    <label>Deposit Into</label>
+                    <button type="button" id="claimSettleAccountBtn" class="form-input account-picker-btn" data-click="openAccountPicker" data-select="claimSettleAccount" data-title="Select Account" aria-label="Account">
+                        <span id="claimSettleAccountBtnText">Select account</span>
+                    </button>
+                    <select id="claimSettleAccount" style="display:none;"></select>
+                </div>
+
+                <div id="claimSettleVarianceBox" style="display:none; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:10px; padding:10px; margin-bottom:12px;">
+                    <p id="claimSettleVarianceLabel" style="font-size:0.8rem; font-weight:700; margin-bottom:8px;"></p>
+                    <div class="form-row" style="margin-bottom:0;">
+                        <label id="claimSettleVarianceCategoryLabel">Record this as</label>
+                        <select id="claimSettleVarianceCategory"></select>
+                    </div>
+                </div>
+
+                <button type="button" data-click="handleClaimSettleSubmit" class="submit-btn" id="claimSettleSubmitBtn">Save Settlement</button>
             </div>
         </div>
     </div>
@@ -4686,6 +4859,23 @@
                 <div class="form-row form-row-icon" id="txDescRow"><span class="field-icon" aria-hidden="true">👤</span><input type="text" id="txDesc" required placeholder="Description" aria-label="Description" autocomplete="off" data-input="filterDescSuggestions" data-focus="filterDescSuggestions"><div class="desc-suggest-list" id="txDescSuggestList"></div></div>
                 <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📝</span><input type="text" id="txNotes" placeholder="Notes (Optional)" aria-label="Notes (Optional)"></div>
 
+                <!-- v285: shown only when this Income form was opened by tapping a tag pill on the
+                     original expense (see openReimbursementFromTagBadge() in ledger.js) — offers to
+                     drop that same tag from the original expense the moment this reimbursement is
+                     saved, so a settled claim falls off the Tag Reminders widget/Spending by Tag
+                     report on its own instead of needing a separate manual edit. Checked by
+                     default; toggling it off leaves the original transaction's tags untouched.
+                     Label text and visibility are set by fillReimbursementForm(). -->
+                <div id="txRemoveTagWrap" style="display:none; background:#f5f3ff; border:1px solid #ddd6fe; border-radius:10px; padding:10px; margin-bottom:10px;">
+                    <div class="toggle-switch-row" style="margin:0;">
+                        <span class="toggle-switch-label" id="txRemoveTagLabel" style="font-size:0.75rem;">🔖 Remove this tag from the original transaction</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="txRemoveTagToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
                 <!-- v257: Tags — trip/claim labels (see "Spending by Tag" in Reports); hidden for
                      Transfers (toggled in openTransactionForm(), same convention as #txSplitWrap).
                      Chips render into #txTagsChips; #txTagInput reuses the exact substring-filter
@@ -4804,7 +4994,12 @@
             <div style="display:flex; flex-direction:column; gap:8px;">
                 <button type="button" class="option-menu-btn" data-click="duplicateTransactionFromOptions">📂 &nbsp;Duplicate transaction</button>
                 <button type="button" class="option-menu-btn" data-click="editTransactionFromOptions">✏️ &nbsp;Edit transaction</button>
+                <!-- v281: Refund and Reimbursement both open the exact same form (openRefundOrReimbursementFromOptions())
+                     and save as an identical record (isRefund/refundOf only) — the only difference
+                     is the modal title/prefilled Description text, purely for the user's own
+                     bookkeeping clarity. See the comment on openRefundOrReimbursementFromOptions(). -->
                 <button type="button" id="txOptionsRefundBtn" class="option-menu-btn" data-click="openRefundFromOptions">↩️ &nbsp;Refund</button>
+                <button type="button" id="txOptionsReimbursementBtn" class="option-menu-btn" data-click="openReimbursementFromOptions">💰 &nbsp;Reimbursement</button>
                 <button type="button" class="option-menu-btn" style="background:#fee2e2; color:var(--expense-color);" data-click="deleteTransactionFromOptions">🗑 &nbsp;Delete transaction</button>
             </div>
         </div>
@@ -5215,8 +5410,12 @@
         <div class="modal-sheet" style="max-width:95vw; max-height:88vh; background:white; border-radius:14px; padding:0; display:flex; flex-direction:column; overflow:hidden;">
             <p id="attachmentViewerTitle" style="font-size:0.85rem; font-weight:700; margin:0; padding:16px 16px 10px; word-break:break-all; flex-shrink:0;"></p>
             <div id="attachmentViewerBody" style="flex:1 1 auto; min-height:0; overflow-y:auto; max-width:80vw; padding:0 16px;"></div>
-            <div style="display:flex; gap:8px; padding:14px 16px; flex-shrink:0; border-top:1px solid var(--border-color);">
+            <div style="display:flex; gap:8px; padding:14px 16px; flex-shrink:0; border-top:1px solid var(--border-color); flex-wrap:wrap;">
                 <a id="btnDownloadAttachment" href="" download="" class="submit-btn" style="margin-top:0; width:auto; padding:10px 20px; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; background:var(--chip-bg); color:var(--text-main);">⬇ Download</a>
+                <!-- v279: Delete — always re-confirmed via the shared customConfirm() modal
+                     inside handleDeleteAttachmentFromViewer() before anything is actually
+                     removed; see that function's comment for why (no undo once it's gone). -->
+                <button type="button" id="btnDeleteAttachment" data-click="handleDeleteAttachmentFromViewer" class="submit-btn" style="margin-top:0; width:auto; padding:10px 20px; background:#fee2e2; color:var(--expense-color);">🗑️ Delete</button>
                 <button type="button" data-click="closeModal" data-modal="attachmentViewerModal" class="submit-btn" style="margin-top:0; width:auto; padding:10px 24px;">Close</button>
             </div>
         </div>

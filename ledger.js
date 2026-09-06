@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v273";
-        const APP_VERSION_DATE = "2026-09-04";
+        const APP_VERSION = "v300";
+        const APP_VERSION_DATE = "2026-09-06";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -287,6 +287,17 @@
         function subgroupsForGroup(group) {
             return ACCOUNT_SUBGROUPS[group] || [];
         }
+
+        // v295: default, auto-provisioned account(s) — same idempotent-seed idea as
+        // DEFAULT_CATEGORIES/ensureDefaultCategories(), just for the ACCOUNTS store. Currently
+        // just the one Claims Receivable account. Its id is a literal string here (not the
+        // CLAIMS_RECEIVABLE_ACCOUNT_ID constant, defined much further down this same file) purely
+        // to avoid a temporal-dead-zone reference — the two MUST stay in sync; see
+        // ensureDefaultAccounts()'s own comment for why a fixed id (not a name match, unlike
+        // categories) is used to detect "already seeded" here.
+        const DEFAULT_ACCOUNTS = [
+            { id: "acc_claims_receivable", name: "Claims Receivable", type: "normal", group: "Other Assets" }
+        ];
 
         // Sorts accounts by group (in ACCOUNT_GROUPS order) then by name — shared by the Accounts
         // page and per-member account lists so both stay consistent.
@@ -1286,8 +1297,33 @@
         let activeQuickViewSplitGroup = null;
         // When set, the next handleTransactionSubmitMobile() save is tagged as a refund of this
         // transaction id (isRefund:true, refundOf:<id>) instead of an ordinary income entry — set by
-        // openRefundFromOptions(), cleared on every openTransactionForm() call and after saving.
+        // openRefundFromOptions()/openReimbursementFromOptions(), cleared on every
+        // openTransactionForm() call and after saving.
         let pendingRefundOf = null;
+        // v281: which button (Refund vs Reimbursement) opened the current pendingRefundOf flow —
+        // "refund" | "reimbursement" | null. Purely a display label (see refundBadge in the
+        // Ledger list renderer) — never read by any report/total math, which only ever looks at
+        // isRefund. Set/cleared in lockstep with pendingRefundOf by
+        // openRefundOrReimbursementFromOptions().
+        let pendingRefundReason = null;
+        // v285: name of the tag to drop from the *original* expense (pendingRefundOf) once this
+        // reimbursement saves, or null if no removal was offered/wanted — set only by
+        // openReimbursementFromTagBadge()/fillReimbursementForm() when this Income form was opened
+        // by tapping that expense's own tag pill (never by the plain Options → Reimbursement flow,
+        // which has no single tag in view). Read (and the checkbox's live checked state re-checked)
+        // by handleTransactionSubmitMobile() at save time; cleared on every openTransactionForm()
+        // call and after saving, in lockstep with pendingRefundOf above.
+        let pendingRemoveTagName = null;
+        // v291 (redesigned v295): the full candidate bill list (unclaimed transfers into
+        // CLAIMS_RECEIVABLE_ACCOUNT_ID still carrying PENDING_CLAIM_TAG) the Settle Multiple
+        // Claims modal was opened with — set once
+        // by openClaimSettleModal(), read by recalcClaimSettlePreview() (to sum whichever rows are
+        // currently checked) and handleClaimSettleSubmit() (to build the settlement/variance
+        // records without re-querying IndexedDB mid-flow). Cleared when the modal closes via save;
+        // deliberately left as-is on a plain × close/back so re-opening while it's already
+        // populated doesn't need a wasted requery — openClaimSettleModal() always rebuilds it
+        // fresh anyway.
+        let claimSettleCandidates = [];
         // v99: which underlying <select> (srcAccount/destAccount) the Account picker modal is
         // currently populated for — set by openAccountPicker(), read by selectAccountPickerOption()
         // when the user taps a row.
@@ -1415,6 +1451,22 @@
         // them as a Subcategory nested under that Main Category — see ensureDefaultCategories()
         // for how parentId gets resolved from this name at seed time. Entries with no `parent`
         // are Main Categories (top-level, same as every pre-v101 entry).
+        // v295: money-owed tracking (v296: broadened past company expense claims to any lend/
+        // claim scenario — see the "Lend / Claim" quick-entry label) — replaced the old
+        // category-based design (CLAIMABLE_EXPENSE_CATEGORY, an Expense category flagged
+        // excludeFromSavings) with a real asset account. Logging one is now a Transfer (cash account →
+        // Claims Receivable), which is automatically excluded from Net Savings/Budget/Spending
+        // Breakdown for free (those only ever sum Income/Expense records) instead of needing an
+        // exclusion flag, and gives the money owed a real, tappable balance instead of a
+        // "reports pretend this expense didn't happen" trick. See ensureDefaultAccounts() (seeds
+        // the account, once, under the "Other Assets" group), ensureDefaultTags() (seeds
+        // PENDING_CLAIM_TAG with showOnDashboard:true), and the narrow Tags-on-Transfers carve-out
+        // in openTransactionForm()/updateTxTagsRowVisibility()/handleTransactionSubmitMobile() —
+        // Transfers are still never taggable in general, except a Transfer whose destination is
+        // this one account.
+        const CLAIMS_RECEIVABLE_ACCOUNT_ID = "acc_claims_receivable";
+        const PENDING_CLAIM_TAG = "Pending Claim";
+
         const DEFAULT_CATEGORIES = [
             { name: "Salary", type: "income", icon: "💼" },
             { name: "Housing Allowance", type: "income", icon: "🏠", parent: "Salary" },
@@ -1683,6 +1735,13 @@
             const backupPage = document.getElementById("page-backup");
             const autolockPage = document.getElementById("page-autolock");
             const databasePage = document.getElementById("page-database");
+            // v278: bucketed with databasePage below rather than given its own dedicated
+            // handleAttachmentReviewBackClick() — matches the existing shortcut already used for
+            // databasePage itself (whose on-screen "← Back" goes to Data & Security, yet hardware
+            // back here still falls through to navigateToWorkspace() same as this whole bucket),
+            // so hardware back from this new page follows that same established precedent rather
+            // than introducing a one-off exception.
+            const attachmentReviewPage = document.getElementById("page-attachment-review");
             const totalSummaryPage = document.getElementById("page-total-summary");
             const spendingBreakdownPage = document.getElementById("page-spending-breakdown");
             const incomeBreakdownPage = document.getElementById("page-income-breakdown");
@@ -1726,6 +1785,7 @@
                 !backupPage.classList.contains("hidden") ||
                 !autolockPage.classList.contains("hidden") ||
                 !databasePage.classList.contains("hidden") ||
+                !attachmentReviewPage.classList.contains("hidden") ||
                 !totalSummaryPage.classList.contains("hidden") ||
                 !spendingBreakdownPage.classList.contains("hidden") ||
                 !incomeBreakdownPage.classList.contains("hidden") ||
@@ -1878,6 +1938,62 @@
             }
         }
 
+        // v283: small "🔖 name" pill per tag a transaction carries — shown next to its
+        // description, same visual convention as refundBadge/fdStatusBadge (small colored pill,
+        // margin-left:6px). Shared by renderRecentTransactionsWidget() (dashboard), the main
+        // Ledger list row template, and renderTagReportPage()'s own transaction list (bug class
+        // #8: written once, applied at every call site rather than copy-pasted) — NOT yet applied
+        // to the per-account Activity page.
+        // v287: even though the Tag Report's own list is always pre-filtered to one tag (so the
+        // pill there is visually redundant — every row already carries it "for free" by virtue of
+        // being on this page at all), it's still rendered there: since v284 the pill is the only
+        // entry point into the Reimbursement-with-tag-removal flow (fillReimbursementForm()'s
+        // tagToOffer), and this page's own rows were the one place a matching transaction could be
+        // reached with no pill to tap and no way to trigger that flow.
+        // v284: each pill is independently tappable (data-click="openReimbursementFromTagBadge")
+        // and jumps straight into the Reimbursement form pre-filled from its own transaction — the
+        // same destination as Options → Reimbursement (see openReimbursementFromOptions() /
+        // fillReimbursementForm() below) — reachable from any transaction row instead of only via
+        // Quick View → Options. The pill sits inside the row's own data-click="openTxQuickView"
+        // container, but the delegated click listener resolves e.target.closest("[data-click]") to
+        // the *nearest* match — the pill itself — so tapping it fires only this action, never the
+        // row's, with no stopPropagation() needed.
+        function buildTagBadgesHTML(tags, txId) {
+            if (!Array.isArray(tags) || tags.length === 0) return "";
+            return tags.map(name => `<span data-click="openReimbursementFromTagBadge" data-id="${escapeHtml(txId)}" data-tag="${escapeHtml(name)}" style="font-size:0.62rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap; display:inline-block; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">🔖 ${escapeHtml(name)}</span>`).join("");
+        }
+
+        // v286: an expense that already has a Refund/Reimbursement entry against it (some income
+        // record with isRefund:true and refundOf === this expense's id — set by
+        // openRefundOrReimbursementFromOptions()/fillReimbursementForm(), the same link the isRefund
+        // report math already relies on) — no new field needed, this just looks the existing link
+        // up from the other side.
+        // v291: a bulk settlement (see openClaimSettleModal()/handleClaimSettleSubmit()) links
+        // back to EVERY bill it covers via refundOfIds (an array), not just the single refundOf
+        // id a one-bill Reimbursement/Refund uses — so this checks both, matching either style of
+        // link. refundOf is still also set (to the first covered bill) on a bulk settlement purely
+        // for any older code path that might only ever read that field.
+        function findReimbursementFor(txId, txs) {
+            return txs.find(t => t.isRefund && (t.refundOf === txId || (Array.isArray(t.refundOfIds) && t.refundOfIds.includes(txId))));
+        }
+
+        // v286: small "✅ Claimed"/"✅ Refunded" pill on an expense that's already been settled —
+        // shown once its Reimbursement/Refund entry exists, regardless of whether the tag that
+        // triggered it (buildTagBadgesHTML() above) is still attached or was removed via the
+        // "remove this tag" toggle (fillReimbursementForm()/handleTransactionSubmitMobile()). Tapping
+        // it opens Quick View on that reimbursement entry itself (data-click="openTxQuickView",
+        // the same action + dataset shape every other row already uses), so this needs no new
+        // click handler of its own.
+        function buildClaimedBadgeHTML(tx, txs) {
+            // v295: also shown on a Claims Receivable claim (type "transfer"), not just an
+            // ordinary expense — see the account-based claim redesign.
+            if (tx.type !== "expense" && tx.type !== "transfer") return "";
+            const reimbursement = findReimbursementFor(tx.id, txs);
+            if (!reimbursement) return "";
+            const label = reimbursement.refundReason === "reimbursement" ? "Claimed" : "Refunded";
+            return `<span data-click="openTxQuickView" data-type="${escapeHtml(reimbursement.type)}" data-id="${escapeHtml(reimbursement.id)}" style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap; display:inline-block; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">✅ ${label}</span>`;
+        }
+
         // Draws the compact "Recent Transactions" list on the dashboard — a small slice of
         // Income/Expense entries (never Transfers) filtered/limited per the settings panel above it.
         function renderRecentTransactionsWidget(accounts, txs) {
@@ -1935,7 +2051,7 @@
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
-                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
+                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(displayCat)}]</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
                             ${notesLine}
@@ -1946,6 +2062,78 @@
                     </div>
                 `;
             }).join("");
+        }
+
+        // v281: Dashboard "Tag Reminders" widget — one row per tag with showOnDashboard=true that
+        // currently has at least one matching transaction. Deliberately reuses the exact same
+        // "tags.includes(name)" filter and refund-nets-against-expense convention as the Spending
+        // by Tag report (renderTagReportPage()) rather than a second query mechanism — see that
+        // function's comments. This widget is intentionally dumb: it does NOT know anything about
+        // reimbursement/settlement status — a row simply reflects however many transactions still
+        // carry the tag right now, and disappears on its own once the user removes the tag from
+        // the last matching transaction (e.g. after settling a claim via Reimbursement + editing
+        // the transaction to drop the tag) — no separate "resolved" flag anywhere.
+        function renderTagReminderWidget(txs, accounts) {
+            const wrap = document.getElementById("dashboardTagWidget");
+            const list = document.getElementById("tagReminderList");
+            if (!wrap || !list) return;
+
+            const rows = dynamicTags
+                .filter(tag => tag.showOnDashboard === true)
+                .map(tag => {
+                    const matching = txs.filter(t => Array.isArray(t.tags) && t.tags.includes(tag.name));
+                    if (matching.length === 0) return null;
+                    let expenseTotal = 0;
+                    matching.forEach(t => {
+                        const isRefundCredit = t.type === "income" && t.isRefund;
+                        // v295: a tagged Transfer only ever exists as an unsettled claim into
+                        // Claims Receivable (the only Transfer this app allows tags on at all —
+                        // see updateTxTagsRowVisibility()) — counted here the same way an expense
+                        // is, so the total shown is "amount still outstanding", not RM0.00.
+                        if (t.type === "expense" || t.type === "transfer" || isRefundCredit) {
+                            const tBase = convertTxAmountToBase(t, accounts);
+                            expenseTotal += isRefundCredit ? -tBase : tBase;
+                        }
+                    });
+                    return { name: tag.name, count: matching.length, expenseTotal };
+                })
+                .filter(Boolean);
+
+            wrap.style.display = rows.length ? "" : "none";
+            if (rows.length === 0) return;
+
+            list.innerHTML = rows.map(r => `
+                <div class="config-item" data-click="openTagReminderRow" data-name="${escapeHtml(r.name)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">
+                    <span class="category-display-badge">🔖 <strong>${escapeHtml(r.name)}</strong></span>
+                    <span style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">
+                        ${r.count} item${r.count === 1 ? "" : "s"} · ${formatCurrency(r.expenseTotal, baseCurrency)}
+                    </span>
+                </div>
+            `).join("");
+        }
+
+        // v283: tapping a specific Tag Reminders row jumps straight into the Spending by Tag
+        // report pre-filtered to that tag, instead of landing on an empty report and making the
+        // user pick it again from the dropdown. Deliberately does NOT call
+        // navigateToTagReportPage() — that function already fires its own un-awaited
+        // renderTagReportPage() call, and firing a second overlapping render while also setting
+        // the select's value would risk a race between the two (whichever finishes last wins the
+        // redraw) rather than reliably landing on this tag. This sets the select once, then
+        // renders exactly once itself.
+        function navigateToTagReportForTag(name) {
+            if (!name) return;
+            workspaceScrollY = window.scrollY;
+            showPage("page-tag-report");
+            window.scrollTo(0, 0);
+            pushVirtualState("tag-report");
+            populateTagReportTagSelect();
+            const sel = document.getElementById("tagReportTagSelect");
+            if (sel) sel.value = name;
+            renderTagReportPage();
+        }
+
+        function openTagReminderRow(el) {
+            navigateToTagReportForTag(el.dataset.name);
         }
 
         // v224: single toggle for the relocated Dashboard Widgets settings panel (Setting hub) —
@@ -2347,7 +2535,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-attachment-review", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -2378,6 +2566,7 @@
                 case "page-backup": return "Export & Import";
                 case "page-autolock": return "Auto-Lock Settings";
                 case "page-database": return "Database";
+                case "page-attachment-review": return "Review Attachments";
                 case "page-total-summary": return "Total Bill Summary";
                 case "page-spending-breakdown": return "Spending Breakdown";
                 case "page-income-breakdown": return "Income Breakdown";
@@ -2764,13 +2953,20 @@
             // Preset the src account to whichever account this Activity page belongs to, so the
             // form opens ready to log against it rather than the stored default payment account.
             const presetAccountId = activeLedgerAccountView !== "all" ? activeLedgerAccountView : null;
+            // v295: "Claim" routes to openClaimEntryForm() instead of the plain openTransactionForm()
+            // every other option here uses — see that function's own comment.
+            if (el.dataset.type === "claim") {
+                openClaimEntryForm(presetAccountId);
+                return;
+            }
             openTransactionForm(el.dataset.type, null, presetAccountId);
         }
 
         // Dashboard "Quick Transaction Entry" speed-dial FAB (v173) — same open/close/choose
-        // shape as the Account Activity page's quick-add sheet above, but with a 4th option
-        // (Salary, routing to openSalaryEntryForm() instead of openTransactionForm()) and no
-        // preset account, matching what the old 4-button actions-bar row used to do.
+        // shape as the Account Activity page's quick-add sheet above, but with extra options
+        // (Salary → openSalaryEntryForm(), Claim (v295) → openClaimEntryForm(), instead of
+        // openTransactionForm()) and no preset account, matching what the old 4-button
+        // actions-bar row used to do.
         function toggleDashboardQuickAddSheet() {
             const sheet = document.getElementById("dashboardQuickAddSheet");
             const isOpen = sheet.style.display === "flex";
@@ -2790,6 +2986,8 @@
             const action = el.dataset.action;
             if (action === "salary") {
                 openSalaryEntryForm();
+            } else if (action === "claim") {
+                openClaimEntryForm();
             } else {
                 openTransactionForm(action);
             }
@@ -5862,6 +6060,14 @@
             if (!document.getElementById("page-budget").classList.contains("hidden")) {
                 await renderBudgetPage();
             }
+            // v288: without this, saving a Reimbursement from the Spending by Tag page's own pill
+            // (openReimbursementFromTagBadge()) removed the tag in the DB immediately, but this
+            // page kept showing the just-claimed row until the user backed out and back in (the
+            // only thing that had been calling renderTagReportPage() again) — same
+            // "refresh whichever page is currently visible" convention as Accounts/Budget above.
+            if (!document.getElementById("page-tag-report").classList.contains("hidden")) {
+                await renderTagReportPage();
+            }
             await refreshFundActivityPageIfVisible();
             await refreshCurrencyActivityPageIfVisible();
         }
@@ -8246,15 +8452,34 @@
             dynamicCategories = customCats.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         }
 
-        // --- TAGS SYSTEM (v257) ---
+        // --- TAGS SYSTEM (v257, showOnDashboard added v281) ---
         // Trip/claim labels (e.g. "Japan Holiday Aug 2026", "Expense Claim — Client X") a
         // transaction can carry alongside its Category — see the Tags row on the Add/Edit
         // Transaction form and the "Spending by Tag" report. Deliberately the simplest possible
-        // managed list (name only, alphabetical, no reorder) since a tag is just a label, not
-        // something needing its own icon/type/parent like Categories.
+        // managed list (name + optional showOnDashboard flag, alphabetical, no reorder) since a
+        // tag is just a label, not something needing its own icon/type/parent like Categories.
+        // showOnDashboard (v281): opts a tag into the Dashboard "Tag Reminders" widget — see
+        // renderTagReminderWidget(). Tags created on-the-fly via createTag() below default to it
+        // being unset/false (matches how an older tag record with no such field at all reads).
         async function syncAndLoadTags() {
             const tags = await readAllDB(STORES.TAGS);
             dynamicTags = tags.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+        }
+
+        // v290 (redesigned v295): idempotent seed for PENDING_CLAIM_TAG (the auto-tag applied to
+        // every claim Transfer into the Claims Receivable account — see
+        // handleTransactionSubmitMobile()), mirroring
+        // ensureDefaultCategories()'s own convention: matched by EITHER current name OR the
+        // deterministic id this seed would have used, so renaming or deleting it once never
+        // silently recreates it on a later launch.
+        async function ensureDefaultTags() {
+            const existing = await readAllDB(STORES.TAGS);
+            const id = "tag_pending_claim";
+            const alreadyThere = existing.some(t => t.id === id || t.name.toLowerCase() === PENDING_CLAIM_TAG.toLowerCase());
+            if (!alreadyThere) {
+                await writeDB(STORES.TAGS, { id, name: PENDING_CLAIM_TAG, showOnDashboard: true });
+            }
+            await syncAndLoadTags();
         }
 
         // Creates a new tag, or returns the existing one if a case-insensitive match already
@@ -8301,6 +8526,7 @@
             document.getElementById("tagSubmitBtn").textContent = "Save Tag";
             document.getElementById("tagEditId").value = "";
             document.getElementById("tagName").value = "";
+            document.getElementById("tagShowOnDashboard").checked = false;
             openModal("tagModal");
         }
 
@@ -8311,6 +8537,9 @@
             document.getElementById("tagSubmitBtn").textContent = "Save Changes";
             document.getElementById("tagEditId").value = t.id;
             document.getElementById("tagName").value = t.name;
+            // v281: older tags saved before this field existed simply have it undefined —
+            // treated as off, same as everywhere else this flag is read.
+            document.getElementById("tagShowOnDashboard").checked = t.showOnDashboard === true;
             openModal("tagModal");
         }
 
@@ -8324,7 +8553,8 @@
             const editId = document.getElementById("tagEditId").value;
             const dupe = dynamicTags.find(t => t.name.toLowerCase() === name.toLowerCase() && t.id !== editId);
             if (dupe) { alert("A tag with that name already exists."); return; }
-            const record = { id: editId || ("tag_" + Date.now() + "_" + Math.floor(Math.random() * 100000)), name };
+            const showOnDashboard = document.getElementById("tagShowOnDashboard").checked;
+            const record = { id: editId || ("tag_" + Date.now() + "_" + Math.floor(Math.random() * 100000)), name, showOnDashboard };
             try {
                 await writeDB(STORES.TAGS, record);
             } catch (err) {
@@ -8743,6 +8973,31 @@
         // Idempotent: inserts any DEFAULT_CATEGORIES entry not already present
         // (matched case-insensitively by name), so re-running on every launch is safe
         // and never overwrites a category the user has renamed or customised.
+        // v295: idempotent seed for DEFAULT_ACCOUNTS (currently just Claims Receivable) — mirrors
+        // ensureDefaultCategories()'s own pattern. Matched purely by id (never by name) — unlike a
+        // category, this specific account is also referenced directly by CLAIMS_RECEIVABLE_ACCOUNT_ID
+        // throughout the claim-settlement code, so a user renaming it must never cause a second
+        // one to be silently created alongside it (same risk ensureDefaultCategories() had to fix
+        // for renamed categories — matching by id sidesteps it from day one here instead). If the
+        // user deletes the account entirely, the next launch recreates it fresh with a zero
+        // balance — same "still offered going forward, even if removed" behavior categories
+        // already have; nothing here restores any deleted transaction history.
+        async function ensureDefaultAccounts() {
+            const existing = await readAllDB(STORES.ACCOUNTS);
+            const existingIds = new Set(existing.map(a => a.id));
+            for (const a of DEFAULT_ACCOUNTS) {
+                if (existingIds.has(a.id)) continue;
+                await writeDB(STORES.ACCOUNTS, {
+                    id: a.id, name: a.name, type: a.type, group: a.group,
+                    accountRef: "", subgroup: "", linkedAccountId: null, includeInNetWorth: true,
+                    propertyType: "", holdingStartDate: "", tenureType: "", leaseTermYears: 0, leaseExpiryDate: "",
+                    hasRedrawFacility: false, redrawAmount: 0, redrawAsOfDate: "",
+                    creditLimit: 0, statementDay: null, paymentDueDay: null, defaultPaymentAccountId: null,
+                    memberIds: [], initialBalance: 0, currency: baseCurrency
+                });
+            }
+        }
+
         async function ensureDefaultCategories() {
             const existing = await readAllDB(STORES.CATEGORIES);
 
@@ -8815,24 +9070,26 @@
             // which look their parent up by name (case-insensitive) among everything that exists
             // by that point — either already in the DB, or just inserted in the first pass.
             for (const c of missing.filter(c => !c.parent)) {
-                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon, parentId: null });
+                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon, parentId: null, excludeFromSavings: c.excludeFromSavings || false });
             }
             const afterMains = await readAllDB(STORES.CATEGORIES);
             for (const c of missing.filter(c => c.parent)) {
                 const parentRec = afterMains.find(p => p.name.toLowerCase() === c.parent.toLowerCase());
-                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon, parentId: parentRec ? parentRec.id : null });
+                await writeDB(STORES.CATEGORIES, { id: slugify(c.name), name: c.name, type: c.type, icon: c.icon, parentId: parentRec ? parentRec.id : null, excludeFromSavings: c.excludeFromSavings || false });
             }
             await syncAndLoadCategories();
             await migrateOthersCategoryRename();
             await migrateFdInterestIncomeRename();
             await migrateFdInterestDuplicateCleanup();
+            await migrateRemoveEmptyClaimableCategory();
             await migrateStaleDestFieldCleanup();
             await migrateStaleCategoryOnTransfersCleanup();
             await migrateAccountGroupRename();
-            // migrateFdInterestDuplicateCleanup() may have deleted a Categories record (the
-            // legacy "FD Interest" duplicate), so dynamicCategories — loaded further above,
-            // before that migration ran — is re-synced here to reflect the deletion immediately
-            // rather than only on the next full app load.
+            // migrateFdInterestDuplicateCleanup()/migrateRemoveEmptyClaimableCategory() may have
+            // deleted a Categories record (the legacy "FD Interest" duplicate / the retired
+            // "Company Expenses (Claimable)" category), so dynamicCategories — loaded further
+            // above, before either migration ran — is re-synced here to reflect the deletion
+            // immediately rather than only on the next full app load.
             await syncAndLoadCategories();
         }
 
@@ -8902,6 +9159,25 @@
         // unrelated account. That stray `dest` made the record wrongly show up in that other
         // account's ledger too (the per-account view matches on src OR dest). Only `dest` is
         // cleared — the record's real account (`src`), amount, category, etc. are untouched.
+        // One-time cleanup: "Company Expenses (Claimable)" (the old category-based claim-tracking
+        // design, replaced v295 by the Claims Receivable account — see the "v295: money-owed
+        // tracking" comment further up) is no longer seeded and no longer offered in any dropdown,
+        // but an install that already had it before v295 still has that category record sitting in
+        // Manage Categories forever, since removing a name from DEFAULT_CATEGORIES only stops it
+        // being RE-seeded — it was never retroactively deleted from an existing database. Only
+        // ever deletes the category record itself, and only when truly unused (zero transactions
+        // still filed under that exact name) — if any transaction still references it, it's left
+        // alone untouched rather than orphaning real data.
+        async function migrateRemoveEmptyClaimableCategory() {
+            const LEGACY_NAME = "Company Expenses (Claimable)";
+            const cats = await readAllDB(STORES.CATEGORIES);
+            const legacy = cats.find(c => c.name === LEGACY_NAME);
+            if (!legacy) return;
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            if (txs.some(t => t.cat === LEGACY_NAME)) return;
+            await deleteDB(STORES.CATEGORIES, legacy.id);
+        }
+
         async function migrateStaleDestFieldCleanup() {
             const txs = await readAllDB(STORES.TRANSACTIONS);
             for (const t of txs) {
@@ -9036,6 +9312,10 @@
             // lock state a prior Quick View action (Refund, Duplicate) may have left behind — a form
             // opened normally (the "+" buttons, editing a row) must never silently inherit those.
             pendingRefundOf = null;
+            pendingRefundReason = null;
+            pendingRemoveTagName = null;
+            const removeTagWrap = document.getElementById("txRemoveTagWrap");
+            if (removeTagWrap) removeTagWrap.style.display = "none";
             document.getElementById("txCategory").disabled = false;
             // v142: txCategory's own disabled state (Refund flow locks it, see
             // openRefundFromOptions()) doesn't do anything on its own anymore now that picking a
@@ -9108,9 +9388,10 @@
                 // it already is.
                 document.getElementById("txSplitWrap").style.display = "none";
                 // Tags, unlike Split Expenses, ARE editable on an existing record (a chip can be
-                // added/removed on this one leg same as Category/Amount already can be) — only
-                // hidden for Transfers, which were never taggable in the first place.
-                document.getElementById("txTagsRow").style.display = tx.type === "transfer" ? "none" : "block";
+                // added/removed on this one leg same as Category/Amount already can be) — hidden
+                // for Transfers in general, except a Transfer into Claims Receivable (see
+                // updateTxTagsRowVisibility()'s own comment).
+                updateTxTagsRowVisibility();
                 resetTxTagsChips(tx.tags || []);
 
                 document.getElementById("txManualFxToggle").checked = !!tx.manualFxRate;
@@ -9209,7 +9490,7 @@
                 document.getElementById("txChecked").checked = false;
                 // Split Expenses only makes sense for a brand-new Income/Expense entry.
                 document.getElementById("txSplitWrap").style.display = (type === "transfer") ? "none" : "block";
-                document.getElementById("txTagsRow").style.display = (type === "transfer") ? "none" : "block";
+                updateTxTagsRowVisibility();
                 resetTxTagsChips([]);
 
                 // Pre-select the user's default account, if one is set and still exists — new
@@ -9262,6 +9543,20 @@
                     const defaultCat = type === "income" ? defaultIncomeCategory : defaultExpenseCategory;
                     if (defaultCat && [...catSelect.options].some(o => o.value === defaultCat)) {
                         catSelect.value = defaultCat;
+                    }
+
+                    // v298: opening this form via the "+" FAB on an FD account's own Activity page
+                    // (see quickAddChooseType()/presetSrcAccountId above) is overwhelmingly going to
+                    // be logging that FD's own interest payout — so for Income specifically, this
+                    // takes priority over the general default-income-category setting above rather
+                    // than falling back to the alphabetically-first option. Scoped narrowly to "the
+                    // preset account is an FD account" so this never fires for an ordinary account's
+                    // own Income quick-add.
+                    if (type === "income" && presetSrcAccountId) {
+                        const presetAcc = accounts.find(a => a.id === presetSrcAccountId);
+                        if (presetAcc && presetAcc.type === "fd" && [...catSelect.options].some(o => o.value === "FD Interest Income")) {
+                            catSelect.value = "FD Interest Income";
+                        }
                     }
                 }
 
@@ -9797,7 +10092,12 @@
                 atts = [{ name: "Receipt.jpg", mime: "image/jpeg", data: el.dataset.legacyImage, legacy: true }];
             }
             if (atts.length === 0) return;
-            if (atts.length === 1) { openAttachment(atts[0]); return; }
+            // v279: which transaction this badge belongs to — needed so Delete (inside the
+            // viewer this can open) knows which record to update. See the data-id addition on
+            // the receiptBadge span in renderApp()'s ledger-row builder.
+            const txId = el.dataset.id ? Number(el.dataset.id) : null;
+            txAttachmentsPickerTxId = txId;
+            if (atts.length === 1) { openAttachment(atts[0], txId); return; }
 
             const list = document.getElementById("txAttachmentsPickerList");
             list.innerHTML = atts.map((att, idx) => `
@@ -9812,6 +10112,10 @@
             openModal("txAttachmentsPickerModal");
         }
         let txAttachmentsPickerCurrent = [];
+        // v279: which transaction owns whatever's currently sitting in txAttachmentsPickerCurrent
+        // — set alongside it at every call site (openTxAttachmentsBadge, openTxQuickView) so
+        // openAttachment() always knows which transaction record to update if Delete is used.
+        let txAttachmentsPickerTxId = null;
 
         function openAttachmentFromPicker(el) {
             const idx = parseInt(el.dataset.idx, 10);
@@ -9835,7 +10139,7 @@
             // throughout the app for "close A, then open B" (see closeModalAndThen and its other
             // call sites, e.g. editTransactionFromOptions). Contrast with openAttachmentFromQuickView
             // below, which deliberately does NOT close its parent modal first.
-            closeModalAndThen("txAttachmentsPickerModal", () => openAttachment(att));
+            closeModalAndThen("txAttachmentsPickerModal", () => openAttachment(att, txAttachmentsPickerTxId));
         }
 
         // Used by the inline attachment list rendered directly inside txQuickViewModal (see
@@ -9845,7 +10149,7 @@
         function openAttachmentFromQuickView(el) {
             const idx = parseInt(el.dataset.idx, 10);
             const att = txAttachmentsPickerCurrent[idx];
-            if (att) openAttachment(att);
+            if (att) openAttachment(att, activeQuickViewTxId);
         }
 
         // Deletes every IndexedDB attachment blob referenced by a transaction — used wherever a
@@ -9862,14 +10166,27 @@
             }
         }
 
+        // v279: which attachment/transaction the viewer is currently showing — set by
+        // openAttachment() below, read by handleDeleteAttachmentFromViewer(). null/null whenever
+        // nothing's open, or txId came in null (shouldn't normally happen now every call site
+        // threads one through, but handleDeleteAttachmentFromViewer guards on it anyway).
+        let activeAttachmentViewerTxId = null;
+        let activeAttachmentViewerAtt = null;
+
         // Resolves an attachment's full bytes and renders it into attachmentViewerModal — images
         // directly via <img>, PDFs page-by-page onto <canvas> via pdf.js (never handed to an
         // <iframe>/native plugin, so rendering is identical across every platform and no
         // PDF-embedded JavaScript is ever executed — pdf.js only reads page content). Accepts
         // either a lightweight ref ({id, ...}, resolved from IndexedDB) or one already carrying
         // its data inline (a legacy single-image entry, or a not-yet-saved temp attachment).
-        async function openAttachment(att) {
+        // v279: txId — the owning transaction's id, threaded through by every call site — lets
+        // the Delete button below know which record to update; not needed for viewing/download.
+        async function openAttachment(att, txId) {
             if (!att) return;
+            activeAttachmentViewerTxId = txId != null ? txId : null;
+            activeAttachmentViewerAtt = att;
+            const delBtn = document.getElementById("btnDeleteAttachment");
+            if (delBtn) delBtn.style.display = (activeAttachmentViewerTxId != null) ? "" : "none";
             const body = document.getElementById("attachmentViewerBody");
             body.innerHTML = "<p style=\"font-size:0.85rem; color:var(--text-muted);\">Loading…</p>";
             document.getElementById("attachmentViewerTitle").textContent = att.name || "Attachment";
@@ -9939,7 +10256,68 @@
             }
         }
 
-        // Determines whether this transaction is depositing funds INTO a Fixed Deposit account
+        // v279: deletes ONE specific attachment (photo/PDF) from a transaction — the "Delete"
+        // button added to attachmentViewerModal alongside Download/Close, for the Attachment
+        // Review workflow (review oldest attachments, open one, delete it once no longer needed).
+        // Always re-confirms via the shared customConfirm() modal — same convention as every
+        // other destructive action in the app (deleteTransactionById, removeAccount, etc.) —
+        // since a deleted attachment has no undo. Only the attachment is removed; the
+        // transaction record itself is untouched (still shows its amount/category/notes/etc as
+        // before) — deliberately no "cleaned up" placeholder text on the row, since the receiptBadge
+        // simply stops appearing once attachments/image are both empty, same as a transaction
+        // that never had one.
+        async function handleDeleteAttachmentFromViewer() {
+            const txId = activeAttachmentViewerTxId;
+            const att = activeAttachmentViewerAtt;
+            if (txId == null || !att) return;
+
+            const ok = await customConfirm(`Permanently delete "${att.name || "this attachment"}"? This cannot be undone — make sure you've exported a backup first if you want to keep a copy.`);
+            if (!ok) return;
+
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = txs.find(t => t.id === txId);
+            if (tx) {
+                if (Array.isArray(tx.attachments) && tx.attachments.length > 0 && att.id != null) {
+                    const beforeCount = tx.attachments.length;
+                    tx.attachments = tx.attachments.filter(a => a.id !== att.id);
+                    if (tx.attachments.length !== beforeCount) {
+                        try { await deleteDB(STORES.ATTACHMENTS, att.id); } catch (err) { /* non-fatal — record already updated */ }
+                    }
+                } else if (att.legacy || (tx.image && !Array.isArray(tx.attachments))) {
+                    // Legacy pre-v121 single inline image field — nothing in STORES.ATTACHMENTS
+                    // to delete, just clear the field itself.
+                    tx.image = null;
+                }
+                await writeDB(STORES.TRANSACTIONS, tx);
+            }
+
+            activeAttachmentViewerTxId = null;
+            activeAttachmentViewerAtt = null;
+
+            closeModalAndThen("attachmentViewerModal", async () => {
+                showToast("🗑️ Attachment deleted");
+                const qvModal = document.getElementById("txQuickViewModal");
+                if (qvModal.classList.contains("active") && activeQuickViewTxId === txId) {
+                    // Rebuild Quick View's fields in place (attachments list included) — it's
+                    // already open underneath, so this must NOT call openModal again.
+                    await openTxQuickView({ dataset: { id: String(txId) } }, { skipModalOpen: true });
+                } else {
+                    // Reached via the multi-attachment picker instead (openTxAttachmentsBadge on
+                    // a ledger row with 2+ attachments) — that list has no partial-refresh wiring,
+                    // so it's simplest (and safest, avoiding a stale tappable-but-now-missing row)
+                    // to just close it too, returning straight to whatever's underneath.
+                    const pickerModal = document.getElementById("txAttachmentsPickerModal");
+                    if (pickerModal.classList.contains("active")) closeModal("txAttachmentsPickerModal");
+                }
+                await refreshAfterTransactionChange();
+                if (!document.getElementById("page-database").classList.contains("hidden")) {
+                    calculateStorageMetrics();
+                }
+                if (!document.getElementById("page-attachment-review").classList.contains("hidden")) {
+                    renderAttachmentReviewPage();
+                }
+            });
+        }
         // (income → src account, or transfer → dest account), and shows/hides the FD terms block
         // accordingly. Takes an already-loaded accounts array to avoid redundant DB reads.
         function updateTxFdFieldsVisibilitySync(accounts) {
@@ -10112,6 +10490,22 @@
             updateTxFdLinkVisibility(accounts);
             updateTxManualFxVisibility();
             updateTxTransferFxVisibility();
+            updateTxTagsRowVisibility();
+        }
+
+        // v295: Tags row visibility. Transfers are still never taggable in general (see the
+        // original v257 comment on why — a Transfer's "meaning" is just moving money between two
+        // of your own accounts, so a trip/claim label doesn't obviously belong to it) EXCEPT one
+        // narrow, deliberate carve-out: a Transfer whose destination is the Claims Receivable
+        // account IS taggable, since PENDING_CLAIM_TAG is how the whole claim-tracking/Settle
+        // Multiple Bills flow finds its candidates. Called on every srcAccount/destAccount change
+        // (via syncTransactionCurrency()) so switching the destination account live-updates this,
+        // not just on the type toggle.
+        function updateTxTagsRowVisibility() {
+            const type = document.getElementById("txType").value;
+            const destId = document.getElementById("destAccount").value;
+            const show = type !== "transfer" || destId === CLAIMS_RECEIVABLE_ACCOUNT_ID;
+            document.getElementById("txTagsRow").style.display = show ? "block" : "none";
         }
 
         // Auto-calculates the FD placement's maturity date from commencing date + tenure, and
@@ -10695,7 +11089,10 @@
                 // Transfers (the Tags row is hidden for them, same as `cat` being forced null
                 // above) rather than trusting whatever txTagsSelected happens to still hold from
                 // a previous Income/Expense entry this session.
-                tags: document.getElementById("txType").value === "transfer" ? [] : [...txTagsSelected],
+                // v295: taggable Transfers are the single narrow exception (see
+                // updateTxTagsRowVisibility()'s comment) — a Transfer into Claims Receivable keeps
+                // whatever chips are selected; every other Transfer still forces this empty.
+                tags: (document.getElementById("txType").value === "transfer" && document.getElementById("destAccount").value !== CLAIMS_RECEIVABLE_ACCOUNT_ID) ? [] : [...txTagsSelected],
                 checked: document.getElementById("txChecked").checked,
                 fdReferenceNo: null,
                 fdStartDate: null,
@@ -10730,20 +11127,50 @@
                 // (this record object never set splitGroupId at all before v92). Carry the
                 // existing value forward on every edit; stays undefined for a brand-new entry,
                 // where the split-save branch below assigns its own freshly generated one anyway.
-                splitGroupId: existingTxForEdit ? existingTxForEdit.splitGroupId : undefined
+                splitGroupId: existingTxForEdit ? existingTxForEdit.splitGroupId : undefined,
+                // v281 bug fix: this record object is built fresh field-by-field (no
+                // ...existingTxForEdit spread), so any field not explicitly listed here is wiped
+                // the moment an existing entry is edited and re-saved (writeDB() is a full put(),
+                // same trap the v92 splitGroupId comment above already documents). isRefund/
+                // refundOf/refundReason were missing from this list — editing ANY field of an
+                // existing Refund/Reimbursement entry (date, amount, notes, anything) via
+                // "✏️ Edit transaction" was silently un-flagging it as a refund, which would have
+                // also silently changed that category's totals in every report that special-cases
+                // isRefund. Carried forward here exactly like payee/splitGroupId; the
+                // pendingRefundOf block below still overrides all three for the one case that
+                // actually needs a fresh value — creating a brand-new refund/reimbursement via the
+                // Options menu buttons (existingTxForEdit is null in that case).
+                isRefund: existingTxForEdit ? existingTxForEdit.isRefund : undefined,
+                refundOf: existingTxForEdit ? existingTxForEdit.refundOf : undefined,
+                refundReason: existingTxForEdit ? existingTxForEdit.refundReason : undefined
             };
 
-            // v88: Refund — set only by openRefundFromOptions(), which opens this same form as a
-            // plain Income entry with the category locked to the original expense's category.
-            // Tagging it here (rather than a separate save path) means it inherits every other
-            // field/validation above for free; renderApp()/renderSavingsStatement()/the Spending
-            // & Income Breakdown pages special-case isRefund so it reduces the original expense
-            // category instead of counting as income (see those functions), while
-            // computeAccountBalances() needs no change at all — crediting the account back is
-            // exactly what an ordinary income record already does.
+            // v88: Refund — set only by openRefundFromOptions()/openReimbursementFromOptions()
+            // (v281), which open this same form as a plain Income entry with the category locked
+            // to the original expense's category. Tagging it here (rather than a separate save
+            // path) means it inherits every other field/validation above for free;
+            // renderApp()/renderSavingsStatement()/the Spending & Income Breakdown pages special-
+            // case isRefund so it reduces the original expense category instead of counting as
+            // income (see those functions), while computeAccountBalances() needs no change at
+            // all — crediting the account back is exactly what an ordinary income record already
+            // does. refundReason (v281, "refund"|"reimbursement") is a pure display label read
+            // only by the Ledger list's refundBadge — never by any of the total/report math above,
+            // which only ever checks isRefund.
             if (pendingRefundOf !== null && record.type === "income") {
                 record.isRefund = true;
                 record.refundOf = pendingRefundOf;
+                record.refundReason = pendingRefundReason || "refund";
+            }
+
+            // v295 (was v290, category-based): every Transfer into the Claims Receivable account
+            // auto-gets PENDING_CLAIM_TAG — no manual tagging step needed for it to show up in the
+            // Dashboard's Tag Reminders widget/Spending by Tag report, or in the Settle Multiple
+            // Bills candidate list. Deliberately only ADDS the tag here — it never strips it back
+            // off if the destination account is later edited away, matching how every other tag
+            // removal in this app is a deliberate user action (the "remove this tag" toggle in
+            // fillReimbursementForm()), not automatic.
+            if (record.type === "transfer" && record.dest === CLAIMS_RECEIVABLE_ACCOUNT_ID && !record.tags.includes(PENDING_CLAIM_TAG)) {
+                record.tags = [...record.tags, PENDING_CLAIM_TAG];
             }
 
             const fdFieldsVisible = document.getElementById("txFdFieldsWrap").style.display !== "none";
@@ -10794,6 +11221,14 @@
                         // attaching the same files to every split part would be misleading.
                         extraRecord.image = null;
                         extraRecord.attachments = [];
+                        // v290: a split leg's own category can differ from the main row's, so it's
+                        // re-checked independently here — Object.assign only shallow-copies
+                        // `record.tags`' array reference, so this clones it first rather than
+                        // mutating (and thus corrupting) every other leg's shared array in place.
+                        // (v295: the auto-tag-on-category rule this used to also re-check here was
+                        // removed — claims are now Transfers, and Split Expenses is only ever
+                        // reachable for Income/Expense, so a split leg can never be a claim.)
+                        extraRecord.tags = [...record.tags];
                         await writeDB(STORES.TRANSACTIONS, extraRecord);
                     }
                 } else {
@@ -10811,6 +11246,24 @@
             for (const id of attachmentIdsToDelete) {
                 try { await deleteDB(STORES.ATTACHMENTS, id); } catch (err) { /* non-fatal — a leftover blob costs storage, not correctness */ }
             }
+            // v285: this reimbursement was opened via a tag pill (see openReimbursementFromTagBadge()/
+            // fillReimbursementForm()) and the "remove this tag" toggle is still checked at save
+            // time (re-read live here, not just its initial default) — drop that tag from the
+            // *original* expense (pendingRefundOf) now that the claim is settled, so it falls off
+            // the Tag Reminders widget/Spending by Tag report on its own. Guarded on record.type
+            // === "income" the same way the isRefund block above is, since pendingRefundOf/
+            // pendingRemoveTagName only ever apply to that flow.
+            const removeTagToggle = document.getElementById("txRemoveTagToggle");
+            if (pendingRefundOf !== null && record.type === "income" && pendingRemoveTagName && removeTagToggle && removeTagToggle.checked) {
+                try {
+                    const origTx = await readAllDB(STORES.TRANSACTIONS).then(all => all.find(t => t.id === pendingRefundOf));
+                    if (origTx && Array.isArray(origTx.tags) && origTx.tags.includes(pendingRemoveTagName)) {
+                        origTx.tags = origTx.tags.filter(tg => tg !== pendingRemoveTagName);
+                        await writeDB(STORES.TRANSACTIONS, origTx);
+                    }
+                } catch (err) { /* non-fatal — the reimbursement itself already saved fine */ }
+            }
+            pendingRemoveTagName = null;
             pendingRefundOf = null;
             closeModal("txModal");
             await refreshAfterTransactionChange();
@@ -10886,6 +11339,29 @@
             await handleSalarySchemeChange();
             recalcSalaryPreview();
             openModal("salaryModal");
+        }
+
+        // --- CLAIM ENTRY (v295) — quick-entry shortcut for logging money owed back to you (a
+        // company expense claim, money lent to someone, etc.) against
+        // Claims Receivable, so the daily habit stays close to "pick account, amount,
+        // description" even though it's now a Transfer under the hood rather than a plain
+        // Expense. Opens the ordinary Transfer form pre-filled with Claims Receivable as the
+        // destination (still fully editable — a user could repurpose this into an ordinary
+        // account-to-account Transfer, at which point PENDING_CLAIM_TAG's forced auto-add in
+        // handleTransactionSubmitMobile() simply won't apply since the destination changed) and
+        // the Pending Claim tag chip pre-added (a convenience default only — removing the chip
+        // here does NOT skip the auto-tag; see the "v295 (was v290...)" comment there).
+        async function openClaimEntryForm(presetAccountId = null) {
+            // Guards against the one nonsensical case: opening this from Claims Receivable's own
+            // Activity page would otherwise preset src = dest = the same account.
+            const safePreset = presetAccountId === CLAIMS_RECEIVABLE_ACCOUNT_ID ? null : presetAccountId;
+            await openTransactionForm("transfer", null, safePreset);
+            document.getElementById("destAccount").value = CLAIMS_RECEIVABLE_ACCOUNT_ID;
+            syncAccountPickerButtonText("destAccount");
+            document.getElementById("txModalTitle").textContent = "Lend / Claim";
+            resetTxTagsChips([PENDING_CLAIM_TAG]);
+            updateTxTagsRowVisibility();
+            syncTransactionCurrency();
         }
 
         // Builds the two account <select>s (Bank Account, EPF/CPF Account) — always with EVERY
@@ -11197,7 +11673,12 @@
         // (matching a credit-card-style "tally against statement" workflow), and a ⋮ menu for
         // Duplicate / Edit / Refund / Delete. "Edit transaction" from that menu still opens the
         // exact same txModal as before; nothing about editing itself changed.
-        async function openTxQuickView(el) {
+        // v279 param: opts.skipModalOpen — when true, rebuilds every field in place WITHOUT
+        // calling openModal("txQuickViewModal") again, for the one case that needs a refresh
+        // while Quick View is already open+active underneath the attachment viewer (deleting an
+        // attachment via handleDeleteAttachmentFromViewer() below) — calling openModal a second
+        // time would push a duplicate modalStack/history entry for a modal that's already open.
+        async function openTxQuickView(el, opts = {}) {
             const id = Number(el.dataset.id);
             if (!id) return;
             const txs = await readAllDB(STORES.TRANSACTIONS);
@@ -11238,7 +11719,14 @@
             if (tx.type === "transfer") {
                 destLine = `<div>To Account: ${tx.dest ? accountName(tx.dest) : "(unknown)"}</div>`;
             }
-            const refundLine = tx.isRefund ? `<div style="color:var(--income-color); font-weight:700;">↩️ Refund entry</div>` : "";
+            // v281: matches the refundBadge convention in the Ledger list renderer — same
+            // refundReason check, same fallback to "Refund entry" for older records saved before
+            // this field existed.
+            const refundLine = tx.isRefund
+                ? (tx.refundReason === "reimbursement"
+                    ? `<div style="color:var(--income-color); font-weight:700;">💰 Reimbursement entry</div>`
+                    : `<div style="color:var(--income-color); font-weight:700;">↩️ Refund entry</div>`)
+                : "";
 
             // v91: a Split Expense group's breakdown — one line per category+amount part,
             // matching the reference screenshots — shown above the Account/To/Notes fields
@@ -11281,25 +11769,74 @@
                 </div>
             ` : "";
 
+            // v291: each tag the transaction carries, shown as a small removable pill — lets a
+            // tag whose whole purpose is a one-off check (e.g. "did this bill get paid from my
+            // salary/allowance rather than a company claim") be dropped right from here once it's
+            // served its purpose, without detouring through the Reimbursement flow (that flow's
+            // own "remove this tag" toggle — fillReimbursementForm()/handleTransactionSubmitMobile()
+            // — only ever offers the ONE tag that opened it, and only mid-save).
+            const tagsLineHTML = (Array.isArray(tx.tags) && tx.tags.length) ? `
+                <div style="margin-top:4px; display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
+                    <span>Tags:</span>
+                    ${tx.tags.map(name => `
+                        <span style="font-size:0.72rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:2px 5px 2px 7px; border-radius:4px; white-space:nowrap; display:inline-flex; align-items:center; gap:4px;">
+                            🔖 ${escapeHtml(name)}
+                            <span data-click="removeTagFromQuickViewTx" data-tag="${escapeHtml(name)}" title="Remove this tag" style="cursor:pointer; font-weight:900; color:#4c1d95; padding:0 2px;">✕</span>
+                        </span>
+                    `).join("")}
+                </div>
+            ` : "";
+
             document.getElementById("txQuickViewDetails").innerHTML = `
                 ${splitBreakdownHTML}
                 <div>Account: ${accountName(tx.src)}</div>
                 ${destLine}
                 ${(!splitInfo && tx.cat) ? `<div>Category: ${escapeHtml(tx.cat)}</div>` : ""}
                 <div>Notes: ${tx.notes ? escapeHtml(tx.notes) : "-"}</div>
+                ${tagsLineHTML}
                 ${refundLine}
                 ${attachmentsHTML}
             `;
 
             updateTxQuickViewCheckedBtn(!!tx.checked);
-            // Refund only makes sense for an ordinary expense — not for a Transfer, not for
-            // another refund (no "refund of a refund"), and not for Income. Split Expenses are
-            // only ever created for a brand-new Income/Expense entry (never a refund entry, and
-            // refunds never offer the split UI — see openRefundFromOptions()), so every member of
-            // a group shares the same type/isRefund as the representative checked here.
-            document.getElementById("txOptionsRefundBtn").style.display = (tx.type === "expense" && !tx.isRefund) ? "flex" : "none";
+            // Refund/Reimbursement only make sense for an ordinary expense — not for a Transfer,
+            // not for another refund (no "refund of a refund"), and not for Income. Split
+            // Expenses are only ever created for a brand-new Income/Expense entry (never a refund
+            // entry, and refunds never offer the split UI — see
+            // openRefundOrReimbursementFromOptions()), so every member of a group shares the same
+            // type/isRefund as the representative checked here.
+            const showRefundButtons = (tx.type === "expense" && !tx.isRefund) ? "flex" : "none";
+            document.getElementById("txOptionsRefundBtn").style.display = showRefundButtons;
+            document.getElementById("txOptionsReimbursementBtn").style.display = showRefundButtons;
 
-            openModal("txQuickViewModal");
+            if (!opts.skipModalOpen) openModal("txQuickViewModal");
+        }
+
+        // v291: removes a single tag pill (see the tagsLineHTML block above) from the transaction
+        // currently open in Quick View. Rebuilds Quick View's fields in place afterward — same
+        // "already open underneath, don't call openModal again" convention
+        // handleDeleteAttachmentFromViewer() uses — and refreshes every other page/widget that
+        // reads tags (Dashboard Tag Reminders, Spending by Tag, Ledger list pills) via
+        // refreshAfterTransactionChange().
+        async function removeTagFromQuickViewTx(el) {
+            const tagName = el.dataset.tag;
+            const txId = activeQuickViewTxId;
+            if (!txId || !tagName) return;
+            const ok = await customConfirm(`Remove the "${tagName}" tag from this transaction?`);
+            if (!ok) return;
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = txs.find(t => t.id === txId);
+            if (!tx || !Array.isArray(tx.tags) || !tx.tags.includes(tagName)) return;
+            tx.tags = tx.tags.filter(t => t !== tagName);
+            try {
+                await writeDB(STORES.TRANSACTIONS, tx);
+            } catch (err) {
+                alert("Could not remove tag: " + (err && err.message ? err.message : err));
+                return;
+            }
+            showToast(`🔖 "${tagName}" tag removed`);
+            await refreshAfterTransactionChange();
+            await openTxQuickView({ dataset: { id: String(txId) } }, { skipModalOpen: true });
         }
 
         function updateTxQuickViewCheckedBtn(isChecked) {
@@ -11672,7 +12209,78 @@
         // one the refund nets against, not necessarily the original expense's own category.
         // pendingRefundOf (read by handleTransactionSubmitMobile) is the actual flag that makes
         // this save as a refund rather than an ordinary Income entry.
-        function openRefundFromOptions() {
+        // v281: "Refund" and "Reimbursement" are the same underlying flow (isRefund/refundOf,
+        // nets against an Expense category in the report/breakdown/savings math exactly as
+        // described above). Originally shipped storing nothing beyond isRefund/refundOf, but a
+        // separate display badge on the Ledger list (refundBadge) turned out to need to know
+        // which word was used in order to show it back correctly — so `refundReason` ("refund" |
+        // "reimbursement") is now stored too. It remains a pure display label: no report/total
+        // logic anywhere reads it, only isRefund. `label` (capitalized, "Refund"/"Reimbursement")
+        // controls the modal title / prefilled Description text; `reason` (lowercase) is what
+        // actually gets saved via pendingRefundReason. openRefundFromOptions() and
+        // openReimbursementFromOptions() below are both thin wrappers over this.
+        // v284: the actual "fill the Income form as a Refund/Reimbursement" logic, split out of
+        // openRefundOrReimbursementFromOptions() below so the tag-pill entry point (which has no
+        // Quick View/Options modal to close first — see openReimbursementFromTagBadge()) can reuse
+        // it directly instead of routing through closeModalAndThen("txQuickViewModal", ...), which
+        // requires that modal to actually be open+active or its popstate-driven callback never runs.
+        // v285: `tagToOffer` (optional) is the tag name to offer removing from the original
+        // expense once this reimbursement saves — only ever passed by
+        // openReimbursementFromTagBadge(), never by the plain Options → Reimbursement/Refund flow,
+        // which has no single tag in view. Shows/pre-checks #txRemoveTagWrap accordingly; see
+        // handleTransactionSubmitMobile() for where the actual removal happens.
+        async function fillReimbursementForm(tx, label, reason, tagToOffer = null) {
+            await openTransactionForm("income", null);
+            document.getElementById("txDesc").value = `${label}: ${tx.desc}`;
+            document.getElementById("txAmount").value = tx.amount;
+            document.getElementById("txCurrency").value = tx.currency;
+            document.getElementById("srcAccount").value = tx.src || "";
+            syncAccountPickerButtonText("srcAccount"); // v99 — see comment in openTransactionForm().
+
+            // v263: category now pre-fills to the original expense's category but is left
+            // freely selectable (previously forced + disabled — see the removed comment
+            // block just above this function, which the "namesToInclude" call below still
+            // honors by guaranteeing catName itself is always present as an option even if
+            // it isn't among the current Expense categories, e.g. after a rename/delete). A
+            // refund still nets against whatever category ends up chosen here (the
+            // isRefund/t.cat matching described above), so picking a different Expense
+            // category on purpose is safe and simply offsets that category instead.
+            const catSelect = document.getElementById("txCategory");
+            const catName = tx.cat || "Other Expenses";
+            const currentExpenseCats = dynamicCategories.filter(c => c.type === "expense").map(c => c.name);
+            catSelect.innerHTML = buildCategoryOptionsHTML("expense", [...currentExpenseCats, catName]);
+            catSelect.value = catName;
+            catSelect.disabled = false;
+            const catBtn = document.getElementById("txCategoryBtn");
+            catBtn.disabled = false;
+            catBtn.style.opacity = "";
+            syncAccountPickerButtonText("txCategory");
+
+            document.getElementById("txDate").value = todayLocalStr();
+            document.getElementById("txSplitWrap").style.display = "none";
+            syncTransactionCurrency();
+
+            document.getElementById("txModalTitle").textContent = `${label}: ${tx.desc}`;
+            document.getElementById("txSubmitBtn").textContent = `Save ${label}`;
+
+            // Set last — openTransactionForm() itself resets pendingRefundOf/pendingRefundReason
+            // to null on every call, so this has to happen after it returns, not before.
+            pendingRefundOf = tx.id;
+            pendingRefundReason = reason;
+
+            const removeTagWrap = document.getElementById("txRemoveTagWrap");
+            if (tagToOffer && removeTagWrap) {
+                pendingRemoveTagName = tagToOffer;
+                document.getElementById("txRemoveTagLabel").textContent = `🔖 Remove "${tagToOffer}" tag from the original transaction`;
+                document.getElementById("txRemoveTagToggle").checked = true;
+                removeTagWrap.style.display = "";
+            } else {
+                pendingRemoveTagName = null;
+                if (removeTagWrap) removeTagWrap.style.display = "none";
+            }
+        }
+
+        function openRefundOrReimbursementFromOptions(label, reason) {
             const id = activeQuickViewTxId;
             closeTxOptionsMenu(); // v95 fix — see editTransactionFromOptions() above.
             closeModalAndThen("txQuickViewModal", async () => {
@@ -11680,44 +12288,334 @@
                 const txs = await readAllDB(STORES.TRANSACTIONS);
                 const tx = txs.find(t => t.id === id);
                 if (!tx || tx.type !== "expense") return;
-
-                await openTransactionForm("income", null);
-                document.getElementById("txDesc").value = `Refund: ${tx.desc}`;
-                document.getElementById("txAmount").value = tx.amount;
-                document.getElementById("txCurrency").value = tx.currency;
-                document.getElementById("srcAccount").value = tx.src || "";
-                syncAccountPickerButtonText("srcAccount"); // v99 — see comment in openTransactionForm().
-
-                // v263: category now pre-fills to the original expense's category but is left
-                // freely selectable (previously forced + disabled — see the removed comment
-                // block just above this function, which the "namesToInclude" call below still
-                // honors by guaranteeing catName itself is always present as an option even if
-                // it isn't among the current Expense categories, e.g. after a rename/delete). A
-                // refund still nets against whatever category ends up chosen here (the
-                // isRefund/t.cat matching described above), so picking a different Expense
-                // category on purpose is safe and simply offsets that category instead.
-                const catSelect = document.getElementById("txCategory");
-                const catName = tx.cat || "Other Expenses";
-                const currentExpenseCats = dynamicCategories.filter(c => c.type === "expense").map(c => c.name);
-                catSelect.innerHTML = buildCategoryOptionsHTML("expense", [...currentExpenseCats, catName]);
-                catSelect.value = catName;
-                catSelect.disabled = false;
-                const catBtn = document.getElementById("txCategoryBtn");
-                catBtn.disabled = false;
-                catBtn.style.opacity = "";
-                syncAccountPickerButtonText("txCategory");
-
-                document.getElementById("txDate").value = todayLocalStr();
-                document.getElementById("txSplitWrap").style.display = "none";
-                syncTransactionCurrency();
-
-                document.getElementById("txModalTitle").textContent = `Refund: ${tx.desc}`;
-                document.getElementById("txSubmitBtn").textContent = "Save Refund";
-
-                // Set last — openTransactionForm() itself resets pendingRefundOf to null on
-                // every call, so this has to happen after it returns, not before.
-                pendingRefundOf = id;
+                await fillReimbursementForm(tx, label, reason);
             });
+        }
+
+        function openRefundFromOptions() {
+            openRefundOrReimbursementFromOptions("Refund", "refund");
+        }
+
+        function openReimbursementFromOptions() {
+            openRefundOrReimbursementFromOptions("Reimbursement", "reimbursement");
+        }
+
+        // v284: tapping a transaction's "🔖 name" pill (buildTagBadgesHTML() above) now jumps
+        // straight into the Reimbursement form pre-filled from that transaction — the same
+        // destination as Options → Reimbursement (openReimbursementFromOptions() above) — instead
+        // of the Spending by Tag report. No Quick View/Options modal is open behind the pill (it
+        // sits directly on the Dashboard/Ledger row), so this reads the transaction straight off
+        // the pill's own data-id and calls fillReimbursementForm() directly rather than through
+        // closeModalAndThen(), which only fires its callback once "txQuickViewModal" actually pops.
+        // v285: also passes the specific tag name (data-tag) through as fillReimbursementForm()'s
+        // tagToOffer, so "Claim" tagged twice on the same expense alongside e.g. "Japan Trip" only
+        // offers to remove the one pill that was actually tapped.
+        async function openReimbursementFromTagBadge(el) {
+            const id = el.dataset.id;
+            const tagName = el.dataset.tag;
+            if (!id) return;
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = txs.find(t => String(t.id) === String(id));
+            if (!tx) return;
+            // v295: a Claims Receivable claim's "Pending Claim" pill routes into the Settle
+            // Multiple Bills flow instead — that flow already supports settling just one bill
+            // (uncheck the rest) and is the only path that correctly draws down the Claims
+            // Receivable balance; the plain single-item Reimbursement form below only ever
+            // understood Expense-type entries.
+            if (tx.type === "transfer" && tx.dest === CLAIMS_RECEIVABLE_ACCOUNT_ID && tagName === PENDING_CLAIM_TAG) {
+                await openClaimSettleModal();
+                return;
+            }
+            if (tx.type !== "expense") return;
+            await fillReimbursementForm(tx, "Reimbursement", "reimbursement", tagName || null);
+        }
+
+        // --- SETTLE MULTIPLE CLAIMS (v291, redesigned v295) — see claimSettleModal's own comment
+        // in index.html for the full record-writing plan. Everything below only ever runs against
+        // unclaimed Transfers into the Claims Receivable account still carrying PENDING_CLAIM_TAG
+        // that don't already have a settlement linked (findReimbursementFor) — i.e. exactly the
+        // bills the "Pending Claim" Spending by Tag view itself is listing.
+
+        // Rounds to cents and treats sub-cent noise as exactly zero — every comparison/variance
+        // calc below goes through this rather than comparing raw floats directly.
+        function claimSettleRound2(n) {
+            return Math.round((n + Number.EPSILON) * 100) / 100;
+        }
+
+        function buildClaimSettleBillListHTML() {
+            if (claimSettleCandidates.length === 0) {
+                return '<p style="font-size:0.75rem; text-align:center; color:var(--text-muted); margin:4px 0;">No unclaimed bills found under Claims Receivable.</p>';
+            }
+            return claimSettleCandidates.map(t => `
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.78rem; padding:4px 2px; cursor:pointer;">
+                    <input type="checkbox" class="claim-settle-bill-checkbox" data-id="${escapeHtml(t.id)}" data-input="recalcClaimSettlePreview" checked style="width:auto; margin:0;">
+                    <span style="flex:1;">${t.date} — ${escapeHtml(t.desc)}</span>
+                    <span style="font-weight:700; white-space:nowrap;">${formatCurrency(t.amount, t.currency)}</span>
+                </label>
+            `).join("");
+        }
+
+        // Mirrors populateSalaryAccountSelects()'s option-building exactly (same emoji prefix /
+        // currency suffix / owner suffix convention as every other account picker in the app —
+        // see openAccountPicker()'s own comment on why this needs to stay visually consistent).
+        // The Claims Receivable account itself is excluded — it's the source of the settlement,
+        // never a sensible "which account received the payment" answer.
+        async function populateClaimSettleAccountSelect() {
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const sorted = sortAccountsByGroupThenName(accounts).filter(a => a.id !== CLAIMS_RECEIVABLE_ACCOUNT_ID);
+            const optionsHTML = sorted.map(a => {
+                const prefix = a.type === "fd" ? "🏦 " : a.type === "multi" ? "💱 " : a.type === "unittrust" ? "📊 " : a.type === "creditcard" ? "💳 " : "";
+                const currLabel = (a.type === "multi" || a.type === "fd" || a.type === "unittrust") ? "" : ` (${escapeHtml(a.currency)})`;
+                const ownerLabel = ` — ${escapeHtml(accountOwnerNamesText(a) + accountRelatedSuffix(a, accounts))}`;
+                return `<option value="${escapeHtml(a.id)}">${prefix}${escapeHtml(a.name)}${currLabel}${ownerLabel}</option>`;
+            }).join("");
+            document.getElementById("claimSettleAccount").innerHTML = optionsHTML;
+            syncAccountPickerButtonText("claimSettleAccount");
+        }
+
+        // Opened only from claimSettleTriggerBtn (see renderTagReportPage()), which is itself only
+        // ever shown while the "Pending Claim" tag is selected — so this can safely assume that's
+        // the tag in play without re-reading the select.
+        async function openClaimSettleModal() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            claimSettleCandidates = txs
+                .filter(t => t.type === "transfer" && t.dest === CLAIMS_RECEIVABLE_ACCOUNT_ID && Array.isArray(t.tags) && t.tags.includes(PENDING_CLAIM_TAG) && !findReimbursementFor(t.id, txs))
+                .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+            document.getElementById("claimSettleBillList").innerHTML = buildClaimSettleBillListHTML();
+            document.getElementById("claimSettleReceivedAmount").value = "";
+            document.getElementById("claimSettleDate").value = todayLocalStr();
+            await populateClaimSettleAccountSelect();
+
+            const varCatSelect = document.getElementById("claimSettleVarianceCategory");
+            // Pre-seeded with both fallback names up front — recalcClaimSettlePreview() below
+            // rebuilds this with the correct type's options once it knows whether the variance is
+            // a shortfall (expense) or an extra (income), but an empty select would flash briefly
+            // otherwise.
+            varCatSelect.innerHTML = buildCategoryOptionsHTML("expense", ["Other Expenses"]);
+            varCatSelect.value = "Other Expenses";
+
+            recalcClaimSettlePreview();
+            openModal("claimSettleModal");
+        }
+
+        // Live preview: re-sums whichever bills are currently checked, and shows/labels/re-selects
+        // the variance box against (received − selected total). Fires on every checkbox toggle and
+        // every keystroke in the Amount Received field (see data-input="recalcClaimSettlePreview"
+        // on both in index.html) — cheap enough to just rebuild from claimSettleCandidates each
+        // time rather than tracking a running total incrementally.
+        function recalcClaimSettlePreview() {
+            const checkboxes = Array.from(document.querySelectorAll("#claimSettleBillList .claim-settle-bill-checkbox"));
+            const selectedIds = new Set(checkboxes.filter(cb => cb.checked).map(cb => cb.dataset.id));
+            const selected = claimSettleCandidates.filter(t => selectedIds.has(String(t.id)));
+
+            const currencies = new Set(selected.map(t => t.currency));
+            const warningEl = document.getElementById("claimSettleCurrencyWarning");
+            const mixedCurrencies = currencies.size > 1;
+            if (warningEl) warningEl.style.display = mixedCurrencies ? "" : "none";
+
+            const currency = selected.length ? selected[0].currency : baseCurrency;
+            const selectedTotal = claimSettleRound2(selected.reduce((sum, t) => sum + t.amount, 0));
+            document.getElementById("claimSettleSelectedTotal").textContent = formatCurrency(selectedTotal, currency);
+
+            const received = claimSettleRound2(parseFloat(document.getElementById("claimSettleReceivedAmount").value) || 0);
+            const variance = claimSettleRound2(received - selectedTotal);
+
+            const box = document.getElementById("claimSettleVarianceBox");
+            const label = document.getElementById("claimSettleVarianceLabel");
+            const catLabel = document.getElementById("claimSettleVarianceCategoryLabel");
+            const catSelect = document.getElementById("claimSettleVarianceCategory");
+
+            if (selected.length === 0 || Math.abs(variance) < 0.005) {
+                box.style.display = "none";
+                return;
+            }
+            box.style.display = "";
+            if (variance < 0) {
+                label.innerHTML = `⚠️ Short claim: <strong>${formatCurrency(Math.abs(variance), currency)}</strong> — less was received than these bills add up to. This will be recorded as your own expense.`;
+                catLabel.textContent = "Record the shortfall as";
+                // Only rebuild the select's options (and re-default it) when switching direction
+                // (shortfall ↔ extra) — rebuilding on every keystroke would blow away whichever
+                // category the user already picked for this same direction.
+                if (catSelect.dataset.dir !== "expense") {
+                    catSelect.innerHTML = buildCategoryOptionsHTML("expense", ["Other Expenses"]);
+                    catSelect.value = "Other Expenses";
+                    catSelect.dataset.dir = "expense";
+                }
+            } else {
+                label.innerHTML = `🎉 Extra claim: <strong>${formatCurrency(variance, currency)}</strong> — more was received than these bills add up to. This will be recorded as extra income.`;
+                catLabel.textContent = "Record the extra as";
+                if (catSelect.dataset.dir !== "income") {
+                    catSelect.innerHTML = buildCategoryOptionsHTML("income", ["Other Income"]);
+                    catSelect.value = "Other Income";
+                    catSelect.dataset.dir = "income";
+                }
+            }
+        }
+
+        // Builds the multi-line Notes text for the lump-sum Reimbursement record — every included
+        // bill's date/description/amount, plus the totals and whichever short/extra claim line
+        // applies, so the one settlement transaction stays self-explanatory without having to
+        // cross-reference each original bill individually.
+        function buildClaimSettleNotes(selected, selectedTotal, received, currency, variance) {
+            const lines = selected.map(t => `${t.date} — ${t.desc} — ${formatCurrency(t.amount, t.currency)}`);
+            lines.push("");
+            lines.push(`Total bills: ${formatCurrency(selectedTotal, currency)}`);
+            lines.push(`Amount received: ${formatCurrency(received, currency)}`);
+            if (Math.abs(variance) < 0.005) {
+                lines.push("Matched exactly — no shortfall or extra.");
+            } else if (variance < 0) {
+                lines.push(`Short claim (recorded as your own expense): ${formatCurrency(Math.abs(variance), currency)}`);
+            } else {
+                lines.push(`Extra claim (recorded as extra income): ${formatCurrency(variance, currency)}`);
+            }
+            return lines.join("\n");
+        }
+
+        // A minimal, complete record shape — every field every render/report function anywhere in
+        // the app is ever seen reading directly off a transaction (not just the ones this specific
+        // flow cares about), same convention as the ordinary record object handleTransactionSubmitMobile()
+        // builds, just assembled directly rather than read off the txModal form fields (this modal
+        // is its own dedicated form, not a wrapper around the ordinary Income/Expense one).
+        function buildClaimSettleBaseRecord({ type, desc, amount, cat, currency, src, dest, date, notes, tags }) {
+            return {
+                type, desc, amount, cat, currency, src, date,
+                dest: dest || null,
+                image: null,
+                attachments: [],
+                payee: null,
+                notes: notes || null,
+                tags: tags || [],
+                checked: false,
+                fdReferenceNo: null,
+                fdStartDate: null,
+                fdTenureMonths: null,
+                fdInterestRate: null,
+                fdMaturityDate: null,
+                linkedFdPlacementId: null,
+                manualFxRate: null,
+                destAmount: null,
+                splitGroupId: undefined,
+                isRefund: undefined,
+                refundOf: undefined,
+                refundReason: undefined
+            };
+        }
+
+        async function handleClaimSettleSubmit() {
+            const checkboxes = Array.from(document.querySelectorAll("#claimSettleBillList .claim-settle-bill-checkbox"));
+            const selectedIds = new Set(checkboxes.filter(cb => cb.checked).map(cb => cb.dataset.id));
+            const selected = claimSettleCandidates.filter(t => selectedIds.has(String(t.id)));
+
+            if (selected.length === 0) { alert("Please select at least one bill to settle."); return; }
+            const currencies = new Set(selected.map(t => t.currency));
+            if (currencies.size > 1) { alert("Selected bills use different currencies — please settle each currency as its own batch."); return; }
+            const currency = selected[0].currency;
+
+            const receivedRaw = document.getElementById("claimSettleReceivedAmount").value;
+            const received = claimSettleRound2(parseFloat(receivedRaw));
+            if (receivedRaw === "" || isNaN(received) || received < 0) { alert("Please enter the amount actually received."); return; }
+
+            const date = document.getElementById("claimSettleDate").value;
+            if (!date) { alert("Please select the date received."); return; }
+
+            const accountId = document.getElementById("claimSettleAccount").value;
+            if (!accountId) { alert("Please select which account received the payment."); return; }
+
+            const selectedTotal = claimSettleRound2(selected.reduce((sum, t) => sum + t.amount, 0));
+            const variance = claimSettleRound2(received - selectedTotal);
+            const notes = buildClaimSettleNotes(selected, selectedTotal, received, currency, variance);
+
+            const dates = selected.map(t => t.date).sort();
+            const dateRange = dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} – ${dates[dates.length - 1]}`;
+
+            // v295: the settlement is now real money movement rather than a category-netting
+            // trick. The main leg always draws down Claims Receivable by min(received, billed) —
+            // exactly the billed total on a match or an overpayment (so the receivable clears
+            // completely for every settled bill), or exactly what actually came in on a
+            // shortfall (leaving the unclaimed remainder to be written off as its own expense
+            // below, step 2, rather than pretending it was received).
+            const settleAmount = claimSettleRound2(Math.min(received, selectedTotal));
+
+            try {
+                // 1) The lump-sum settlement — a Transfer, Claims Receivable → settlement account.
+                const settlement = buildClaimSettleBaseRecord({
+                    type: "transfer",
+                    desc: `Claim settlement: ${selected.length} bill${selected.length === 1 ? "" : "s"} (${dateRange})`,
+                    amount: settleAmount,
+                    cat: null,
+                    currency,
+                    src: CLAIMS_RECEIVABLE_ACCOUNT_ID,
+                    dest: accountId,
+                    date,
+                    notes
+                });
+                settlement.isRefund = true;
+                settlement.refundReason = "reimbursement";
+                settlement.refundOf = selected[0].id;
+                settlement.refundOfIds = selected.map(t => t.id);
+                await writeDB(STORES.TRANSACTIONS, settlement);
+
+                // 2) The short/extra claim, if any — an ORDINARY (non-excluded) record, so it
+                //    flows into Budget/Net Savings/Spending Breakdown as real personal
+                //    spending/income, exactly the way the old category-netting version did.
+                if (Math.abs(variance) >= 0.005) {
+                    const varianceCat = document.getElementById("claimSettleVarianceCategory").value;
+                    if (variance < 0) {
+                        // Short claim: the settlement Transfer above only drew Claims Receivable
+                        // down by `received` — this finishes the draw-down for the unclaimed
+                        // remainder, sourced FROM Claims Receivable (not the settlement account),
+                        // so the receivable still clears to zero for these bills while the loss
+                        // lands as a real personal expense.
+                        const shortfall = buildClaimSettleBaseRecord({
+                            type: "expense",
+                            desc: `Short claim — unclaimed portion of a claim (${dateRange})`,
+                            amount: Math.abs(variance),
+                            cat: varianceCat || "Other Expenses",
+                            currency,
+                            src: CLAIMS_RECEIVABLE_ACCOUNT_ID,
+                            date,
+                            notes: `${formatCurrency(received, currency)} received against ${formatCurrency(selectedTotal, currency)} billed — this ${formatCurrency(Math.abs(variance), currency)} shortfall isn't claimable.`
+                        });
+                        await writeDB(STORES.TRANSACTIONS, shortfall);
+                    } else {
+                        // Extra claim: money beyond what was ever billed — never touched Claims
+                        // Receivable (the settlement Transfer above already drew it fully down to
+                        // zero via `selectedTotal`), so this is ordinary income straight into the
+                        // settlement account.
+                        const extra = buildClaimSettleBaseRecord({
+                            type: "income",
+                            desc: `Extra claim — extra amount from a claim (${dateRange})`,
+                            amount: variance,
+                            cat: varianceCat || "Other Income",
+                            currency,
+                            src: accountId,
+                            date,
+                            notes: `${formatCurrency(received, currency)} received against ${formatCurrency(selectedTotal, currency)} billed — this ${formatCurrency(variance, currency)} extra doesn't need to be paid back.`
+                        });
+                        await writeDB(STORES.TRANSACTIONS, extra);
+                    }
+                }
+
+                // 3) Drop PENDING_CLAIM_TAG from every settled bill — same "settled, so fall off
+                //    the Tag Reminders widget/Spending by Tag report" convention as the
+                //    single-bill Reimbursement's "remove this tag" toggle.
+                for (const bill of selected) {
+                    if (Array.isArray(bill.tags) && bill.tags.includes(PENDING_CLAIM_TAG)) {
+                        await writeDB(STORES.TRANSACTIONS, { ...bill, tags: bill.tags.filter(tg => tg !== PENDING_CLAIM_TAG) });
+                    }
+                }
+            } catch (err) {
+                const msg = (err && err.name === "QuotaExceededError")
+                    ? "Not enough storage space to save this settlement."
+                    : "Could not save settlement: " + (err && err.message ? err.message : err);
+                alert(msg);
+                return;
+            }
+
+            claimSettleCandidates = [];
+            closeModal("claimSettleModal");
+            await refreshAfterTransactionChange();
         }
 
         // (v147: the old filterMonth/filterYear-driven year filter was removed along with the
@@ -11887,6 +12785,7 @@
             renderMemberNetWorthRows(accounts, nativeBalances);
             renderPinnedAccountsWidget(accounts, nativeBalances);
             renderRecentTransactionsWidget(accounts, txs);
+            renderTagReminderWidget(txs, accounts);
             applyDashboardWidgetOrder();
             renderDesktopInsightsRail(accounts, txs);
 
@@ -11995,6 +12894,40 @@
 
                 const todayDate = new Date(todayLocalStr() + "T00:00:00");
 
+                // v274: use the balance AS OF TODAY (transactions dated today or earlier only),
+                // not the full running balance nativeBalances[a.id] which also includes any
+                // transaction dated in the FUTURE (e.g. a payment the user pre-records ahead of
+                // the date they intend to actually pay it). Without this, a future-dated payment
+                // that already nets the running balance down can make it SMALLER than what was
+                // genuinely billed by the last statement close — and the overdue math below
+                // (which takes the min() of the two) would then mistake today's fresh spending
+                // for old overdue debt. See the bug this fixed: a same-day purchase showed as
+                // "overdue since" a past due date purely because of an unrelated future-dated
+                // payment transaction on the same account.
+                const amountDueAsOfToday = Math.max(0, -ccBalanceAsOf(a, todayLocalStr()));
+
+                // v275: sum of payments (transfers or income posted INTO the card, e.g. a bank
+                // → card transfer) dated strictly after `sinceStr`. Deliberately has NO upper
+                // bound at "today" — a payment the user has already recorded for a future date
+                // (their bank's known auto-deduction date, or just paying ahead) is a real
+                // commitment against that cycle's billed debt and should count toward clearing
+                // it before that date arrives, same as the running "Amount due" figure already
+                // treats future-dated transactions as real. Excludes new charges on purpose:
+                // fresh spending after the statement close belongs to the NEXT cycle, not this
+                // one, and must never be treated as "paying down" old billed debt.
+                function ccPaymentsAfter(sinceStr) {
+                    let paid = 0;
+                    txs.forEach(t => {
+                        if (!t.date || t.date <= sinceStr) return;
+                        if (t.type === "income" && t.src === a.id) {
+                            paid += (t.manualFxRate && t.currency !== a.currency) ? t.amount * t.manualFxRate : convertCurrency(t.amount, t.currency, a.currency);
+                        } else if (t.type === "transfer" && t.dest === a.id) {
+                            paid += (t.destAmount != null) ? t.destAmount : convertCurrency(t.amount, t.currency, a.currency);
+                        }
+                    });
+                    return paid;
+                }
+
                 let anchor = ccDueDateFor(todayDate.getFullYear(), todayDate.getMonth(), a.paymentDueDay);
                 if (anchor > todayDate) anchor = ccDueDateFor(todayDate.getFullYear(), todayDate.getMonth() - 1, a.paymentDueDay);
                 const daysSinceAnchor = Math.round((todayDate - anchor) / MS_PER_DAY);
@@ -12006,7 +12939,7 @@
                 // statement (and therefore genuinely overdue), vs. freshly added afterwards and
                 // not yet due. Without statementDay set there's no way to draw that line, so it
                 // falls back to the old "whole balance" behavior.
-                let billedDebt = amountDue;
+                let billedDebt = amountDueAsOfToday;
                 if (a.statementDay) {
                     // The statement that produced `anchor`'s due date is the most recent
                     // statementDay occurrence on or before that due date — same month as the due
@@ -12017,8 +12950,18 @@
                     if (closeDate > anchor) closeDate = ccDueDateFor(anchor.getFullYear(), anchor.getMonth() - 1, a.statementDay);
                     const closeStr = localDateStr(closeDate);
                     billedDebt = Math.max(0, -ccBalanceAsOf(a, closeStr));
+                    // v275: subtract anything already paid toward THIS cycle's billed debt
+                    // specifically, rather than the old approach of taking min(current total
+                    // balance, billed debt) — that couldn't tell "old debt still outstanding"
+                    // apart from "old debt fully paid off, and this balance is entirely fresh
+                    // spending on the new, not-yet-due cycle" whenever the two amounts happened
+                    // to differ (e.g. a $2,351.50 bill paid off same-day as a new $58.40
+                    // purchase: min() mistook the $58.40 for leftover old debt). Subtracting the
+                    // actual payment from the actual billed amount gets this right regardless of
+                    // what new spending has piled up since.
+                    billedDebt = Math.max(0, billedDebt - ccPaymentsAfter(closeStr));
                 }
-                const overdueAmount = Math.min(amountDue, billedDebt);
+                const overdueAmount = billedDebt;
 
                 let overdue, daysOverdue, dueDateStr, dueToday;
                 if (daysSinceAnchor === 0) {
@@ -12438,6 +13381,29 @@
             // views now always show full history too, exactly like the account view already does.
             const showFullHistoryForThisView = showFullAccountHistory || activeCategoryView !== "all" || directTypeView !== "all" || isPortfolioAllView;
 
+            // v276/v277: plain month divider — a scroll landmark only, deliberately NOT a
+            // subtotal (see the v276 comment on showMonthDividers' original single-account case
+            // for why: a running total needs currency-conversion/Transfer-inclusion decisions
+            // that have nothing to do with the actual ask). Covers two views sharing this same
+            // render path:
+            //  - a single account's Year-scoped Activity list (activeLedgerAccountView !== "all",
+            //    accountLedgerYear !== null) — label is just the month name, since the year is
+            //    already pinned by the page's own Year picker.
+            //  - the sidebar's "Transactions" page / Portfolio General Log (isPortfolioAllView) —
+            //    this one can itself span every year at once when its own year picker
+            //    (portfolioLedgerYear) is set to "All Years", so the label includes the year too
+            //    UNLESS a specific year is picked there, in which case it drops to month-only,
+            //    matching the single-account case exactly.
+            // Neither branch fires for a category/type drill-in reusing this same render path —
+            // those aren't a full account/portfolio history scroll, so a divider there would be
+            // more noise than landmark.
+            const showMonthDividers = (activeLedgerAccountView !== "all" && accountLedgerYear !== null && activeCategoryView === "all" && directTypeView === "all") || isPortfolioAllView;
+            // Whether this render's dividers need the year in the label — only the Portfolio
+            // General Log while its own year picker is at "All Years" (portfolioLedgerYear null);
+            // every other case that reaches showMonthDividers already pins to one specific year.
+            const monthDividerNeedsYear = isPortfolioAllView && portfolioLedgerYear === null;
+            let lastMonthKey = null;
+
             // v231: same same-day tie-break fix as the Dashboard Recent Transactions widget above —
             // see the comment there.
             txs.sort((a,b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id)).forEach(t => {
@@ -12505,6 +13471,20 @@
                 // Only build DOM markup for the first `ledgerRenderLimit` matches — keeps large ledgers fast on mobile.
                 if (matchedCount > ledgerRenderLimit) return;
 
+                // v276/v277: month divider — see showMonthDividers/monthDividerNeedsYear comment
+                // above. Keyed on year+month (not month alone) whenever the label itself needs the
+                // year, so two different years' Septembers in an "All Years" Portfolio General Log
+                // each still get their own divider instead of only the first being shown.
+                if (showMonthDividers) {
+                    const monthKey = monthDividerNeedsYear ? `${d.getFullYear()}-${d.getMonth()}` : d.getMonth();
+                    if (monthKey !== lastMonthKey) {
+                        lastMonthKey = monthKey;
+                        const monthNames = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+                        const label = monthDividerNeedsYear ? `${monthNames[d.getMonth()]} ${d.getFullYear()}` : monthNames[d.getMonth()];
+                        ledgerHTML += `<div class="ledger-month-divider">${label}</div>`;
+                    }
+                }
+
                 // For transfers, show a directional +/− and color when viewing a specific account
                 // (money leaving that account = red/−, money arriving = green/+). When viewing "All"
                 // accounts the direction is ambiguous, so it falls back to the neutral 🔄 style.
@@ -12534,11 +13514,13 @@
                 // overlay on the small text-line icon (checkedIconHTML) onto the big tx-icon-circle
                 // instead — see txCheckOverlay below.
                 const refundBadge = t.isRefund
-                    ? `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">↩️ Refund</span>`
+                    ? (t.refundReason === "reimbursement"
+                        ? `<span style="font-size:0.62rem; font-weight:700; color:#92400e; background:#fef3c7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">💰 Reimbursement</span>`
+                        : `<span style="font-size:0.62rem; font-weight:700; color:#15803d; background:#dcfce7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">↩️ Refund</span>`)
                     : '';
                 const attCount = (Array.isArray(t.attachments) ? t.attachments.length : 0) + (t.image ? 1 : 0);
                 const receiptBadge = attCount > 0
-                    ? `<span data-click="openTxAttachmentsBadge" data-attachments="${escapeHtml(JSON.stringify(t.attachments || []))}" ${t.image ? `data-legacy-image="${escapeHtml(t.image)}"` : ''} style="cursor:pointer; margin-left:4px;" title="View attachment${attCount > 1 ? 's' : ''}">📎${attCount > 1 ? `<span style="font-size:0.6rem; vertical-align:top;">×${attCount}</span>` : ''}</span>`
+                    ? `<span data-click="openTxAttachmentsBadge" data-id="${escapeHtml(t.id)}" data-attachments="${escapeHtml(JSON.stringify(t.attachments || []))}" ${t.image ? `data-legacy-image="${escapeHtml(t.image)}"` : ''} style="cursor:pointer; margin-left:4px;" title="View attachment${attCount > 1 ? 's' : ''}">📎${attCount > 1 ? `<span style="font-size:0.6rem; vertical-align:top;">×${attCount}</span>` : ''}</span>`
                     : '';
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
                 // Maturity date (v55) — shown inline on every FD placement row, not just inside
@@ -12620,7 +13602,7 @@
                         ${txIconCircleHTML}
                         <div class="tx-row-body">
                             <div class="item-left">
-                                <span class="item-name">${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}</span>
+                                <span class="item-name">${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}</span>
                                 <span class="item-meta">${t.date} [${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]${referenceText}${maturityText}${receiptBadge}</span>
                                 <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                                 ${notesLine}
@@ -12982,12 +13964,20 @@
                 const entry = excludedSummary[c];
                 if (Math.abs(entry.value) < SAVINGS_ZERO_EPS) return;
                 const icon = getCategoryIcon(c, entry.type);
-                const sign = entry.type === "income" ? "+" : "-";
-                const color = entry.type === "income" ? "var(--income-color)" : "var(--expense-color)";
+                // v292 fix: this used to force "-" for an expense-type category and "+" for
+                // income, trusting entry.type alone — correct as long as a Reimbursement
+                // (isRefund) subtracting from an expense category's value never pushed it past
+                // zero. A bulk claim settlement (openClaimSettleModal()) breaks that assumption:
+                // several older bills reimbursed in one lump sum can easily net NEGATIVE for the
+                // period being viewed (more credited back than billed), and the old fixed "-"
+                // plus formatCurrency's own negative sign doubled up into a broken "-RM-30.00".
+                // savingsAmountHTML() already solves exactly this for the Income/Expense sections
+                // above it (deriving the sign from which way the money actually moved, not from
+                // the section/type it's filed under) — reused here instead of re-deriving it.
                 excludedRowsHTML += `
                     <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(savingsFilterMonth)}">
                         <strong>${icon} ${escapeHtml(c)}</strong>
-                        <span style="color:${color}; font-weight:700;">${sign}${formatCurrency(entry.value, baseCurrency)}</span>
+                        ${savingsAmountHTML(entry.value, entry.type)}
                     </div>
                 `;
             });
@@ -13391,17 +14381,32 @@
                 // inflate this tag's Income total, and should reduce the category it refunds.
                 const isRefundCredit = t.type === "income" && t.isRefund;
                 const tBase = convertTxAmountToBase(t, accounts);
-                if (t.type === "expense" || isRefundCredit) {
+                if (t.type === "expense" || t.type === "transfer" || isRefundCredit) {
                     const signed = isRefundCredit ? -tBase : tBase;
                     expenseTotal += signed;
-                    const cat = t.cat || "Other Expenses";
+                    // v295: a tagged Transfer only exists as an unsettled Claims Receivable claim
+                    // (see updateTxTagsRowVisibility()) — it has no `cat` (Transfers never carry
+                    // one), so it's grouped under its own label here instead of falling into the
+                    // generic "Other Expenses" bucket every actual uncategorized expense uses.
+                    const cat = t.cat || (t.type === "transfer" ? "Claims Receivable" : "Other Expenses");
                     catTotals[cat] = (catTotals[cat] || 0) + signed;
                 } else if (t.type === "income" && !t.isRefund) {
                     incomeTotal += tBase;
                 }
-                // Transfers are never taggable (see the Tags row's income/expense-only visibility
-                // in openTransactionForm()), so no branch is needed for t.type === "transfer" here.
             });
+
+            // v291: the "Settle Multiple Bills as One Claim" button only makes sense on the
+            // Pending Claim view itself — every other tag either isn't a claim-tracking tag at
+            // all, or (a custom trip/claim tag) has no single agreed destination account to file
+            // the settlement/variance records against, unlike Pending Claim which always means
+            // CLAIMS_RECEIVABLE_ACCOUNT_ID (see ensureDefaultTags()/ensureDefaultAccounts()).
+            const claimSettleBtn = document.getElementById("claimSettleTriggerBtn");
+            if (claimSettleBtn) claimSettleBtn.style.display = (tagName === PENDING_CLAIM_TAG) ? "" : "none";
+
+            // v295: same Pending-Claim-only condition as the button above — see
+            // #tagReportBreakdownWrap's own comment in index.html for why.
+            const breakdownWrap = document.getElementById("tagReportBreakdownWrap");
+            if (breakdownWrap) breakdownWrap.style.display = (tagName === PENDING_CLAIM_TAG) ? "none" : "";
 
             document.getElementById("tagReportIncomeTotal").textContent = formatCurrency(incomeTotal, baseCurrency);
             document.getElementById("tagReportExpenseTotal").textContent = formatCurrency(expenseTotal, baseCurrency);
@@ -13426,13 +14431,16 @@
             const sortedTx = [...matching].sort((a, b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id));
             document.getElementById("tagReportTxList").innerHTML = sortedTx.length ? sortedTx.map(t => {
                 const acc = accounts.find(a => a.id === t.src);
-                const col = t.type === "income" ? "income-color" : "expense-color";
-                const sgn = t.type === "income" ? "+" : "-";
+                // v295: a tagged Transfer (a Claims Receivable claim) reads as neutral, not as an
+                // expense-colored "-" — it's an asset movement, not spending, even though it's
+                // grouped alongside expenses in the totals above for "amount outstanding" purposes.
+                const col = t.type === "income" ? "income-color" : t.type === "transfer" ? "primary" : "expense-color";
+                const sgn = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
-                            <span class="item-name">${getCategoryIcon(t.cat, t.type)} ${escapeHtml(t.desc)}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || "")}]</span>
+                            <span class="item-name">${t.cat ? getCategoryIcon(t.cat, t.type) : "🧾"} ${escapeHtml(t.desc)}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || (t.type === "transfer" ? "Claims Receivable" : ""))}]</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
                         </div>
                         <div class="item-right">
@@ -13922,6 +14930,104 @@
             calculateStorageMetrics();
         }
 
+        // v279: normalizes a transaction's attachment info for lightweight, read-only display
+        // (count + a thumbnail to show) without touching the full attachment blob in
+        // STORES.ATTACHMENTS — mirrors the same real-array-or-legacy-image seeding
+        // openTransactionForm() already does when populating existingTxAttachments for editing
+        // (see that comment), just read-only and without any module-state side effects. Returns
+        // null when the transaction has no attachment at all.
+        // v280: also returns maxSize — the single largest attachment's stored size (same
+        // approximate data-URL-length figure already used everywhere else via formatAttBytes,
+        // see handleTxAttachmentsSelected's `size: data.length`) — so the Review Attachments
+        // list can flag which rows are actually worth checking. Only PDFs realistically get
+        // large (images are always compressed down to ~1280px/75% quality before they're ever
+        // stored — see compressImage() — so they rarely approach a size worth flagging; an
+        // uncompressed embedded-image PDF is really the only common way a single attachment
+        // gets big), and there's no way to tell that from the file name/thumbnail alone.
+        function getTxAttachmentSummary(t) {
+            if (Array.isArray(t.attachments) && t.attachments.length > 0) {
+                const maxSize = t.attachments.reduce((max, a) => Math.max(max, a.size || 0), 0);
+                return { count: t.attachments.length, thumb: t.attachments[0].thumb || null, maxSize };
+            }
+            if (t.image) {
+                return { count: 1, thumb: t.image, maxSize: t.image.length };
+            }
+            return null;
+        }
+
+        function navigateToAttachmentReviewPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-attachment-review");
+            window.scrollTo(0, 0);
+            pushVirtualState("attachment-review");
+            renderAttachmentReviewPage();
+        }
+
+        // v278: lists every transaction carrying at least one attachment (see
+        // getTxAttachmentSummary above), oldest first — the reverse of every other list in the
+        // app, since the point here is reviewing what's oldest before any future cleanup pass
+        // would target it. Review-only: tapping a row opens the same Quick View used everywhere
+        // else (openTxQuickView) so the actual photo/PDF can be checked; no delete action lives
+        // on this page — that's a separate, more heavily-confirmed action (see the "Review
+        // Attachments" discussion this shipped alongside for why the two are kept apart).
+        async function renderAttachmentReviewPage() {
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const cutoffSel = document.getElementById("attachmentReviewCutoff").value;
+
+            let cutoffMs = null;
+            if (cutoffSel !== "all") {
+                const c = new Date();
+                c.setMonth(c.getMonth() - parseInt(cutoffSel, 10));
+                cutoffMs = c.getTime();
+            }
+
+            const matches = [];
+            let totalAttachments = 0;
+            txs.forEach(t => {
+                const info = getTxAttachmentSummary(t);
+                if (!info) return;
+                const ms = new Date(t.date).getTime();
+                if (cutoffMs !== null && !(ms < cutoffMs)) return;
+                matches.push({ t, info, ms });
+                totalAttachments += info.count;
+            });
+
+            matches.sort((a, b) => a.ms - b.ms);
+
+            const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
+
+            document.getElementById("attachmentReviewSummary").textContent = matches.length
+                ? `${matches.length} transaction${matches.length === 1 ? '' : 's'} · ${totalAttachments} attachment${totalAttachments === 1 ? '' : 's'}`
+                : "No matching transactions.";
+
+            const listEl = document.getElementById("attachmentReviewList");
+            listEl.innerHTML = matches.length ? matches.map(({ t, info }) => {
+                const thumbHTML = info.thumb
+                    ? `<img src="${info.thumb}" style="width:44px; height:44px; border-radius:8px; object-fit:cover; flex-shrink:0;">`
+                    : `<div style="width:44px; height:44px; border-radius:8px; background:var(--chip-bg); display:flex; align-items:center; justify-content:center; flex-shrink:0; font-size:1.1rem;">📄</div>`;
+                const countBadge = info.count > 1
+                    ? `<span style="font-size:0.62rem; font-weight:700; color:#1d4ed8; background:#dbeafe; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">×${info.count}</span>`
+                    : '';
+                // v280: only shown once the largest attachment on this transaction actually
+                // clears 1 MB — matches formatAttBytes' own KB/MB switch point, so anything
+                // still shown in KB here stays unflagged (deliberately: images are already
+                // compressed small, so this is really only ever a PDF worth double-checking).
+                const sizeBadge = info.maxSize >= 1024 * 1024
+                    ? `<span style="font-size:0.62rem; font-weight:700; color:#b45309; background:#fef3c7; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">${formatAttBytes(info.maxSize)}</span>`
+                    : '';
+                return `
+                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}" style="gap:12px;">
+                        ${thumbHTML}
+                        <div class="item-left" style="flex:1;">
+                            <span class="item-name">${escapeHtml(t.desc)}${countBadge}${sizeBadge}</span>
+                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || 'Transfer')}]</span>
+                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${accountName(t.src)}</span>
+                        </div>
+                    </div>`;
+            }).join("") : '<p style="padding:20px; text-align:center; color:var(--text-muted); font-size:0.8rem;">No matching transactions.</p>';
+        }
+
         // v168 data migration (one-time, guarded by a settings flag so it never re-runs): earlier
         // versions baked the FD reference number straight into these four auto-generated
         // transaction descriptions — "Fixed Deposit Placement (ref)", "FD Withdrawal — Principal
@@ -14056,6 +15162,7 @@
             await migrateFdDescRefDedup();
             await syncAndLoadTemplates();
             await syncAndLoadTags();
+            await ensureDefaultTags();
 
             const accs = await readAllDB(STORES.ACCOUNTS);
             if(accs.length === 0) {
@@ -14063,6 +15170,11 @@
                 await writeDB(STORES.ACCOUNTS, { id: "sgd_w", name: "DBS Singapore", initialBalance: 1200, currency: "SGD", type: "normal", memberIds: [] });
                 await writeDB(STORES.ACCOUNTS, { id: "myr_w", name: "Maybank Malaysia", initialBalance: 3400, currency: "MYR", type: "normal", memberIds: [] });
             }
+            // v295: seeded AFTER the brand-new-install starter accounts above, not before — this
+            // writes to the same ACCOUNTS store, and running it first would make accs.length
+            // above never read as 0 for a genuinely brand-new install, silently skipping the
+            // starter USD/SGD/MYR demo accounts.
+            await ensureDefaultAccounts();
 
             // Seed a friendly starting set of household members (fully editable/removable) so the
             // Sidebar's Members feature isn't empty on first run.
@@ -14104,6 +15216,101 @@
         // unencrypted file with no page/confirmation in view. The Backup & Restore page's own
         // "Export JSON" button still calls this with no argument, so it keeps respecting the
         // toggle exactly as before.
+        // v300: plain-CSV export of transactions — deliberately NOT using a library (SheetJS/
+        // xlsx.js etc): this is the user's own data, written client-side, never touching the
+        // network, and CSV covers "open it in Excel/Sheets" without a ~1MB new dependency. If a
+        // real multi-sheet formatted workbook is ever wanted later, that's the point to
+        // reconsider a proper xlsx writer — plain CSV can't represent multiple sheets or cell
+        // formatting.
+        // Only wraps a field in quotes when it actually needs it (comma/quote/newline present) —
+        // keeps the common case (a plain number or short word) human-readable in a text editor —
+        // and doubles any embedded " per RFC 4180.
+        function csvEscape(val) {
+            const s = (val === null || val === undefined) ? "" : String(val);
+            if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+            return s;
+        }
+
+        // Amount as it should read in the CSV: signed so a spreadsheet SUM() of the column gives
+        // a meaningful net change, matching the same sign logic renderApp's ledger-list rendering
+        // already uses for its color-coded +/− (see the `col, sgn` block there). For a Transfer,
+        // the sign only means something relative to ONE specific account (money leaving vs
+        // arriving) — when the export scope is every account, an internal transfer nets to zero
+        // across the whole portfolio, so there's no single correct sign; the raw positive amount
+        // is kept rather than guessing.
+        function csvSignedAmount(t, viewAccountId) {
+            if (t.type === "income") return t.amount;
+            if (t.type === "expense") return -t.amount;
+            if (viewAccountId !== "all" && t.dest === viewAccountId) return t.amount;
+            if (viewAccountId !== "all" && t.src === viewAccountId) return -t.amount;
+            return t.amount;
+        }
+
+        // CSV export button in the Ledger page header — exports either every transaction
+        // (activeLedgerAccountView === "all", the Portfolio General Log reached via the sidebar's
+        // "Transactions" link) or just the one account currently open, since those are the two
+        // scopes the page itself already represents. Deliberately does NOT also respect the
+        // page's Category/Type drill-down filters (activeCategoryView/directTypeView) — keeping
+        // the export to exactly "all accounts" or "this account" avoids a confusing mismatch
+        // where the CSV silently omits transactions a user wouldn't expect missing.
+        async function exportLedgerCsv() {
+            const [txsAll, accounts] = await Promise.all([
+                readAllDB(STORES.TRANSACTIONS),
+                readAllDB(STORES.ACCOUNTS)
+            ]);
+            const accountName = (id) => (accounts.find(a => a.id === id) || {}).name || "(deleted account)";
+            const viewAccountId = activeLedgerAccountView;
+
+            const scoped = viewAccountId === "all"
+                ? txsAll
+                : txsAll.filter(t => t.src === viewAccountId || t.dest === viewAccountId);
+
+            if (scoped.length === 0) {
+                showToast("No transactions to export");
+                return;
+            }
+
+            // Same newest-first order as the on-screen list (see the txs.sort(...) call in
+            // renderApp's ledger-page section) so scrolling the CSV top-to-bottom matches
+            // scrolling the app top-to-bottom.
+            const sorted = [...scoped].sort((a, b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id));
+
+            const header = ["Date", "Type", "Account", "Category", "Tags", "Description", "Notes", "Amount", "Currency", "Reconciled"];
+            const rows = sorted.map(t => {
+                const account = t.type === "transfer"
+                    ? `${accountName(t.src)} \u2192 ${accountName(t.dest)}`
+                    : accountName(t.src);
+                return [
+                    t.date || "",
+                    t.type || "",
+                    account,
+                    t.cat || "",
+                    (t.tags || []).join("; "),
+                    t.desc || "",
+                    t.notes || "",
+                    csvSignedAmount(t, viewAccountId).toFixed(2),
+                    t.currency || "",
+                    t.checked ? "Yes" : "No"
+                ];
+            });
+
+            const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
+            // Leading BOM: without it, Excel guesses the wrong encoding for a plain UTF-8 file
+            // and can garble non-ASCII characters (e.g. a currency symbol or accented name typed
+            // into Notes) — the BOM makes Excel specifically detect it as UTF-8.
+            const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const scopeLabel = viewAccountId === "all"
+                ? "all-accounts"
+                : accountName(viewAccountId).replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "");
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `ledger_export_${scopeLabel}_${todayLocalStr()}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast(`\ud83d\udce4 Exported ${sorted.length} transaction${sorted.length === 1 ? "" : "s"} to CSV`);
+        }
+
         async function exportBackup(forceEncrypted = false) {
             const bundle = {
                 accounts: await readAllDB(STORES.ACCOUNTS),
@@ -14291,7 +15498,19 @@
                     await writeDB(STORES.SETTINGS, { key: "fxRates", value: fxRates });
 
                     for (const acc of bundle.accounts) await writeDB(STORES.ACCOUNTS, acc);
-                    for (const tx of bundle.transactions) { delete tx.id; await writeDB(STORES.TRANSACTIONS, tx); }
+                    // v296 fix: previously did `delete tx.id` before writing each transaction back,
+                    // deliberately letting IndexedDB's autoIncrement assign a fresh id to every one
+                    // on import — but several fields store ANOTHER transaction's id as a cross-
+                    // reference (linkedFdPlacementId, refundOf/refundOfIds), and a fresh id breaks
+                    // every one of them: the FD account's own Activity page stops grouping interest
+                    // payouts under their placement, the ✅ Claimed/Reimbursement badge disappears,
+                    // and — worse than cosmetic — findReimbursementFor()'s refundOfIds lookup (used
+                    // by the Settle Multiple Bills as One Claim candidate query) silently stops
+                    // matching, so an already-settled claim would reappear as unclaimed and risk
+                    // being settled twice. STORES.TRANSACTIONS is fully cleared just above, so there
+                    // is no id collision risk in keeping the originals — same reasoning the
+                    // attachments restore below already uses on purpose (see its own comment).
+                    for (const tx of bundle.transactions) await writeDB(STORES.TRANSACTIONS, tx);
 
                     if (bundle.categories) {
                         for (const cat of bundle.categories) await writeDB(STORES.CATEGORIES, cat);
@@ -14305,9 +15524,9 @@
                     if (bundle.navHistory) {
                         for (const rec of bundle.navHistory) await writeDB(STORES.NAV_HISTORY, rec);
                     }
-                    // v121: attachment blobs — written with their ORIGINAL ids (unlike transactions,
-                    // whose auto-increment `id` is deleted above before re-import) so each restored
-                    // transaction's own `attachments[].id` refs keep resolving correctly.
+                    // v121: attachment blobs — written with their ORIGINAL ids (v296: transactions
+                    // now do too, see the comment above) so each restored transaction's own
+                    // `attachments[].id` refs keep resolving correctly.
                     if (bundle.attachments) {
                         for (const att of bundle.attachments) await writeDB(STORES.ATTACHMENTS, att);
                     }
@@ -14319,6 +15538,13 @@
                     // v257: tag definitions — same "absent on older backups → skip" pattern.
                     if (bundle.tags) {
                         for (const tag of bundle.tags) await writeDB(STORES.TAGS, tag);
+                    }
+                    // v264: monthly/yearly Budget records — same "absent on older backups → skip"
+                    // pattern. (Fix: this store was being cleared above on every import but was
+                    // never actually written back from the bundle, so a restored backup always
+                    // showed "no budget set" even though the source device had one.)
+                    if (bundle.budgets) {
+                        for (const b of bundle.budgets) await writeDB(STORES.BUDGETS, b);
                     }
 
                     // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
@@ -14449,6 +15675,13 @@
             handleBackupBackClick: () => handleBackupBackClick(),
             navigateToAllLedgerPage: () => navigateToAllLedgerPage(),
             navigateToDataSecurityPage: () => navigateToDataSecurityPage(),
+            // v278: page-database's own back button used to only be reachable via sidebarGo's
+            // "database" case (see sidebarGo() above) — this is the first place something
+            // navigates INTO that page directly via its own data-click (the new "Review
+            // Attachments" button, and the review page's own Back button returning here), so it
+            // needs its own dispatch entry now too.
+            navigateToDatabasePage: () => navigateToDatabasePage(),
+            navigateToAttachmentReviewPage: () => navigateToAttachmentReviewPage(),
             navigateToMembersPage: () => navigateToMembersPage(),
             sidebarGoMember: (el) => sidebarGoMember(el),
             sidebarFilterAccountsByType: (el) => sidebarFilterAccountsByType(el),
@@ -14489,6 +15722,7 @@
             openCreditCardPayment: (el) => openCreditCardPayment(el),
             openCreditCardPaymentFromLedgerHeader: () => openCreditCardPaymentFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
+            exportLedgerCsv: () => exportLedgerCsv(),
             exportBackup: () => exportBackup(),
             exportBackupQuick: () => exportBackupQuick(),
             openImportInput: () => document.getElementById("importInput").click(),
@@ -14507,6 +15741,7 @@
             openTxAttachmentsBadge: (el, e) => openTxAttachmentsBadge(el, e),
             openAttachmentFromPicker: (el) => openAttachmentFromPicker(el),
             openAttachmentFromQuickView: (el) => openAttachmentFromQuickView(el),
+            handleDeleteAttachmentFromViewer: () => handleDeleteAttachmentFromViewer(),
             handleTransactionSubmitMobile: () => handleTransactionSubmitMobile(),
             confirmResolveFd: () => confirmResolveFd(),
             loadMoreLedgerRows: () => { ledgerRenderLimit += LEDGER_PAGE_SIZE; renderApp(); },
@@ -14559,6 +15794,7 @@
             calcPadPress: (el) => calcPadPress(el),
             calcPadApply: () => calcPadApply(),
             openTxQuickView: (el) => openTxQuickView(el),
+            removeTagFromQuickViewTx: (el) => removeTagFromQuickViewTx(el),
             toggleTxCheckedFromQuickView: () => toggleTxCheckedFromQuickView(),
             openTxOptionsMenu: () => openTxOptionsMenu(),
             closeTxOptionsMenu: () => closeTxOptionsMenu(),
@@ -14568,9 +15804,14 @@
             duplicateTransactionFromOptions: () => duplicateTransactionFromOptions(),
             deleteTransactionFromOptions: () => deleteTransactionFromOptions(),
             openRefundFromOptions: () => openRefundFromOptions(),
+            openReimbursementFromOptions: () => openReimbursementFromOptions(),
             openAccountPicker: (el) => openAccountPicker(el),
             selectDescSuggestion: (el) => selectDescSuggestion(el),
             navigateToTagsPage: () => navigateToTagsPage(),
+            openTagReminderRow: (el) => openTagReminderRow(el),
+            openReimbursementFromTagBadge: (el) => openReimbursementFromTagBadge(el),
+            openClaimSettleModal: () => openClaimSettleModal(),
+            handleClaimSettleSubmit: () => handleClaimSettleSubmit(),
             openTagFormModal: () => openTagFormModal(),
             editTag: (el) => editTag(el.dataset.id),
             removeTag: (el) => removeTag(el.dataset.id),
@@ -14601,6 +15842,7 @@
         const CHANGE_ACTIONS = {
             resetLedgerPageAndRender: () => { ledgerRenderLimit = LEDGER_PAGE_SIZE; renderApp(); },
             renderTagReportPage: () => renderTagReportPage(),
+            renderAttachmentReviewPage: () => renderAttachmentReviewPage(),
             toggleBudgetCarryover: (el) => toggleBudgetCarryover(el),
             importBackup: (el, e) => importBackup(e),
             handleExportEncryptToggleChange: () => handleExportEncryptToggleChange(),
@@ -14649,6 +15891,7 @@
         };
 
         const INPUT_ACTIONS = {
+            recalcClaimSettlePreview: () => recalcClaimSettlePreview(),
             recalcTxFdMaturity: () => { recalcTxFdMaturity(); syncTransferFxOnAmountChange(); recalcTxSplitTotal(); },
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
