@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v300";
+        const APP_VERSION = "v301";
         const APP_VERSION_DATE = "2026-09-06";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -14829,14 +14829,14 @@
         // exact rules (refund nets against Expense, excludeFromSavings categories left out)
         // rather than a fresh accounting path, bucketed by calendar year instead of a single
         // period — see that function's own comment for why those specific rules were chosen.
-        async function renderTotalSummaryPage() {
+        // v301: shared by renderTotalSummaryPage() (the on-screen table) and
+        // exportTotalSummaryCsv() (the 📤 button) so both always agree — the CSV can never drift
+        // out of sync with what's on screen for the same Member filter. Only the aggregation is
+        // shared; each caller builds its own output (HTML table vs CSV rows) from the result.
+        async function computeTotalSummaryData(filterMember) {
             const txs = await readAllDB(STORES.TRANSACTIONS);
             const accounts = await readAllDB(STORES.ACCOUNTS);
-            populateBreakdownMemberFilter("totalSummaryMemberFilter");
-            document.getElementById("totalSummaryBaseCurrLabel").textContent = baseCurrency;
-            const filterMember = document.getElementById("totalSummaryMemberFilter").value;
             const memberAccountIds = filterMember !== "all" ? accountIdsForMemberFilter(accounts, filterMember) : null;
-
             const excludedCatNames = new Set(dynamicCategories.filter(c => c.excludeFromSavings).map(c => c.name));
 
             const byYear = {};
@@ -14854,14 +14854,22 @@
             });
 
             const years = Object.keys(byYear).map(Number).sort((a, b) => b - a);
+            let gIncome = 0, gExpense = 0;
+            years.forEach(y => { gIncome += byYear[y].income; gExpense += byYear[y].expense; });
+            return { byYear, years, gIncome, gExpense };
+        }
+
+        async function renderTotalSummaryPage() {
+            populateBreakdownMemberFilter("totalSummaryMemberFilter");
+            document.getElementById("totalSummaryBaseCurrLabel").textContent = baseCurrency;
+            const filterMember = document.getElementById("totalSummaryMemberFilter").value;
+            const { byYear, years, gIncome, gExpense } = await computeTotalSummaryData(filterMember);
+
             const wrap = document.getElementById("totalSummaryTableWrap");
             if (years.length === 0) {
                 wrap.innerHTML = `<p style="color:var(--text-muted); font-size:0.85rem; text-align:center; padding:24px 0;">No income or expense transactions yet.</p>`;
                 return;
             }
-
-            let gIncome = 0, gExpense = 0;
-            years.forEach(y => { gIncome += byYear[y].income; gExpense += byYear[y].expense; });
 
             const balanceColor = (v) => v >= 0 ? "var(--income-color)" : "var(--expense-color)";
             // v268: the Balance cell drills through to the Net Savings Statement (income/expense
@@ -14905,6 +14913,40 @@
                     </thead>
                     <tbody>${rows}</tbody>
                 </table>`;
+        }
+
+        // v301: CSV export for the Total Bill Summary report — same csvEscape() convention as
+        // exportLedgerCsv(), reusing computeTotalSummaryData() so the file always matches
+        // whatever the on-screen table (and current Member filter) shows.
+        async function exportTotalSummaryCsv() {
+            const filterSelect = document.getElementById("totalSummaryMemberFilter");
+            const filterMember = filterSelect.value;
+            const filterLabel = filterSelect.selectedOptions[0] ? filterSelect.selectedOptions[0].textContent : "All Members";
+            const { byYear, years, gIncome, gExpense } = await computeTotalSummaryData(filterMember);
+
+            if (years.length === 0) {
+                showToast("No income or expense transactions to export");
+                return;
+            }
+
+            const header = ["Period", `Income (${baseCurrency})`, `Expense (${baseCurrency})`, `Balance (${baseCurrency})`];
+            const row = (label, income, expense) => [label, income.toFixed(2), expense.toFixed(2), (income - expense).toFixed(2)];
+            const rows = [
+                row("Total", gIncome, gExpense),
+                row("Yearly Average", gIncome / years.length, gExpense / years.length),
+                ...years.map(y => row(String(y), byYear[y].income, byYear[y].expense))
+            ];
+
+            const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
+            const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const scopeLabel = filterMember === "all" ? "all-members" : filterLabel.replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "");
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `total_bill_summary_${scopeLabel}_${todayLocalStr()}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast(`\ud83d\udce4 Exported Total Bill Summary to CSV`);
         }
 
         function navigateToTotalSummaryPage() {
@@ -15723,6 +15765,7 @@
             openCreditCardPaymentFromLedgerHeader: () => openCreditCardPaymentFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportLedgerCsv: () => exportLedgerCsv(),
+            exportTotalSummaryCsv: () => exportTotalSummaryCsv(),
             exportBackup: () => exportBackup(),
             exportBackupQuick: () => exportBackupQuick(),
             openImportInput: () => document.getElementById("importInput").click(),

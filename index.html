@@ -3358,10 +3358,13 @@
     <div id="page-total-summary" class="page hidden">
         <div class="nav-header">
             <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
-            <div>
+            <div style="flex:1;">
                 <h3 style="font-weight:800; font-size:1.2rem;">Total Bill Summary</h3>
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Income, expense and balance, year by year</p>
             </div>
+            <!-- v301: exports the table below (respects the Member filter) — see
+                 exportTotalSummaryCsv()'s own comment. -->
+            <button id="totalSummaryExportCsvBtn" class="icon-edit-btn" data-click="exportTotalSummaryCsv" title="Export to CSV">📤</button>
         </div>
 
         <div class="form-row print-filter-row" style="margin-bottom:14px;">
