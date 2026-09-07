@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v306";
+        const APP_VERSION = "v307";
         const APP_VERSION_DATE = "2026-09-06";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2879,8 +2879,10 @@
             // (self-hosted "Kalam" handwritten font, weight 700, 1.15rem) per user request —
             // the @font-face itself is global/unscoped even though its CSS *application* is
             // scoped to that modal by selector, so it's safe to reference here too.
+            // v307: label now also Kalam, matching #noteSummaryModalTitle's own weight/size
+            // (800 / 1rem) per user's second reference screenshot.
             footerEl.innerHTML = `
-                <span style="font-size:0.78rem; color:var(--text-muted); font-weight:600;">Net for the day</span>
+                <span style="font-family:'Kalam', cursive; font-size:1rem; color:var(--text-muted); font-weight:800;">Net for the day</span>
                 <span style="font-family:'Kalam', cursive; font-size:1.15rem; font-weight:700; color:var(--${dayNetBase >= 0 ? "income-color" : "expense-color"});">${dayNetBase >= 0 ? "+" : "-"}${formatCurrency(Math.abs(dayNetBase), baseCurrency)}</span>
             `;
 

@@ -1679,6 +1679,13 @@
            top of .receipt-day-footer's border-top) when there's at least one transaction that
            day. */
         #ledgerCalendarDayList .ledger-item:last-child { border-bottom: none; }
+        /* v307: dotted divider between transactions, scoped to just this day-card's list (an
+           ID-scoped selector beats the global .ledger-item rule's plain solid border-bottom by
+           specificity) — the main Transactions list elsewhere keeps its normal solid divider;
+           only this receipt-styled view gets the dotted "torn ticket" look. */
+        #ledgerCalendarDayList .ledger-item {
+            border-bottom: 1.5px dotted color-mix(in srgb, var(--border-color) 60%, var(--text-muted) 40%);
+        }
 
         /* v225 fix: on Android/Chrome, tapping directly on a word inside plain (selectable) text
            can be interpreted as a text-selection tap rather than a click on the row — this pops
