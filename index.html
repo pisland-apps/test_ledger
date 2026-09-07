@@ -1609,6 +1609,54 @@
             box-shadow: var(--card-shadow);
         }
 
+        /* v303: "torn receipt" shell for the Portfolio General Log calendar's day-detail panel
+           (header + #ledgerCalendarDayList + new Net-for-the-day footer act as one card now,
+           instead of the plain header + separately-carded .ledger-container it used to be) — see
+           renderLedgerCalendarSection() in ledger.js for the footer total logic. Individual row
+           markup/styling (.ledger-item etc, shared with the main Transactions list) is untouched. */
+        #ledgerCalendarDayCard {
+            background: var(--card-bg);
+            border: 1.5px solid var(--border-color);
+            border-top-color: var(--card-top-border);
+            border-bottom: none;
+            border-radius: 12px 12px 0 0;
+            padding: 14px 16px 2px;
+        }
+        .receipt-day-header {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            padding-bottom: 10px;
+            margin-bottom: 4px;
+            border-bottom: 1px dashed var(--border-color);
+        }
+        .receipt-day-footer {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            padding: 10px 2px 12px;
+            margin-top: 2px;
+            border-top: 1px dashed var(--border-color);
+        }
+        /* Shallow torn edge, matching the mockup's "3-5px teeth" — a pure-CSS zigzag using the
+           card's own background color, so it reads as a receipt torn off just below this point
+           rather than a hard rectangular card bottom. Side borders continue through so the whole
+           thing still reads as one bordered shape. */
+        #ledgerCalendarDayTear {
+            height: 14px;
+            border-left: 1.5px solid var(--border-color);
+            border-right: 1.5px solid var(--border-color);
+            background:
+                linear-gradient(-45deg, var(--card-bg) 10px, transparent 0) 0 7px,
+                linear-gradient(45deg, var(--card-bg) 10px, transparent 0) 0 7px;
+            background-size: 20px 20px;
+            background-repeat: repeat-x;
+        }
+        /* Avoids a double line (the last row's own .ledger-item border-bottom sitting right on
+           top of .receipt-day-footer's dashed border-top) when there's at least one transaction
+           that day. */
+        #ledgerCalendarDayList .ledger-item:last-child { border-bottom: none; }
+
         /* v225 fix: on Android/Chrome, tapping directly on a word inside plain (selectable) text
            can be interpreted as a text-selection tap rather than a click on the row — this pops
            up Chrome's built-in "Search Google for '<word>'" bar (and/or the text-selection
@@ -2988,11 +3036,18 @@
                 <button type="button" class="btn-util" data-click="ledgerCalendarGoToday" title="Jump to today" style="padding:6px 10px; font-size:1rem; line-height:1;">📅</button>
             </div>
             <div id="ledgerCalendarGrid" style="display:grid; grid-template-columns:repeat(7,1fr); gap:4px; text-align:center; margin-bottom:16px;"></div>
-            <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:8px;">
-                <h4 id="ledgerCalendarDayHeader" style="font-weight:800; font-size:1rem;"></h4>
-                <span id="ledgerCalendarDayCount" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;"></span>
+            <!-- v303: "torn receipt" card — header/footer dashed rules, Net-for-the-day footer,
+                 shallow torn bottom edge. See the #ledgerCalendarDayCard CSS comment above and
+                 renderLedgerCalendarSection() in ledger.js. -->
+            <div id="ledgerCalendarDayCard">
+                <div class="receipt-day-header">
+                    <h4 id="ledgerCalendarDayHeader" style="font-weight:800; font-size:1rem; margin:0;"></h4>
+                    <span id="ledgerCalendarDayCount" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;"></span>
+                </div>
+                <div id="ledgerCalendarDayList"></div>
+                <div id="ledgerCalendarDayFooter" class="receipt-day-footer" style="display:none;"></div>
             </div>
-            <div class="ledger-container" id="ledgerCalendarDayList"></div>
+            <div id="ledgerCalendarDayTear"></div>
         </div>
 
         <!-- Quick-add type picker (v34) — lets a new Income/Expense/Transfer entry be logged

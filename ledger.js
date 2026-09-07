@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v302";
+        const APP_VERSION = "v303";
         const APP_VERSION_DATE = "2026-09-06";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2829,10 +2829,12 @@
             const headerEl = document.getElementById("ledgerCalendarDayHeader");
             const countEl = document.getElementById("ledgerCalendarDayCount");
             const listEl = document.getElementById("ledgerCalendarDayList");
+            const footerEl = document.getElementById("ledgerCalendarDayFooter");
             if (!ledgerCalSelectedDate) {
                 headerEl.textContent = "";
                 countEl.textContent = "";
                 listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.82rem; padding:20px 0;">Tap a date above to see that day's transactions.</p>`;
+                footerEl.style.display = "none";
                 return;
             }
 
@@ -2853,8 +2855,30 @@
 
             if (dayTxs.length === 0) {
                 listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.82rem; padding:20px 0;">No transactions on this day.</p>`;
+                footerEl.style.display = "none";
                 return;
             }
+
+            // Net for the day (v303's new receipt-style footer): income minus expense, in base
+            // currency. Transfers are deliberately excluded — money moving between the user's own
+            // accounts doesn't change total wealth, same convention already used by
+            // exportLedgerCsv's csvSignedAmount() and the Total Bill Summary report's
+            // computeTotalSummaryData() — so an internal transfer wouldn't have a single
+            // meaningful sign here either. Split Expense groups count their full totalAmount
+            // (not just the collapsed representative row's own amount), matching what the row
+            // itself displays.
+            let dayNetBase = 0;
+            dayTxs.forEach(t => {
+                if (t.type === "transfer") return;
+                const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
+                const amtBase = convertTxAmountToBase(splitInfo ? { ...t, amount: splitInfo.totalAmount } : t, accounts);
+                dayNetBase += t.type === "income" ? amtBase : -amtBase;
+            });
+            footerEl.style.display = "flex";
+            footerEl.innerHTML = `
+                <span style="font-size:0.78rem; color:var(--text-muted); font-weight:600;">Net for the day</span>
+                <span style="font-size:1.05rem; font-weight:800; color:var(--${dayNetBase >= 0 ? "income-color" : "expense-color"});">${dayNetBase >= 0 ? "+" : "-"}${formatCurrency(Math.abs(dayNetBase), baseCurrency)}</span>
+            `;
 
             // Deliberately a simpler row than the main list's (no FD/refund/manual-FX badges or
             // receipt count) — this is a quick day-at-a-glance view; tapping a row still opens the
