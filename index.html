@@ -1665,6 +1665,16 @@
             background-size: 24px 24px;
             background-repeat: repeat-x;
         }
+        /* v306: monospace ticker-tape look for the whole day-detail card (header, every
+           transaction row) matching the original mockup — but NOT the Net-for-the-day amount,
+           which stays on the "Kalam" handwritten font from v305: that span sets its own inline
+           font-family, which (per normal CSS specificity rules) wins over this wildcard rule
+           regardless of the ID selector below, so it's naturally excluded without needing an
+           :not() exception here. System monospace stack only — no new font file, no CSP change
+           needed (this app's font-src is 'self'-only). */
+        #ledgerCalendarDayCard, #ledgerCalendarDayCard * {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+        }
         /* Avoids a double line (the last row's own .ledger-item border-bottom sitting right on
            top of .receipt-day-footer's border-top) when there's at least one transaction that
            day. */
