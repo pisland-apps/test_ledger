@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v307";
-        const APP_VERSION_DATE = "2026-09-06";
+        const APP_VERSION = "v316";
+        const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -1358,6 +1358,11 @@
         // approximate starting points only (per 1 MYR) — the user edits real values via
         // Currency Settings ▸ Save FX Values; this just avoids a blank/wrong first run.
         let baseCurrency = "MYR";
+        // v308: optional second "compare also in" currency for the Net Worth by Currency report
+        // only — a lightweight, global, single-slot companion to baseCurrency (same persistence
+        // pattern, same convertCurrency() math), deliberately NOT a per-account "home currency"
+        // concept. "" means "off" (no second column shown).
+        let reportSecondaryCurrency = "";
         let fxRates = {
             MYR: 1.0, SGD: 0.3025, USD: 0.225, HKD: 1.755, CNY: 1.615,
             TWD: 7.15, THB: 7.65, KRW: 305.0, JPY: 33.3, BND: 0.3025
@@ -2057,7 +2062,7 @@
                             ${notesLine}
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(displayAmount, t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(Math.abs(displayAmount), t.currency)}</div>
                         </div>
                     </div>
                 `;
@@ -2272,7 +2277,7 @@
                         </div>
                         <div class="insights-row-top" style="margin-top:2px;">
                             <span class="insights-tx-date">${t.date}</span>
-                            <span class="insights-row-amount" style="color:var(--${col});">${sgn}${formatCurrency(base, baseCurrency)}</span>
+                            <span class="insights-row-amount" style="color:var(--${col});">${sgn}${formatCurrency(Math.abs(base), baseCurrency)}</span>
                         </div>
                     </div>
                 `;
@@ -2396,7 +2401,16 @@
 
         function formatCurrency(amount, curr) {
             const sym = currencySymbols[curr] || curr;
-            return `${sym}${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            // v314: a negative amount's own "-" used to land *after* the currency symbol
+            // (e.g. "RM-6,082,436.85") because toLocaleString() puts it right against the
+            // digits and the symbol was simply glued on in front of that. Every call site that
+            // adds its own +/- sign already passes Math.abs()'d values in (verified across the
+            // codebase), so pulling the sign out here and putting it before the symbol instead
+            // (e.g. "-RM6,082,436.85") is safe and fixes every raw-negative display (Opening
+            // Balance Setup, Balance B/F, account initial balances, etc.) at once.
+            const isNeg = amount < 0;
+            const absStr = Math.abs(amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return `${isNeg ? "-" : ""}${sym}${absStr}`;
         }
 
         // Formats a balance-type amount (net worth, account balance, member totals — anything
@@ -2429,6 +2443,34 @@
             const color = nettedTowardSavings ? "var(--income-color)" : "var(--expense-color)";
             const sign = nettedTowardSavings ? "+" : "-";
             return `<span style="color:${color}; font-weight:700;">${sign}${formatCurrency(Math.abs(value), baseCurrency)}</span>`;
+        }
+
+        // v316: renders the "≈ RM16,991" style native-currency subtext under a Net Savings
+        // Statement row, for any category whose transactions were originally posted in a
+        // currency OTHER than the base currency (e.g. base=SGD, ASNB Dividend always posted in
+        // MYR). nativeMap is {currency: nativeAmountSum} accumulated alongside the base total in
+        // renderSavingsStatement — entries in the base currency itself are skipped since they're
+        // already fully represented by the row's main (base-currency) figure and would just be a
+        // redundant repeat of it. A category funded from more than one foreign currency (rare)
+        // shows each on its own line. Reuses the existing .converted-subtext class (already used
+        // for the same "≈" pattern on Account Activity balances) for visual consistency.
+        function nativeSubtextHTML(nativeMap) {
+            if (!nativeMap) return "";
+            const parts = Object.keys(nativeMap)
+                .filter(cur => cur !== baseCurrency && Math.abs(nativeMap[cur]) >= SAVINGS_ZERO_EPS)
+                .sort((a, b) => a.localeCompare(b))
+                .map(cur => `≈ ${formatCurrency(nativeMap[cur], cur)}`);
+            if (parts.length === 0) return "";
+            return `<span class="converted-subtext">${parts.join(" · ")}</span>`;
+        }
+
+        // Adds every {currency: amount} entry in `source` into `target` in place — used to roll
+        // a Main Category's own native totals together with its Subcategories' when building the
+        // combined row (mirrors how `combined` sums the plain base-currency numbers above it).
+        function mergeNativeInto(target, source) {
+            if (!source) return target;
+            Object.keys(source).forEach(cur => { target[cur] = (target[cur] || 0) + source[cur]; });
+            return target;
         }
 
         function convertCurrency(amount, fromCurr, toCurr) {
@@ -2913,7 +2955,7 @@
                             </div>
                             <div class="item-right">
                                 <div class="item-value" style="color:var(--${col}); font-weight:bold;">
-                                    ${sgn}${formatCurrency(splitInfo ? splitInfo.totalAmount : t.amount, t.currency)}
+                                    ${sgn}${formatCurrency(Math.abs(splitInfo ? splitInfo.totalAmount : t.amount), t.currency)}
                                     ${sub}
                                 </div>
                             </div>
@@ -5177,8 +5219,12 @@
             if (type === "multi") {
                 const rows = Array.from(document.getElementById("multiOpeningRows").children);
                 for (const row of rows) {
-                    const amount = parseFloat(row.querySelector(".multi-row-amount").value);
-                    if (!amount || amount <= 0) continue; // skip empty rows
+                    const amountStr = row.querySelector(".multi-row-amount").value;
+                    const amount = parseFloat(amountStr);
+                    // Skip only truly empty/zero rows — a NEGATIVE amount is valid here (e.g. the
+                    // account already starts in deficit in that currency), so it must not be
+                    // treated the same as an unfilled row.
+                    if (amountStr.trim() === "" || isNaN(amount) || amount === 0) continue;
                     openingTransactions.push({
                         // "transfer" (not "income") — this is capital you're bringing into tracking,
                         // not earned income, so it must not inflate the Income report. src is left
@@ -5930,7 +5976,7 @@
                             <span class="item-meta">${escapeHtml(t.date)}${unitsText ? " · " + unitsText : ""}${t.notes ? " · " + escapeHtml(t.notes) : ""}</span>
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(Math.abs(t.amount), t.currency)}</div>
                         </div>
                     </div>`;
             }).join("");
@@ -6012,8 +6058,15 @@
                 let col, sgn;
                 if (t.type === "income") { col = "income-color"; sgn = "+"; }
                 else if (t.type === "expense") { col = "expense-color"; sgn = "-"; }
-                else if (t.dest === accountId) { col = "income-color"; sgn = "+"; }
-                else { col = "expense-color"; sgn = "-"; }
+                else {
+                    // v312: direction must follow the *signed* contribution to this account, not
+                    // just which side (src/dest) it's on — a transfer entered with a negative
+                    // amount (e.g. this Opening Balance) actually moves money the opposite way
+                    // from what its src/dest role alone would suggest.
+                    const contribution = (t.dest === accountId) ? t.amount : -t.amount;
+                    if (contribution >= 0) { col = "income-color"; sgn = "+"; }
+                    else { col = "expense-color"; sgn = "-"; }
+                }
 
                 const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
                 const displayCat = splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer');
@@ -6036,7 +6089,7 @@
                             ${notesLine}
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(displayAmount, t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(Math.abs(displayAmount), t.currency)}</div>
                         </div>
                     </div>`;
             }).join("");
@@ -10999,8 +11052,18 @@
             }
 
             const parsedAmount = parseFloat(amountVal);
-            if (isNaN(parsedAmount) || parsedAmount <= 0) {
-                alert("Please enter a valid amount greater than zero.");
+            // A Transfer with no source account (Opening Balance, Opening Fixed Deposit
+            // Placement, and similar "external funds coming into tracking" entries — see
+            // openingTransactions above) is allowed to be negative, since it simply sets how
+            // much of that currency the account starts with, and a Multi-Currency/Fixed
+            // Deposit/Unit Trust basket (or even a plain account, which already allows a
+            // negative initial balance — see newAccBal above) can legitimately start in
+            // deficit. Every other entry (Income, Expense, or a real Transfer between two
+            // accounts) still requires a positive amount, since its type/direction already
+            // encodes the sign.
+            const isExternalFundsTransfer = document.getElementById("txType").value === "transfer" && document.getElementById("srcAccount").value === "";
+            if (isNaN(parsedAmount) || parsedAmount === 0 || (parsedAmount < 0 && !isExternalFundsTransfer)) {
+                alert(isExternalFundsTransfer ? "Please enter a valid, non-zero amount." : "Please enter a valid amount greater than zero.");
                 return;
             }
 
@@ -11042,8 +11105,8 @@
             if (txIdInput !== "") {
                 const existingTxs = await readAllDB(STORES.TRANSACTIONS);
                 existingTxForEdit = existingTxs.find(t => t.id === parseInt(txIdInput)) || null;
-                if (document.getElementById("txType").value === "transfer" && existingTxForEdit && existingTxForEdit.cat === "Fixed Deposit") {
-                    preservedTransferCat = "Fixed Deposit";
+                if (document.getElementById("txType").value === "transfer" && existingTxForEdit && (existingTxForEdit.cat === "Fixed Deposit" || existingTxForEdit.cat === "Opening Balance")) {
+                    preservedTransferCat = existingTxForEdit.cat;
                 }
             }
 
@@ -11737,7 +11800,7 @@
             else { headerColor = "var(--primary)"; sgn = "🔄"; }
 
             document.getElementById("txQuickViewHeader").style.background = headerColor;
-            document.getElementById("txQuickViewAmount").textContent = `${sgn}${formatCurrency(splitInfo ? splitInfo.totalAmount : tx.amount, tx.currency)}`;
+            document.getElementById("txQuickViewAmount").textContent = `${sgn}${formatCurrency(Math.abs(splitInfo ? splitInfo.totalAmount : tx.amount), tx.currency)}`;
             document.getElementById("txQuickViewDate").textContent = tx.date;
 
             const icon = tx.type === "transfer"
@@ -11766,7 +11829,7 @@
                 ? splitInfo.members.map(m => `
                     <div style="display:flex; justify-content:space-between;">
                         <span>${getCategoryIcon(m.cat, tx.type)} ${escapeHtml(m.cat)}</span>
-                        <span>${sgn}${formatCurrency(m.amount, tx.currency)}</span>
+                        <span>${sgn}${formatCurrency(Math.abs(m.amount), tx.currency)}</span>
                     </div>
                 `).join("")
                 : "";
@@ -11939,7 +12002,7 @@
             document.getElementById("txSplitPickerList").innerHTML = info.members.map(m => `
                 <button type="button" class="option-menu-btn" data-click="selectTxSplitPickerRow" data-id="${m.id}" style="display:flex; justify-content:space-between;">
                     <span>${getCategoryIcon(m.cat, info.type)} ${escapeHtml(m.cat)}</span>
-                    <span>${sgn}${formatCurrency(m.amount, info.currency)}</span>
+                    <span>${sgn}${formatCurrency(Math.abs(m.amount), info.currency)}</span>
                 </button>
             `).join("");
             document.getElementById("txSplitPickerModal").classList.add("active");
@@ -12794,6 +12857,20 @@
             });
             document.getElementById("netWorthDisplay").innerHTML = formatBalanceHTML(globalBaseNetWorth, baseCurrency);
 
+            // v309: Dashboard hero badge for the same "compare also in" preference the Net Worth
+            // by Currency report uses — see activeSecondaryCurrency() for why this reads through
+            // that helper rather than the raw reportSecondaryCurrency variable. globalBaseNetWorth
+            // is already the sum of every account converted to baseCurrency above; converting that
+            // single number again to the secondary currency is equivalent to summing native
+            // amounts straight to the secondary (conversions here are just cross-multiplication
+            // through fxRates), so this doesn't need its own pass over `accounts`.
+            const secondaryBadge = document.getElementById("netWorthSecondaryBadge");
+            const activeSecondary = activeSecondaryCurrency();
+            secondaryBadge.classList.toggle("hidden", !activeSecondary);
+            if (activeSecondary) {
+                secondaryBadge.innerHTML = "≈ " + formatCurrency(convertCurrency(globalBaseNetWorth, baseCurrency, activeSecondary), activeSecondary);
+            }
+
             // v157: Financial Assets vs Real Estate split row under the main figure — reuses the
             // same summarizeOwnerAssetSplit() the "Financial Assets vs Real Estate" owner report
             // already relies on, so this always reconciles to globalBaseNetWorth above. Hidden
@@ -13332,8 +13409,8 @@
                                 <span class="item-meta">Account Opening Initial Vault Point</span>
                             </div>
                             <div class="item-right">
-                                <div class="item-value" style="color: var(--text-main);">
-                                    ${formatCurrency(viewingAcc.initialBalance, viewingAcc.currency)}
+                                <div class="item-value">
+                                    ${formatBalanceHTML(viewingAcc.initialBalance, viewingAcc.currency)}
                                     ${subText}
                                 </div>
                             </div>
@@ -13364,8 +13441,8 @@
                                     <span class="item-meta">Brought forward from ${accountLedgerYearsCache[accountYearIdx - 1]}</span>
                                 </div>
                                 <div class="item-right">
-                                    <div class="item-value" style="color: var(--text-main);">
-                                        ${formatCurrency(bf, viewingAcc.currency)}
+                                    <div class="item-value">
+                                        ${formatBalanceHTML(bf, viewingAcc.currency)}
                                         ${subText}
                                     </div>
                                 </div>
@@ -13384,8 +13461,8 @@
                                     <span class="item-meta">Carried forward to ${accountLedgerYearsCache[accountYearIdx + 1]}</span>
                                 </div>
                                 <div class="item-right">
-                                    <div class="item-value" style="color: var(--text-main);">
-                                        ${formatCurrency(cf, viewingAcc.currency)}
+                                    <div class="item-value">
+                                        ${formatBalanceHTML(cf, viewingAcc.currency)}
                                         ${subText}
                                     </div>
                                 </div>
@@ -13521,8 +13598,14 @@
                 let col, sgn;
                 if (t.type === "income") { col = "income-color"; sgn = "+"; }
                 else if (t.type === "expense") { col = "expense-color"; sgn = "-"; }
-                else if (activeLedgerAccountView !== "all" && t.dest === activeLedgerAccountView) { col = "income-color"; sgn = "+"; }
-                else if (activeLedgerAccountView !== "all" && t.src === activeLedgerAccountView) { col = "expense-color"; sgn = "-"; }
+                else if (activeLedgerAccountView !== "all" && (t.dest === activeLedgerAccountView || t.src === activeLedgerAccountView)) {
+                    // v312: same signed-contribution fix as the Currency Activity page — see
+                    // comment there. A negative-amount transfer's direction flips relative to
+                    // its src/dest role.
+                    const contribution = (t.dest === activeLedgerAccountView) ? t.amount : -t.amount;
+                    if (contribution >= 0) { col = "income-color"; sgn = "+"; }
+                    else { col = "expense-color"; sgn = "-"; }
+                }
                 else { col = "transfer-color"; sgn = "🔄"; }
 
                 const sub = t.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(tBase, baseCurrency)}</span>` : '';
@@ -13569,7 +13652,7 @@
                 // side figure instead: the locked destAmount when one was entered, or (matching
                 // what computeAccountBalances() actually applies) a live-converted estimate
                 // otherwise, clearly marked "≈" since it isn't fixed.
-                let displayAmountHTML = `${sgn}${formatCurrency(splitInfo ? splitInfo.totalAmount : t.amount, t.currency)}`;
+                let displayAmountHTML = `${sgn}${formatCurrency(Math.abs(splitInfo ? splitInfo.totalAmount : t.amount), t.currency)}`;
                 if (t.type === "transfer" && activeLedgerAccountView === t.dest) {
                     const destAcc = accounts.find(a => a.id === t.dest);
                     const srcAcc = accounts.find(a => a.id === t.src);
@@ -13817,7 +13900,7 @@
         // Previously only the year was passed, so a category clicked from a month-scoped visit
         // (report card's "Total" click — see navigateToSavingsPage/savingsFilterMonth) opened
         // that category's whole-year history instead of just the month actually being viewed.
-        function buildSavingsSectionRowsHTML(catSummary, type, filterY, filterM) {
+        function buildSavingsSectionRowsHTML(catSummary, type, filterY, filterM, catNative = {}) {
             const catRecords = dynamicCategories.filter(c => c.type === type);
             const mains = catRecords.filter(c => !c.parentId).sort((a, b) => a.name.localeCompare(b.name));
             const subsByMainId = new Map();
@@ -13834,12 +13917,14 @@
                 rendered.add(main.name);
                 const directVal = catSummary[main.name] || 0;
                 let combined = directVal;
+                const combinedNative = mergeNativeInto({}, catNative[main.name]);
                 const subRowsData = [];
                 subs.forEach(s => {
                     rendered.add(s.name);
                     const v = catSummary[s.name] || 0;
                     combined += v;
-                    if (Math.abs(v) >= SAVINGS_ZERO_EPS) subRowsData.push({ name: s.name, value: v, icon: s.icon });
+                    mergeNativeInto(combinedNative, catNative[s.name]);
+                    if (Math.abs(v) >= SAVINGS_ZERO_EPS) subRowsData.push({ name: s.name, value: v, icon: s.icon, native: catNative[s.name] });
                 });
 
                 if (Math.abs(combined) < SAVINGS_ZERO_EPS && subRowsData.length === 0) return;
@@ -13854,7 +13939,10 @@
                             <strong>${icon} ${escapeHtml(main.name)}</strong>
                         </span>
                         <span style="display:flex; align-items:center; gap:8px;">
-                            ${savingsAmountHTML(combined, type)}
+                            <span style="display:flex; flex-direction:column; align-items:flex-end;">
+                                ${savingsAmountHTML(combined, type)}
+                                ${nativeSubtextHTML(combinedNative)}
+                            </span>
                             ${hasSubs ? `<button type="button" class="trash-btn" data-click="toggleSavingsMainExpand" data-id="${escapeHtml(main.id)}" title="${expanded ? 'Hide subcategories' : 'Show subcategories'}" style="padding:2px 6px; font-size:0.7rem;">${expanded ? '▲' : '▼'}</button>` : ''}
                         </span>
                     </div>
@@ -13865,7 +13953,10 @@
                         html += `
                             <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(s.name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}" style="padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;">
                                 <span><span style="color:var(--text-muted);">↳</span> ${s.icon} ${escapeHtml(s.name)}</span>
-                                ${savingsAmountHTML(s.value, type)}
+                                <span style="display:flex; flex-direction:column; align-items:flex-end;">
+                                    ${savingsAmountHTML(s.value, type)}
+                                    ${nativeSubtextHTML(s.native)}
+                                </span>
                             </div>
                         `;
                     });
@@ -13880,7 +13971,10 @@
                 html += `
                     <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}">
                         <strong>${icon} ${escapeHtml(name)}</strong>
-                        ${savingsAmountHTML(val, type)}
+                        <span style="display:flex; flex-direction:column; align-items:flex-end;">
+                            ${savingsAmountHTML(val, type)}
+                            ${nativeSubtextHTML(catNative[name])}
+                        </span>
                     </div>
                 `;
             });
@@ -13919,6 +14013,21 @@
             currentIncomeCategories.forEach(c => catSummary.income[c] = 0);
             currentExpenseCategories.forEach(c => catSummary.expense[c] = 0);
 
+            // v316: parallel {currency: nativeAmount} accumulator per category, kept alongside
+            // catSummary's base-currency totals purely for display (the "≈ RM16,991" subtext on
+            // each row — see nativeSubtextHTML()). Never used for Surplus/Deficit math, which
+            // stays exactly as before, in base currency only.
+            const catNative = { income: {}, expense: {} };
+            function addNative(bucket, cat, currency, amount) {
+                bucket[cat] = bucket[cat] || {};
+                bucket[cat][currency] = (bucket[cat][currency] || 0) + amount;
+            }
+            // excludedSummary entries are shaped {value, type, native} rather than a plain
+            // {currency: amount} map, so they need their own accumulator instead of addNative().
+            function addExcludedNative(cat, currency, amount) {
+                excludedSummary[cat].native[currency] = (excludedSummary[cat].native[currency] || 0) + amount;
+            }
+
             const excludedSummary = {};
             let excludedNetTotal = 0;
 
@@ -13937,44 +14046,50 @@
                     // same "exclude from savings" category setting an ordinary expense in that
                     // category would.
                     if (excludedCatNames.has(t.cat)) {
-                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "expense" };
+                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "expense", native: {} };
                         excludedSummary[t.cat].value -= tBase;
                         excludedNetTotal += tBase;
+                        addExcludedNative(t.cat, t.currency, -t.amount);
                         return;
                     }
                     expBaseTotal -= tBase;
                     catSummary.expense[t.cat] = (catSummary.expense[t.cat] || 0) - tBase;
+                    addNative(catNative.expense, t.cat, t.currency, -t.amount);
                     return;
                 }
                 if (t.type === "income") {
                     if (excludedCatNames.has(t.cat)) {
-                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "income" };
+                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "income", native: {} };
                         excludedSummary[t.cat].value += tBase;
                         excludedNetTotal += tBase;
+                        addExcludedNative(t.cat, t.currency, t.amount);
                         return;
                     }
                     incBaseTotal += tBase;
                     catSummary.income[t.cat] = (catSummary.income[t.cat] || 0) + tBase;
+                    addNative(catNative.income, t.cat, t.currency, t.amount);
                 }
                 if (t.type === "expense") {
                     if (excludedCatNames.has(t.cat)) {
-                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "expense" };
+                        excludedSummary[t.cat] = excludedSummary[t.cat] || { value: 0, type: "expense", native: {} };
                         excludedSummary[t.cat].value += tBase;
                         excludedNetTotal -= tBase;
+                        addExcludedNative(t.cat, t.currency, t.amount);
                         return;
                     }
                     expBaseTotal += tBase;
                     catSummary.expense[t.cat] = (catSummary.expense[t.cat] || 0) + tBase;
+                    addNative(catNative.expense, t.cat, t.currency, t.amount);
                 }
             });
 
-            let incRowsHTML = buildSavingsSectionRowsHTML(catSummary.income, "income", filterY, savingsFilterMonth);
+            let incRowsHTML = buildSavingsSectionRowsHTML(catSummary.income, "income", filterY, savingsFilterMonth, catNative.income);
             document.getElementById("savingsIncomeRows").innerHTML = incRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No income entries logged.</p>';
             const incTotalDisplay = Math.abs(incBaseTotal) < SAVINGS_ZERO_EPS ? 0 : incBaseTotal;
             document.getElementById("savingsIncomeTotal").textContent = `${incTotalDisplay < 0 ? "-" : "+"}${formatCurrency(Math.abs(incTotalDisplay), baseCurrency)}`;
             document.getElementById("savingsIncomeTotal").style.color = incTotalDisplay < 0 ? "var(--expense-color)" : "var(--income-color)";
 
-            let expRowsHTML = buildSavingsSectionRowsHTML(catSummary.expense, "expense", filterY, savingsFilterMonth);
+            let expRowsHTML = buildSavingsSectionRowsHTML(catSummary.expense, "expense", filterY, savingsFilterMonth, catNative.expense);
             document.getElementById("savingsExpenseRows").innerHTML = expRowsHTML || '<p style="font-size:0.75rem; color:var(--text-muted);">No expense entries logged.</p>';
             const expTotalDisplay = Math.abs(expBaseTotal) < SAVINGS_ZERO_EPS ? 0 : expBaseTotal;
             document.getElementById("savingsExpenseTotal").textContent = `${expTotalDisplay < 0 ? "+" : "-"}${formatCurrency(Math.abs(expTotalDisplay), baseCurrency)}`;
@@ -14007,7 +14122,10 @@
                 excludedRowsHTML += `
                     <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(c)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(savingsFilterMonth)}">
                         <strong>${icon} ${escapeHtml(c)}</strong>
-                        ${savingsAmountHTML(entry.value, entry.type)}
+                        <span style="display:flex; flex-direction:column; align-items:flex-end;">
+                            ${savingsAmountHTML(entry.value, entry.type)}
+                            ${nativeSubtextHTML(entry.native)}
+                        </span>
                     </div>
                 `;
             });
@@ -14474,7 +14592,7 @@
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(t.amount, t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(Math.abs(t.amount), t.currency)}</div>
                         </div>
                     </div>`;
             }).join("") : `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No transactions tagged yet.</p>`;
@@ -14772,11 +14890,60 @@
         // and % of Net Worth for comparison, plus a Grand Total row. Optional Member filter
         // (same "all" / "joint" / one member convention as Spending/Income Breakdown and the
         // Unit Trust Portfolio report) narrows the account subset before summing.
+        // v309: single source of truth for "is a secondary compare currency actually active right
+        // now" — used by both the Net Worth by Currency report and the Dashboard hero badge, so
+        // neither has to duplicate the equals-base guard. Covers the case where the user picked a
+        // secondary on the report page, then later changed baseCurrency in Settings without
+        // revisiting the report (which is the only other place reportSecondaryCurrency gets
+        // normalized) — reading through this function instead of the raw variable means both
+        // call sites self-correct immediately rather than only on the report's next open.
+        function activeSecondaryCurrency() {
+            return reportSecondaryCurrency && reportSecondaryCurrency !== baseCurrency ? reportSecondaryCurrency : "";
+        }
+
+        // v308: populates the "Compare also in" select with every currency fxRates knows about
+        // (same universe openCurrencyConfig's baseCurrencySelect draws from), minus whichever
+        // currency is the current base — comparing base against itself is a no-op column. Value
+        // "" is the explicit "off" option (no second column), and is what the select falls back
+        // to if the previously-saved secondary happens to equal the (possibly since-changed)
+        // base currency, so the report never renders a redundant ≈{base}/≈{base} pair of columns.
+        function populateCurrencyReportSecondarySelect() {
+            const sel = document.getElementById("currencyReportSecondaryFilter");
+            if (!sel) return;
+            const options = Object.keys(fxRates).filter(c => c !== baseCurrency);
+            if (reportSecondaryCurrency === baseCurrency) reportSecondaryCurrency = "";
+            sel.innerHTML = `<option value="">None</option>` +
+                options.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+            sel.value = reportSecondaryCurrency;
+        }
+
+        // v308: handler for the "Compare also in" select — persists the same way baseCurrency
+        // does (own SETTINGS row, read back on next launch), then just re-renders the report;
+        // the select itself isn't rebuilt so the user's choice sticks through the re-render.
+        async function handleCurrencyReportSecondaryChange() {
+            const sel = document.getElementById("currencyReportSecondaryFilter");
+            reportSecondaryCurrency = sel ? sel.value : "";
+            try {
+                await writeDB(STORES.SETTINGS, { key: "reportSecondaryCurrency", value: reportSecondaryCurrency });
+            } catch (err) {
+                alert("Could not save this preference: " + (err && err.message ? err.message : err));
+            }
+            renderCurrencyReportPage();
+        }
+
         async function renderCurrencyReportPage() {
             const { accounts, nativeBalances } = await computeAccountBalances();
             populateBreakdownMemberFilter("currencyReportMemberFilter");
+            populateCurrencyReportSecondarySelect();
             const filterMember = document.getElementById("currencyReportMemberFilter").value;
             document.getElementById("currencyReportBaseCurrLabel").textContent = baseCurrency;
+
+            // "" (None) leaves the report exactly as before — one ≈{base} column. A picked
+            // currency adds exactly one more ≈ column; % of Net Worth is a ratio and is identical
+            // regardless of which currency it's computed in, so it is NOT duplicated per column —
+            // see remark-2 discussion: this is what keeps the extra column from compounding the
+            // table's existing horizontal-scroll width problem.
+            const secondary = activeSecondaryCurrency();
 
             const subset = filterMember !== "all"
                 ? (() => { const ids = accountIdsForMemberFilter(accounts, filterMember); return accounts.filter(a => ids.has(a.id)); })()
@@ -14804,17 +14971,21 @@
                 .sort((a, b) => b.base - a.base);
 
             let rows = "";
-            let gFinancialBase = 0, gRealEstateBase = 0;
+            let gFinancialBase = 0, gRealEstateBase = 0, gTotalSecondary = 0;
             sortedCodes.forEach(({ code, financial, realEstate, base }) => {
                 gFinancialBase += convertCurrency(financial, code, baseCurrency);
                 gRealEstateBase += convertCurrency(realEstate, code, baseCurrency);
+                const secondaryCell = secondary
+                    ? `<td style="padding:8px 10px; text-align:right; color:var(--text-muted);">≈ ${formatBalanceHTML(convertCurrency(financial + realEstate, code, secondary), secondary)}</td>`
+                    : "";
+                if (secondary) gTotalSecondary += convertCurrency(financial + realEstate, code, secondary);
                 rows += `
                     <tr>
                         <td style="padding:8px 10px;">${currencyBadgeHTML(code)}</td>
                         <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(financial, code)}</td>
                         <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(realEstate, code)}</td>
                         <td style="padding:8px 10px; text-align:right;"><strong>${formatBalanceHTML(financial + realEstate, code)}</strong></td>
-                        <td style="padding:8px 10px; text-align:right; color:var(--text-muted);">≈ ${formatBalanceHTML(base, baseCurrency)}</td>
+                        <td style="padding:8px 10px; text-align:right; color:var(--text-muted);">≈ ${formatBalanceHTML(base, baseCurrency)}</td>${secondaryCell}
                         <td style="padding:8px 10px; text-align:right;">${pctOf(base)}</td>
                     </tr>`;
             });
@@ -14827,7 +14998,7 @@
                             <th style="padding:6px 10px; text-align:right;">Financial Assets</th>
                             <th style="padding:6px 10px; text-align:right;">Real Estate</th>
                             <th style="padding:6px 10px; text-align:right;">Total</th>
-                            <th style="padding:6px 10px; text-align:right;">≈ ${escapeHtml(baseCurrency)}</th>
+                            <th style="padding:6px 10px; text-align:right;">≈ ${escapeHtml(baseCurrency)}</th>${secondary ? `<th style="padding:6px 10px; text-align:right;">≈ ${escapeHtml(secondary)}</th>` : ""}
                             <th style="padding:6px 10px; text-align:right;">% of Net Worth</th>
                         </tr>
                     </thead>
@@ -14838,7 +15009,7 @@
                             <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(gFinancialBase, baseCurrency)}</td>
                             <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(gRealEstateBase, baseCurrency)}</td>
                             <td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(grandTotal, baseCurrency)}</td>
-                            <td style="padding:8px 10px; text-align:right;">—</td>
+                            <td style="padding:8px 10px; text-align:right;">—</td>${secondary ? `<td style="padding:8px 10px; text-align:right;">${formatBalanceHTML(gTotalSecondary, secondary)}</td>` : ""}
                             <td style="padding:8px 10px; text-align:right;">100.0%</td>
                         </tr>
                     </tfoot>
@@ -15160,6 +15331,9 @@
 
             const storedBase = await readKeyDB("settings", "baseCurrency");
             if (storedBase) baseCurrency = storedBase.value;
+
+            const storedSecondary = await readKeyDB("settings", "reportSecondaryCurrency");
+            if (storedSecondary) reportSecondaryCurrency = storedSecondary.value || "";
 
             const storedRates = await readKeyDB("settings", "fxRates");
             if (storedRates) fxRates = storedRates.value;
@@ -15702,10 +15876,18 @@
             // second tap (now revealed) navigates as before. The navigateToNetWorthStatementPage
             // entry above is left in place — the function itself is still called directly
             // elsewhere (accountsPageBackTarget handling), independent of this dispatch table.
-            netWorthCardTap: () => {
+            // v309: reveal check/toggle now covers every .privacy-amount-value inside this tap
+            // target (currently #netWorthDisplay + the optional #netWorthSecondaryBadge), not
+            // just #netWorthDisplay alone — added so the secondary-currency badge shares the same
+            // reveal state as the main figure instead of a state of its own that this handler had
+            // no path back to (second tap already navigates once the main figure is revealed, so
+            // an independently-blurred badge would never get its own turn). Gated off the SAME
+            // element (amountEl = #netWorthDisplay) it always was, so behavior when the badge is
+            // hidden (no secondary currency set) is unchanged.
+            netWorthCardTap: (el) => {
                 const amountEl = document.getElementById("netWorthDisplay");
                 if (isPrivacyModeEnabled() && amountEl && !amountEl.classList.contains("revealed")) {
-                    togglePrivacyAmountReveal(amountEl);
+                    el.querySelectorAll(".privacy-amount-value").forEach(togglePrivacyAmountReveal);
                     return;
                 }
                 navigateToNetWorthStatementPage();
@@ -15951,6 +16133,7 @@
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             renderPortfolioReportPage: () => renderPortfolioReportPage(),
             renderCurrencyReportPage: () => renderCurrencyReportPage(),
+            handleCurrencyReportSecondaryChange: () => handleCurrencyReportSecondaryChange(),
             renderTotalSummaryPage: () => renderTotalSummaryPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),

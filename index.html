@@ -294,6 +294,20 @@
             box-shadow: 0 6px 16px -4px color-mix(in srgb, var(--primary) 55%, transparent);
         }
         .net-worth-hero-card #netWorthDisplay { color: #fff; }
+        /* v309: pill badge for the optional secondary "compare also in" currency (see
+           reportSecondaryCurrency) — same translucent-white treatment as .net-worth-split-card
+           just below, so it reads as "part of this card" rather than a random inline caption.
+           display:inline-block (not block) so .hidden's display:none toggle works normally. */
+        .net-worth-secondary-badge {
+            display: inline-block;
+            margin-top: 4px;
+            padding: 2px 9px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: rgba(255,255,255,0.92);
+            background: rgba(255,255,255,0.16);
+            border-radius: 999px;
+        }
         .net-worth-hero-label {
             font-size: 0.75rem;
             font-weight: 600;
@@ -2822,6 +2836,16 @@
                 <div class="net-worth-container">
                     <div style="cursor:pointer;" data-click="netWorthCardTap" title="Tap for the full Net Worth Statement (assets vs. liabilities breakdown)">
                         <h1 id="netWorthDisplay" class="privacy-amount-value">0.00</h1>
+                        <!-- v309: optional "compare also in" badge — same reportSecondaryCurrency
+                             preference the Net Worth by Currency report uses (see Settings/that
+                             report for how it's picked). Hidden by default; renderApp() only
+                             un-hides it when activeSecondaryCurrency() resolves to a real code.
+                             Carries .privacy-amount-value like #netWorthDisplay above it — a real
+                             converted balance must not sit exposed next to a blurred one when
+                             Privacy Mode is on — and its reveal is driven together with
+                             #netWorthDisplay's by netWorthCardTap (CLICK_ACTIONS, ledger.js), not
+                             independently, so one tap reveals both or neither. -->
+                        <span id="netWorthSecondaryBadge" class="net-worth-secondary-badge privacy-amount-value hidden">≈ --</span>
                         <p class="net-worth-hero-label">Portfolio Net Worth</p>
                     </div>
                 </div>
@@ -3810,6 +3834,19 @@
             <label>Member</label>
             <select id="currencyReportMemberFilter" class="form-input" data-change="renderCurrencyReportPage">
                 <option value="all">All Members (everyone, incl. joint)</option>
+            </select>
+        </div>
+
+        <!-- v308: optional second reference currency, e.g. someone holding meaningful MYR AND
+             SGD financial assets can see both ≈ conversions side by side instead of switching
+             the app's base currency back and forth. Deliberately capped at one extra currency
+             (not an open multi-select) — the table already needs horizontal scroll with just the
+             one ≈ column (see report-card below), so this is the one extra column that width
+             affords rather than an open-ended list. -->
+        <div class="form-row print-filter-row" style="margin-bottom:14px;">
+            <label>Compare also in</label>
+            <select id="currencyReportSecondaryFilter" class="form-input" data-change="handleCurrencyReportSecondaryChange">
+                <option value="">None</option>
             </select>
         </div>
 
