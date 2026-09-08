@@ -2683,6 +2683,13 @@
                 <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></span> Transactions
             </button>
 
+            <!-- v318: Inventory — items logged either inline from an Expense entry's "📦 Add to
+                 Inventory" toggle, or manually via this page's own + button. See
+                 renderInventoryPage()/openInventoryItemModal() in ledger.js. -->
+            <button class="sidebar-item" data-click="sidebarGo" data-target="inventory">
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><line x1="10" y1="12" x2="14" y2="12"/></svg></span> Inventory
+            </button>
+
             <div class="sidebar-divider"></div>
             <div class="sidebar-section-label">Reports</div>
             <!-- v268: "Total Bill Summary" — user referenced a reference-app screenshot (a
@@ -2959,6 +2966,17 @@
             <span class="section-title" style="cursor:pointer;" data-click="sidebarGo" data-target="tag-report">🔖 Tag Reminders</span>
         </div>
         <div class="ledger-container" id="tagReminderList"></div>
+        </div>
+
+        <!-- v318: Warranty Reminders — mirrors the Tag Reminders widget just above, but for
+             active Inventory items whose (representative) warranty ends within 30 days. Hidden
+             entirely when nothing's expiring soon. Rows ARE clickable here (unlike Tag
+             Reminders) — tapping one jumps straight to that item in Inventory. -->
+        <div id="dashboardWarrantyWidget" style="display:none;">
+        <div class="section-header">
+            <span class="section-title" style="cursor:pointer;" data-click="navigateToInventoryPage">⚠️ Warranty Reminders</span>
+        </div>
+        <div class="ledger-container" id="warrantyReminderList"></div>
         </div>
 
         <div id="dashboardAccountsWidget">
@@ -3332,6 +3350,118 @@
         <button class="fab-btn" data-click="openCategoryBudgetModal" aria-label="Add category budget" title="Add category budget">+</button>
     </div>
 
+
+    <!-- ================= PAGE: INVENTORY (v318) =================
+         Items logged either inline from an Expense entry's "📦 Add to Inventory" toggle (see
+         #txInventoryWrap on #txModal below) or manually via this page's own + button. Visual
+         language deliberately matches the existing Ledger→Calendar→receipt-style report chain:
+         .ledger-item cards with a tx-icon-circle avatar, a dashed-rule "receipt" strip for the
+         warranty-expiry reminder, and Kalam-font emphasis on the headline numbers — see
+         renderInventoryPage() in ledger.js. -->
+    <div id="page-inventory" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div>
+                <h3 style="font-weight:800; font-size:1.2rem;">Inventory</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">What you own — purchase details &amp; warranty tracking</p>
+            </div>
+        </div>
+
+        <!-- Receipt-style strip (same dashed-rule + Kalam convention as the Ledger Calendar's
+             day footer) — only shown when at least one ACTIVE item's warranty expires within 30
+             days. Tapping it jumps the filter to "Active" and scrolls to the list. -->
+        <div id="inventoryWarrantyStrip" data-click="inventoryWarrantyStripTap" style="display:none; cursor:pointer; background:var(--card-bg); border:1px solid var(--border-color); border-radius:12px; padding:12px 14px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; border-bottom:2px dashed var(--border-color);">
+            <span style="font-family:'Kalam', cursive; font-size:0.92rem; font-weight:800; color:#b45309;">⚠️ <span id="inventoryWarrantyStripText">Warranty expiring soon</span></span>
+            <span style="color:var(--text-muted); font-weight:700;">›</span>
+        </div>
+
+        <div class="nav-view-toggle" style="margin:0 0 14px;">
+            <button type="button" class="nav-view-toggle-btn active" data-click="inventorySetStatusFilter" data-status="all" style="flex:1;">All</button>
+            <button type="button" class="nav-view-toggle-btn" data-click="inventorySetStatusFilter" data-status="active" style="flex:1;">Active</button>
+            <button type="button" class="nav-view-toggle-btn" data-click="inventorySetStatusFilter" data-status="disposed" style="flex:1;">Disposed</button>
+            <button type="button" class="nav-view-toggle-btn" data-click="inventorySetStatusFilter" data-status="lost" style="flex:1;">Lost</button>
+        </div>
+
+        <div id="inventoryPageList"></div>
+
+        <button class="fab-btn" data-click="openInventoryItemModalNew" aria-label="Add inventory item" title="Add inventory item">+</button>
+    </div>
+
+    <!-- Inventory item detail/edit modal -->
+    <div class="modal" id="inventoryItemModal">
+        <div class="modal-sheet" style="padding:0; display:flex; flex-direction:column; overflow:hidden;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:20px 20px 12px; flex-shrink:0; border-bottom:1px solid var(--border-color);">
+                <h3 id="inventoryModalTitle" style="font-weight:800; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">Inventory Item</h3>
+                <button type="button" data-click="closeModal" data-modal="inventoryItemModal" style="background:none; border:none; font-size:1.5rem; padding:8px; flex:0 0 auto;">&times;</button>
+            </div>
+            <div style="flex:1 1 auto; min-height:0; overflow-y:auto; padding:16px 20px;">
+                <input type="hidden" id="invId">
+                <input type="hidden" id="invLinkedTxId">
+
+                <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">🏪</span><input type="text" id="invVendor" placeholder="Vendor (where you bought it)" aria-label="Vendor"></div>
+                <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📦</span><input type="text" id="invName" required placeholder="Item name" aria-label="Item name"></div>
+                <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📝</span><input type="text" id="invNote" placeholder="Note (Optional)" aria-label="Note"></div>
+
+                <div class="form-row-inline">
+                    <div>
+                        <label>Purchase Date</label>
+                        <input type="date" id="invPurchaseDate">
+                    </div>
+                    <div>
+                        <label>Purchase Price</label>
+                        <input type="number" id="invPurchasePrice" step="0.01" min="0">
+                    </div>
+                </div>
+                <div class="form-row-inline">
+                    <div>
+                        <label>Serial Number (Optional)</label>
+                        <input type="text" id="invSerialNumber">
+                    </div>
+                    <div>
+                        <label>Model (Optional)</label>
+                        <input type="text" id="invModel">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <label>Status</label>
+                    <select id="invStatus" class="form-input">
+                        <option value="active">Active</option>
+                        <option value="disposed">Disposed</option>
+                        <option value="lost">Lost</option>
+                    </select>
+                </div>
+
+                <!-- Warranty coverage — repeatable, since one item can have different parts
+                     covered for different periods (e.g. "Whole unit" 12mo + "Compressor" 60mo). -->
+                <div style="margin-top:6px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                        <label style="margin:0;">Warranty Coverage</label>
+                    </div>
+                    <div id="invWarrantyRows"></div>
+                    <button type="button" class="split-add-btn" data-click="addInvWarrantyRow" title="Add warranty coverage" style="width:auto; height:auto; border-radius:8px; padding:8px 14px; font-size:0.8rem; margin-top:4px;">+ Add Warranty</button>
+                </div>
+
+                <!-- Attachments — reuses the exact same store/shape as a transaction's own
+                     attachments (STORES.ATTACHMENTS). Auto-copied from the originating Expense
+                     entry when created via #txInventoryWrap; addable/removable here too. -->
+                <div style="margin-top:14px;">
+                    <label>Attachments (photos, receipt, manual)</label>
+                    <div id="invAttachmentPreview" style="display:none; flex-wrap:wrap; gap:8px; margin-bottom:8px;"></div>
+                    <div style="display:flex; gap:8px;">
+                        <label class="text-btn" style="flex:1; text-align:center; cursor:pointer;">📷 Camera<input type="file" id="invCameraInput" accept="image/*" capture="environment" style="display:none;" data-change="handleInvAttachmentsSelected"></label>
+                        <label class="text-btn" style="flex:1; text-align:center; cursor:pointer;">📎 Add Files<input type="file" id="invFilesInput" accept="image/*,application/pdf" multiple style="display:none;" data-change="handleInvAttachmentsSelected"></label>
+                    </div>
+                </div>
+
+                <p id="invUpdatedLabel" style="font-size:0.7rem; color:var(--text-muted); margin-top:14px;"></p>
+            </div>
+            <div style="flex-shrink:0; padding:12px 20px 20px; border-top:1px solid var(--border-color); display:flex; gap:8px;">
+                <button type="button" id="invDeleteBtn" class="text-btn" data-click="handleDeleteInventoryItem" style="display:none; color:var(--expense-color);">Delete</button>
+                <button type="button" class="submit-btn" style="flex:1;" data-click="handleSaveInventoryItem">Save</button>
+            </div>
+        </div>
+    </div>
 
     <!-- ================= PAGE 6: BACKUP & RESTORE ================= -->
     <div id="page-backup" class="page hidden">
@@ -4986,6 +5116,41 @@
 
                 <div class="form-row form-row-icon" id="txDescRow"><span class="field-icon" aria-hidden="true">👤</span><input type="text" id="txDesc" required placeholder="Description" aria-label="Description" autocomplete="off" data-input="filterDescSuggestions" data-focus="filterDescSuggestions"><div class="desc-suggest-list" id="txDescSuggestList"></div></div>
                 <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📝</span><input type="text" id="txNotes" placeholder="Notes (Optional)" aria-label="Notes (Optional)"></div>
+
+                <!-- v318: "Add to Inventory" — only offered on a brand-new Expense entry (see
+                     openTransactionForm()'s type/isNewEntry checks). The item's "name" is the
+                     Notes field just above (whatever you typed there — e.g. "iPhone 15 Pro"),
+                     not a separate input; Vendor/Purchase Date/Purchase Price/attachments are
+                     all auto-filled from Description/Date/Amount/this entry's own receipts at
+                     save time (see handleTransactionSubmitMobile()). Only Serial/Model/Warranty
+                     need filling in here, since those don't exist anywhere else on the form. -->
+                <div id="txInventoryWrap" style="display:none; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:10px; margin-bottom:10px;">
+                    <div class="toggle-switch-row" style="margin:0 0 4px;">
+                        <span class="toggle-switch-label" style="font-size:0.75rem;">📦 Add this purchase to Inventory</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="txInventoryToggle" data-change="toggleTxInventoryFields">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <div id="txInventoryFieldsWrap" style="display:none;">
+                        <p style="font-size:0.68rem; color:#166534; margin:2px 0 8px;">Item name comes from Notes above. Vendor/Date/Price/attachments are taken from this entry automatically.</p>
+                        <div class="form-row-inline">
+                            <div>
+                                <label>Serial Number (Optional)</label>
+                                <input type="text" id="txInvSerialNumber">
+                            </div>
+                            <div>
+                                <label>Model (Optional)</label>
+                                <input type="text" id="txInvModel">
+                            </div>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; margin:6px 0 6px;">
+                            <label style="margin:0;">Warranty Coverage (Optional)</label>
+                        </div>
+                        <div id="txInvWarrantyRows"></div>
+                        <button type="button" class="split-add-btn" data-click="addTxInvWarrantyRow" title="Add warranty coverage" style="width:auto; height:auto; border-radius:8px; padding:8px 14px; font-size:0.8rem;">+ Add Warranty</button>
+                    </div>
+                </div>
 
                 <!-- v285: shown only when this Income form was opened by tapping a tag pill on the
                      original expense (see openReimbursementFromTagBadge() in ledger.js) — offers to

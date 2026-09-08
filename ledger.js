@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v318";
+        const APP_VERSION = "v319";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -58,12 +58,17 @@
         // createTag() and the Tags row on the Add/Edit Transaction form).
         // v264: DB_VERSION 8→9 adds the BUDGETS store (one record per calendar month — a total
         // budget plus an optional per-category breakdown; see the "--- BUDGET ---" section below).
-        const DB_VERSION = 9;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags", BUDGETS: "budgets" };
+        // v318: DB_VERSION 9→10 adds the INVENTORY store (one record per owned item — vendor,
+        // purchase details, serial/model, one-or-more warranty coverage periods, and a
+        // active/disposed/lost status). Created either inline from an Expense entry (see the
+        // "📦 Add to Inventory" block on the transaction form) or manually from the Inventory
+        // page's own + button. See the "--- INVENTORY ---" section below.
+        const DB_VERSION = 10;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags", BUDGETS: "budgets", INVENTORY: "inventory" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id", budgets: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id", budgets: "id", inventory: "id" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -1862,6 +1867,16 @@
                         // [{cat, amount}] }. See the "--- BUDGET ---" section for the full model.
                         database.createObjectStore(STORES.BUDGETS, { keyPath: "id" });
                     }
+                    if (!database.objectStoreNames.contains(STORES.INVENTORY)) {
+                        // v318: one record per owned item — keyPath "id" (app-generated, see
+                        // makeInvId()). Shape: { id, linkedTxId, vendor, name, note, purchaseDate,
+                        // purchasePrice, currency, serialNumber, model, warranties: [{id, label,
+                        // months, startDate, endDate}], status ("active"|"disposed"|"lost"),
+                        // attachments: [{id,name,mime,thumb,size}] (same shape/store as
+                        // transaction attachments), createdAt, updated }. See the
+                        // "--- INVENTORY ---" section for the full model.
+                        database.createObjectStore(STORES.INVENTORY, { keyPath: "id" });
+                    }
                 };
                 request.onerror = (e) => reject(e.target.error);
             });
@@ -2600,7 +2615,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-attachment-review", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-attachment-review", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity", "page-inventory"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -2644,6 +2659,7 @@
                 case "page-navupdate": return "Daily NAV Update";
                 case "page-members": return "Manage Members";
                 case "page-member": return document.getElementById("memberPageTitle")?.textContent || "Member";
+                case "page-inventory": return "Inventory";
                 default: return "Ledger";
             }
         }
@@ -4519,8 +4535,10 @@
             const ownerNetWorthReportHidden = document.getElementById("page-owner-networth-report").classList.contains("hidden");
             const currencyReportHidden = document.getElementById("page-currency-report").classList.contains("hidden");
             const navUpdateHidden = document.getElementById("page-navupdate").classList.contains("hidden");
+            const inventoryHidden = document.getElementById("page-inventory").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
+            else if (!inventoryHidden) target = "inventory";
             else if (!accountsHidden) target = "accounts";
             else if (!categoriesHidden) target = "categories";
             else if (!backupHidden) target = "backup";
@@ -4570,6 +4588,7 @@
             else if (target === "currency-report") navigateToCurrencyReportPage();
             else if (target === "tag-report") navigateToTagReportPage();
             else if (target === "budget") navigateToBudgetPage();
+            else if (target === "inventory") navigateToInventoryPage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -9493,6 +9512,12 @@
                 // index.html) — an existing record, split or not, is always edited as the single row
                 // it already is.
                 document.getElementById("txSplitWrap").style.display = "none";
+                // v318: "Add to Inventory" is a new-entry-only affordance too (same reasoning as
+                // Split Expenses just above) — editing an existing entry never re-offers it, even
+                // when it's an Expense.
+                document.getElementById("txInventoryWrap").style.display = "none";
+                document.getElementById("txInventoryToggle").checked = false;
+                document.getElementById("txInventoryFieldsWrap").style.display = "none";
                 // Tags, unlike Split Expenses, ARE editable on an existing record (a chip can be
                 // added/removed on this one leg same as Category/Amount already can be) — hidden
                 // for Transfers in general, except a Transfer into Claims Receivable (see
@@ -9596,6 +9621,18 @@
                 document.getElementById("txChecked").checked = false;
                 // Split Expenses only makes sense for a brand-new Income/Expense entry.
                 document.getElementById("txSplitWrap").style.display = (type === "transfer") ? "none" : "block";
+                // v318: "Add to Inventory" only makes sense for a brand-new Expense entry — reset
+                // to off/collapsed every time this form opens fresh, regardless of type, so a
+                // leftover checked state from a previous Expense entry never silently carries into
+                // an Income/Transfer (where the block is hidden and would otherwise be skipped by
+                // the wantsInventory display-check in handleTransactionSubmitMobile() anyway, but
+                // resetting here keeps the UI itself honest too).
+                document.getElementById("txInventoryWrap").style.display = (type === "expense") ? "block" : "none";
+                document.getElementById("txInventoryToggle").checked = false;
+                document.getElementById("txInventoryFieldsWrap").style.display = "none";
+                document.getElementById("txInvSerialNumber").value = "";
+                document.getElementById("txInvModel").value = "";
+                document.getElementById("txInvWarrantyRows").innerHTML = "";
                 updateTxTagsRowVisibility();
                 resetTxTagsChips([]);
 
@@ -11095,6 +11132,16 @@
                 return;
             }
 
+            // v318: "Add to Inventory" — the item's `name` is whatever's in Notes (no separate
+            // Name input on this form, see #txInventoryWrap's comment in index.html), so Notes
+            // becomes required the moment the toggle is on, even though it's optional otherwise.
+            const txInvToggleEl = document.getElementById("txInventoryToggle");
+            const wantsInventory = !!(txInvToggleEl && txInvToggleEl.checked && document.getElementById("txInventoryWrap").style.display !== "none");
+            if (wantsInventory && !document.getElementById("txNotes").value.trim()) {
+                alert("Please fill in Notes — it's used as this item's name in Inventory.");
+                return;
+            }
+
             if (document.getElementById("txManualFxWrap").style.display !== "none" && document.getElementById("txManualFxToggle").checked) {
                 const manualRateVal = parseFloat(document.getElementById("txManualFxRate").value);
                 if (isNaN(manualRateVal) || manualRateVal <= 0) {
@@ -11362,6 +11409,38 @@
             for (const id of attachmentIdsToDelete) {
                 try { await deleteDB(STORES.ATTACHMENTS, id); } catch (err) { /* non-fatal — a leftover blob costs storage, not correctness */ }
             }
+
+            // v318: create the linked Inventory item, if requested — only ever offered for a
+            // brand-new Expense entry (see openTransactionForm()/#txInventoryWrap), so this never
+            // fires on an edit. Vendor/Purchase Date/Purchase Price/attachments come straight off
+            // this same entry; name comes from Notes (already validated non-blank above).
+            if (wantsInventory && isNewEntry && record.type === "expense") {
+                try {
+                    const invRecord = {
+                        id: makeInvId(),
+                        // Transactions use an IndexedDB autoIncrement id that isn't known back
+                        // here (writeDB() doesn't return the generated key) — left null rather
+                        // than guessed. Vendor/Date/Price/attachments below already carry
+                        // everything this entry needs to hand off, so the link is a nice-to-have,
+                        // not load-bearing.
+                        linkedTxId: null,
+                        vendor: desc,
+                        name: document.getElementById("txNotes").value.trim(),
+                        note: null,
+                        purchaseDate: dateVal,
+                        purchasePrice: parsedAmount,
+                        currency: record.currency,
+                        serialNumber: document.getElementById("txInvSerialNumber").value.trim() || null,
+                        model: document.getElementById("txInvModel").value.trim() || null,
+                        warranties: collectWarrantyRows("txInvWarrantyRows"),
+                        status: "active",
+                        attachments: finalAttachments,
+                        createdAt: todayLocalStr(),
+                        updated: todayLocalStr()
+                    };
+                    await writeDB(STORES.INVENTORY, invRecord);
+                } catch (err) { /* non-fatal — the transaction itself already saved fine */ }
+            }
             // v285: this reimbursement was opened via a tag pill (see openReimbursementFromTagBadge()/
             // fillReimbursementForm()) and the "remove this tag" toggle is still checked at save
             // time (re-read live here, not just its initial default) — drop that tag from the
@@ -11383,6 +11462,411 @@
             pendingRefundOf = null;
             closeModal("txModal");
             await refreshAfterTransactionChange();
+        }
+
+        // --- INVENTORY (v318) ---
+        // Items logged either inline from an Expense entry's "📦 Add to Inventory" toggle (see
+        // #txInventoryWrap above) or manually via the Inventory page's own + button. Record shape:
+        // { id, linkedTxId, vendor, name, note, purchaseDate, purchasePrice, currency,
+        //   serialNumber, model, warranties: [{id, label, months, startDate, endDate}],
+        //   status: "active"|"disposed"|"lost", attachments: [{id,name,mime,thumb,size}] (same
+        //   shape/store as a transaction's own attachments), createdAt, updated }.
+
+        function makeInvId() {
+            return "inv_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+        }
+
+        // Same "add N months to a date, keep the day where possible" logic as recalcTxFdMaturity's
+        // FD maturity calc above — kept as its own small helper since Warranty End needs it in two
+        // places (the transaction form's rows and the Inventory item modal's rows) neither of
+        // which is the FD flow.
+        function addMonthsToDateStr(dateStr, months) {
+            if (!dateStr || isNaN(months) || months <= 0) return "";
+            const d = new Date(dateStr + "T00:00:00");
+            d.setMonth(d.getMonth() + months);
+            return localDateStr(d);
+        }
+
+        // Shared by both the transaction form's #txInvWarrantyRows and the Inventory item modal's
+        // #invWarrantyRows — a warranty row is identical in either context (Coverage/Part label,
+        // Months, Start Date, auto-calculated End Date, Remove). `prefix` keeps generated row/input
+        // ids from colliding when (rare, but possible) both forms are somehow in the DOM at once.
+        let warrantyRowCounter = 0;
+        function addWarrantyRow(containerId, prefix, data) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            warrantyRowCounter++;
+            const rowId = `${prefix}_${warrantyRowCounter}`;
+            const w = data || {};
+            const startDate = w.startDate || document.getElementById(containerId === "txInvWarrantyRows" ? "txDate" : "invPurchaseDate")?.value || todayLocalStr();
+            const row = document.createElement("div");
+            row.className = "split-row";
+            row.id = rowId;
+            row.style.marginBottom = "8px";
+            row.innerHTML = `
+                <div class="form-row-inline">
+                    <div>
+                        <label>Coverage / Part</label>
+                        <input type="text" class="wr-label" placeholder="e.g. Whole unit" value="${escapeHtml(w.label || "")}">
+                    </div>
+                    <div>
+                        <label>Months</label>
+                        <input type="number" class="wr-months" min="1" step="1" value="${w.months || 12}" data-input="recalcWarrantyRowEnd" data-row-id="${rowId}">
+                    </div>
+                </div>
+                <div class="form-row-inline">
+                    <div>
+                        <label>Warranty Start</label>
+                        <input type="date" class="wr-start" value="${startDate}" data-change="recalcWarrantyRowEnd" data-row-id="${rowId}">
+                    </div>
+                    <div>
+                        <label>Warranty End</label>
+                        <input type="date" class="wr-end" value="${w.endDate || ""}" readonly>
+                    </div>
+                </div>
+                <button type="button" class="split-remove-btn" data-click="removeWarrantyRow" data-row-id="${rowId}" title="Remove this warranty" style="width:auto; height:auto; border-radius:8px; padding:6px 12px; font-size:0.78rem; margin-top:2px;">− Remove</button>
+            `;
+            container.appendChild(row);
+            recalcWarrantyRowEnd(row.querySelector(".wr-months"));
+            return rowId;
+        }
+
+        function removeWarrantyRow(el) {
+            const row = document.getElementById(el.dataset.rowId);
+            if (row) row.remove();
+        }
+
+        // Fired on both Months (data-input) and Warranty Start (data-change) — `el` is whichever
+        // of the two the person just edited, so this resolves back up to the shared row first.
+        function recalcWarrantyRowEnd(el) {
+            const row = document.getElementById(el.dataset.rowId);
+            if (!row) return;
+            const months = parseInt(row.querySelector(".wr-months").value, 10);
+            const start = row.querySelector(".wr-start").value;
+            row.querySelector(".wr-end").value = addMonthsToDateStr(start, months);
+        }
+
+        // Collects every warranty row in a container into [{id, label, months, startDate,
+        // endDate}] — a row with no valid Start Date/Months is skipped (half-filled row still
+        // being typed into, same forgiving convention as collectTxSplitRows()).
+        function collectWarrantyRows(containerId) {
+            const out = [];
+            const container = document.getElementById(containerId);
+            if (!container) return out;
+            container.querySelectorAll(".split-row").forEach(row => {
+                const months = parseInt(row.querySelector(".wr-months").value, 10);
+                const startDate = row.querySelector(".wr-start").value;
+                const endDate = row.querySelector(".wr-end").value;
+                const label = row.querySelector(".wr-label").value.trim() || "Warranty";
+                if (startDate && !isNaN(months) && months > 0 && endDate) {
+                    out.push({ id: makeInvId(), label, months, startDate, endDate });
+                }
+            });
+            return out;
+        }
+
+        function toggleTxInventoryFields() {
+            const checked = document.getElementById("txInventoryToggle").checked;
+            document.getElementById("txInventoryFieldsWrap").style.display = checked ? "block" : "none";
+            if (checked && document.getElementById("txInvWarrantyRows").children.length === 0) {
+                addWarrantyRow("txInvWarrantyRows", "txInvWr");
+            }
+        }
+
+        // --- Inventory item status/progress helpers ---
+
+        // The warranty (of possibly several — different parts can carry different coverage
+        // periods) most relevant to show on the item's card: the soonest-ending one that hasn't
+        // expired yet, or — if every one has already expired — the one that expired most recently.
+        function getRepresentativeWarranty(item) {
+            const list = (item.warranties || []).filter(w => w.endDate);
+            if (!list.length) return null;
+            const today = todayLocalStr();
+            const active = list.filter(w => w.endDate >= today).sort((a, b) => a.endDate.localeCompare(b.endDate));
+            if (active.length) return active[0];
+            return list.sort((a, b) => b.endDate.localeCompare(a.endDate))[0];
+        }
+
+        function warrantyProgressInfo(w) {
+            const today = new Date(todayLocalStr() + "T00:00:00");
+            const start = new Date(w.startDate + "T00:00:00");
+            const end = new Date(w.endDate + "T00:00:00");
+            const totalMs = end - start;
+            const elapsedMs = today - start;
+            let pct = totalMs > 0 ? Math.round((elapsedMs / totalMs) * 100) : 100;
+            pct = Math.max(0, Math.min(100, pct));
+            const daysLeft = Math.round((end - today) / (1000 * 60 * 60 * 24));
+            return { pct, daysLeft, expired: daysLeft < 0, expiringSoon: daysLeft >= 0 && daysLeft <= 30 };
+        }
+
+        // Every ACTIVE-status item whose representative warranty expires within 30 days (already
+        // expired warranties don't count — nothing left to remind about) — used by both the
+        // Inventory page's own receipt-style strip and the Dashboard reminder widget.
+        async function getExpiringWarrantyItems() {
+            const items = await readAllDB(STORES.INVENTORY);
+            return items
+                .filter(it => it.status === "active")
+                .map(it => ({ item: it, w: getRepresentativeWarranty(it) }))
+                .filter(x => x.w && warrantyProgressInfo(x.w).expiringSoon)
+                .sort((a, b) => a.w.endDate.localeCompare(b.w.endDate));
+        }
+
+        // v318: Dashboard "Warranty Reminders" widget — mirrors renderTagReminderWidget() above,
+        // but for active Inventory items whose representative warranty (see
+        // getRepresentativeWarranty()) ends within 30 days. Unlike Tag Reminders, rows here ARE
+        // clickable — tapping one opens that item straight in the Inventory modal.
+        async function renderWarrantyReminderWidget() {
+            const wrap = document.getElementById("dashboardWarrantyWidget");
+            const list = document.getElementById("warrantyReminderList");
+            if (!wrap || !list) return;
+
+            const expiring = await getExpiringWarrantyItems();
+            wrap.style.display = expiring.length ? "" : "none";
+            if (!expiring.length) return;
+
+            list.innerHTML = expiring.map(({ item, w }) => {
+                const info = warrantyProgressInfo(w);
+                return `
+                    <div class="config-item" data-click="warrantyReminderItemTap" data-id="${escapeHtml(item.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">
+                        <span class="category-display-badge">📦 <strong>${escapeHtml(item.name)}</strong> — ${escapeHtml(w.label)}</span>
+                        <span style="font-size:0.8rem; color:var(--expense-color); font-weight:700;">
+                            ${info.daysLeft}d left
+                        </span>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // --- Inventory page ---
+
+        let inventoryStatusFilter = "all"; // "all" | "active" | "disposed" | "lost"
+
+        function navigateToInventoryPage() {
+            showPage("page-inventory");
+            renderInventoryPage();
+        }
+
+        function inventorySetStatusFilter(el) {
+            inventoryStatusFilter = el.dataset.status;
+            document.querySelectorAll('#page-inventory .nav-view-toggle-btn').forEach(b => b.classList.toggle("active", b.dataset.status === inventoryStatusFilter));
+            renderInventoryPage();
+        }
+
+        function inventoryWarrantyStripTap() {
+            inventoryStatusFilter = "active";
+            document.querySelectorAll('#page-inventory .nav-view-toggle-btn').forEach(b => b.classList.toggle("active", b.dataset.status === "active"));
+            renderInventoryPage();
+        }
+
+        const INV_STATUS_COLORS = { active: "var(--income-color)", disposed: "var(--text-muted)", lost: "var(--expense-color)" };
+        const INV_STATUS_LABELS = { active: "Active", disposed: "Disposed", lost: "Lost" };
+
+        async function renderInventoryPage() {
+            const items = await readAllDB(STORES.INVENTORY);
+            const expiring = await getExpiringWarrantyItems();
+            const stripEl = document.getElementById("inventoryWarrantyStrip");
+            if (expiring.length) {
+                document.getElementById("inventoryWarrantyStripText").textContent =
+                    `${expiring.length} item${expiring.length === 1 ? "" : "s"}' warranty expiring within 30 days`;
+                stripEl.style.display = "flex";
+            } else {
+                stripEl.style.display = "none";
+            }
+
+            const filtered = items.filter(it => inventoryStatusFilter === "all" || it.status === inventoryStatusFilter)
+                .sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
+
+            const listEl = document.getElementById("inventoryPageList");
+            if (filtered.length === 0) {
+                listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:40px 0;">No inventory items yet. Add one from an Expense entry ("📦 Add to Inventory"), or tap + below.</p>`;
+                return;
+            }
+
+            listEl.innerHTML = filtered.map(it => {
+                const w = getRepresentativeWarranty(it);
+                let warrantyHTML = "";
+                if (w) {
+                    const info = warrantyProgressInfo(w);
+                    const barColor = info.expired ? "var(--text-muted)" : (info.expiringSoon ? "var(--expense-color)" : "var(--income-color)");
+                    const statusText = info.expired
+                        ? `${w.label} warranty expired ${Math.abs(info.daysLeft)}d ago`
+                        : `${w.label} warranty — ${info.daysLeft}d left (ends ${w.endDate})`;
+                    warrantyHTML = `
+                        <div class="progress-bar-container" style="height:6px; margin-top:6px;"><div class="progress-bar-fill" style="width:${info.pct}%; background:${barColor};"></div></div>
+                        <span class="item-meta" style="display:block; margin-top:3px; color:${info.expiringSoon ? "var(--expense-color)" : "var(--text-muted)"}; font-weight:${info.expiringSoon ? 700 : 600};">${info.expiringSoon ? "⚠️ " : ""}${escapeHtml(statusText)}</span>
+                    `;
+                }
+                return `
+                    <div class="ledger-item ledger-item-tx" data-click="inventoryItemCardTap" data-id="${escapeHtml(it.id)}">
+                        <div class="tx-icon-circle" style="background:#e0f2fe;"><span style="line-height:1;">📦</span></div>
+                        <div class="tx-row-body">
+                            <div class="item-left">
+                                <span class="item-name">${escapeHtml(it.name || "(unnamed item)")}</span>
+                                <span class="item-meta">${escapeHtml(it.vendor || "—")}${it.model ? " · " + escapeHtml(it.model) : ""}</span>
+                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🗓️ ${escapeHtml(it.purchaseDate || "—")}</span>
+                                ${warrantyHTML}
+                            </div>
+                            <div class="item-right">
+                                <div class="item-value" style="font-weight:bold;">${formatCurrency(it.purchasePrice || 0, it.currency || baseCurrency)}</div>
+                                <span style="font-size:0.68rem; font-weight:700; color:${INV_STATUS_COLORS[it.status] || "var(--text-muted)"}; text-transform:uppercase;">${INV_STATUS_LABELS[it.status] || it.status}</span>
+                            </div>
+                        </div>
+                        <span class="tx-side-bar" style="background:${INV_STATUS_COLORS[it.status] || "var(--text-muted)"};"></span>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // --- Inventory item add/edit modal ---
+
+        let invExistingAttachments = [];
+        let invTempAttachments = [];
+
+        async function openInventoryItemModal(id) {
+            document.getElementById("invId").value = id || "";
+            document.getElementById("invWarrantyRows").innerHTML = "";
+            invExistingAttachments = [];
+            invTempAttachments = [];
+
+            if (id) {
+                const items = await readAllDB(STORES.INVENTORY);
+                const it = items.find(x => x.id === id);
+                if (!it) return;
+                document.getElementById("inventoryModalTitle").textContent = it.name || "Inventory Item";
+                document.getElementById("invLinkedTxId").value = it.linkedTxId || "";
+                document.getElementById("invVendor").value = it.vendor || "";
+                document.getElementById("invName").value = it.name || "";
+                document.getElementById("invNote").value = it.note || "";
+                document.getElementById("invPurchaseDate").value = it.purchaseDate || "";
+                document.getElementById("invPurchasePrice").value = it.purchasePrice != null ? it.purchasePrice : "";
+                document.getElementById("invSerialNumber").value = it.serialNumber || "";
+                document.getElementById("invModel").value = it.model || "";
+                document.getElementById("invStatus").value = it.status || "active";
+                (it.warranties || []).forEach(w => addWarrantyRow("invWarrantyRows", "invWr", w));
+                invExistingAttachments = (it.attachments || []).slice();
+                document.getElementById("invDeleteBtn").style.display = "block";
+                document.getElementById("invUpdatedLabel").textContent = it.updated ? `Last updated ${it.updated}` : "";
+            } else {
+                document.getElementById("inventoryModalTitle").textContent = "Add Inventory Item";
+                document.getElementById("invLinkedTxId").value = "";
+                document.getElementById("invVendor").value = "";
+                document.getElementById("invName").value = "";
+                document.getElementById("invNote").value = "";
+                document.getElementById("invPurchaseDate").value = todayLocalStr();
+                document.getElementById("invPurchasePrice").value = "";
+                document.getElementById("invSerialNumber").value = "";
+                document.getElementById("invModel").value = "";
+                document.getElementById("invStatus").value = "active";
+                document.getElementById("invDeleteBtn").style.display = "none";
+                document.getElementById("invUpdatedLabel").textContent = "";
+            }
+            renderInvAttachmentPreview();
+            openModal("inventoryItemModal");
+        }
+
+        async function handleSaveInventoryItem() {
+            const name = document.getElementById("invName").value.trim();
+            if (!name) { alert("Please enter an item name."); return; }
+            const idInput = document.getElementById("invId").value;
+
+            const record = {
+                id: idInput || makeInvId(),
+                linkedTxId: document.getElementById("invLinkedTxId").value || null,
+                vendor: document.getElementById("invVendor").value.trim() || null,
+                name,
+                note: document.getElementById("invNote").value.trim() || null,
+                purchaseDate: document.getElementById("invPurchaseDate").value || null,
+                purchasePrice: parseFloat(document.getElementById("invPurchasePrice").value) || 0,
+                currency: baseCurrency,
+                serialNumber: document.getElementById("invSerialNumber").value.trim() || null,
+                model: document.getElementById("invModel").value.trim() || null,
+                warranties: collectWarrantyRows("invWarrantyRows"),
+                status: document.getElementById("invStatus").value,
+                attachments: [...invExistingAttachments, ...invTempAttachments.map(a => ({ id: a.id, name: a.name, mime: a.mime, thumb: a.thumb, size: a.size }))],
+                createdAt: idInput ? undefined : todayLocalStr(),
+                updated: todayLocalStr()
+            };
+
+            if (idInput) {
+                const existing = (await readAllDB(STORES.INVENTORY)).find(x => x.id === idInput);
+                record.currency = (existing && existing.currency) || baseCurrency;
+                record.createdAt = existing ? existing.createdAt : todayLocalStr();
+            }
+
+            try {
+                // Persist any newly-picked attachments into STORES.ATTACHMENTS first (same
+                // pattern as handleTransactionSubmitMobile()'s tempTxAttachments handling).
+                for (const att of invTempAttachments) {
+                    await writeDB(STORES.ATTACHMENTS, { id: att.id, name: att.name, mime: att.mime, data: att.data });
+                }
+                await writeDB(STORES.INVENTORY, record);
+            } catch (err) {
+                alert("Could not save this inventory item: " + (err && err.message ? err.message : err));
+                return;
+            }
+            invTempAttachments = [];
+            invExistingAttachments = [];
+            closeModal("inventoryItemModal");
+            renderInventoryPage();
+        }
+
+        async function handleDeleteInventoryItem() {
+            const idInput = document.getElementById("invId").value;
+            if (!idInput) return;
+            if (!confirm("Delete this inventory item? This won't affect the original transaction.")) return;
+            await deleteDB(STORES.INVENTORY, idInput);
+            closeModal("inventoryItemModal");
+            renderInventoryPage();
+        }
+
+        // --- Inventory attachments (own temp/existing arrays — separate from
+        // tempTxAttachments/existingTxAttachments so this modal never disturbs whatever the main
+        // transaction form currently holds, even if both happened to be open in sequence). ---
+
+        async function handleInvAttachmentsSelected(event) {
+            const files = Array.from(event.target.files || []);
+            for (const file of files) {
+                const isImage = file.type.startsWith("image/");
+                const isPdf = file.type === "application/pdf";
+                if (!isImage && !isPdf) { alert(`"${file.name}" isn't an image or a PDF — skipped.`); continue; }
+
+                let data, thumb;
+                if (isImage) {
+                    const raw = await readFileAsDataUrl(file);
+                    if (!raw) { alert(`Couldn't read "${file.name}" — it wasn't added.`); continue; }
+                    try {
+                        data = await compressImage(raw, 1280, 0.75);
+                        thumb = await compressImage(raw, 96, 0.5);
+                    } catch (err) { alert(`Could not process "${file.name}" — it wasn't added.`); continue; }
+                } else {
+                    data = await readFileAsDataUrl(file);
+                    if (!data) { alert(`Couldn't read "${file.name}" — it wasn't added.`); continue; }
+                    thumb = null;
+                }
+                invTempAttachments.push({ id: makeAttId(), name: file.name, mime: isImage ? "image/jpeg" : "application/pdf", data, thumb, size: data.length });
+            }
+            renderInvAttachmentPreview();
+            document.getElementById("invCameraInput").value = "";
+            document.getElementById("invFilesInput").value = "";
+        }
+
+        function renderInvAttachmentPreview() {
+            const wrap = document.getElementById("invAttachmentPreview");
+            const items = [];
+            invExistingAttachments.forEach((att, idx) => items.push(renderTxAttachmentRow(att, `removeExistingInvAttachment" data-idx="${idx}`)));
+            invTempAttachments.forEach((att, idx) => items.push(renderTxAttachmentRow(att, `removeTempInvAttachment" data-idx="${idx}`)));
+            wrap.innerHTML = items.join("");
+            wrap.style.display = items.length ? "flex" : "none";
+        }
+
+        function removeExistingInvAttachment(el) {
+            invExistingAttachments.splice(parseInt(el.dataset.idx, 10), 1);
+            renderInvAttachmentPreview();
+        }
+
+        function removeTempInvAttachment(el) {
+            invTempAttachments.splice(parseInt(el.dataset.idx, 10), 1);
+            renderInvAttachmentPreview();
         }
 
         // --- SALARY ENTRY (Gross Salary → Net Bank + EPF(Malaysia)/CPF(Singapore) split) ---
@@ -12916,6 +13400,7 @@
             renderPinnedAccountsWidget(accounts, nativeBalances);
             renderRecentTransactionsWidget(accounts, txs);
             renderTagReminderWidget(txs, accounts);
+            await renderWarrantyReminderWidget();
             applyDashboardWidgetOrder();
             renderDesktopInsightsRail(accounts, txs);
 
@@ -15624,6 +16109,9 @@
                 tags: await readAllDB(STORES.TAGS),
                 // v264: one record per month with a saved Budget (see the "--- BUDGET ---" section).
                 budgets: await readAllDB(STORES.BUDGETS),
+                // v318: owned items logged via the Inventory page / "📦 Add to Inventory" toggle
+                // on the Expense form (see the "--- INVENTORY ---" section).
+                inventory: await readAllDB(STORES.INVENTORY),
                 // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
                 // defaultReceiveAccount, defaultIncomeCategory, defaultExpenseCategory, recentTx*
                 // widget filters, expandedAccountSubrows, plus baseCurrency/fxRates which are
@@ -15783,6 +16271,9 @@
                     if (db.objectStoreNames.contains(STORES.BUDGETS)) {
                         await clearStoreDB(STORES.BUDGETS);
                     }
+                    if (db.objectStoreNames.contains(STORES.INVENTORY)) {
+                        await clearStoreDB(STORES.INVENTORY);
+                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -15837,6 +16328,10 @@
                     // showed "no budget set" even though the source device had one.)
                     if (bundle.budgets) {
                         for (const b of bundle.budgets) await writeDB(STORES.BUDGETS, b);
+                    }
+                    // v318: Inventory items — same "absent on older backups → skip" pattern.
+                    if (bundle.inventory) {
+                        for (const inv of bundle.inventory) await writeDB(STORES.INVENTORY, inv);
                     }
 
                     // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
@@ -16138,6 +16633,20 @@
             handleSaveSalaryRecord: () => handleSaveSalaryRecord(),
             printCurrentApp: () => printCurrentApp(),
             toggleDonutSlice: (el) => toggleDonutSlice(el),
+            // v318: INVENTORY
+            navigateToInventoryPage: () => navigateToInventoryPage(),
+            inventorySetStatusFilter: (el) => inventorySetStatusFilter(el),
+            inventoryWarrantyStripTap: () => inventoryWarrantyStripTap(),
+            inventoryItemCardTap: (el) => openInventoryItemModal(el.dataset.id),
+            openInventoryItemModalNew: () => openInventoryItemModal(null),
+            addTxInvWarrantyRow: () => addWarrantyRow("txInvWarrantyRows", "txInvWr"),
+            addInvWarrantyRow: () => addWarrantyRow("invWarrantyRows", "invWr"),
+            removeWarrantyRow: (el) => removeWarrantyRow(el),
+            handleSaveInventoryItem: () => handleSaveInventoryItem(),
+            handleDeleteInventoryItem: () => handleDeleteInventoryItem(),
+            removeExistingInvAttachment: (el) => removeExistingInvAttachment(el),
+            removeTempInvAttachment: (el) => removeTempInvAttachment(el),
+            warrantyReminderItemTap: (el) => { navigateToInventoryPage(); setTimeout(() => openInventoryItemModal(el.dataset.id), 60); },
         };
 
         const CHANGE_ACTIONS = {
@@ -16190,6 +16699,10 @@
             changeMonthlyTrendYear: (el) => changeMonthlyTrendYear(el),
             handleBgThemeAutoToggleChange: () => handleBgThemeAutoToggleChange(),
             handleCrayonFontToggleChange: () => handleCrayonFontToggleChange(),
+            // v318: INVENTORY
+            toggleTxInventoryFields: () => toggleTxInventoryFields(),
+            handleInvAttachmentsSelected: (el, e) => handleInvAttachmentsSelected(e),
+            recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),
         };
 
         const INPUT_ACTIONS = {
@@ -16208,6 +16721,7 @@
             recalcSalaryPreview: () => recalcSalaryPreview(),
             filterDescSuggestions: (el) => filterDescSuggestions(el),
             filterTxTagSuggestions: (el) => filterTxTagSuggestions(el),
+            recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),
         };
 
         document.addEventListener("click", (e) => {
