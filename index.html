@@ -3398,10 +3398,14 @@
             <div style="flex:1 1 auto; min-height:0; overflow-y:auto; padding:16px 20px;">
                 <input type="hidden" id="invId">
                 <input type="hidden" id="invLinkedTxId">
-                <input type="hidden" id="invSrcAccountId">
 
                 <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">🏪</span><input type="text" id="invVendor" placeholder="Vendor (where you bought it)" aria-label="Vendor"></div>
-                <p id="invAccountDisplay" style="display:none; font-size:0.72rem; color:var(--text-muted); margin:-4px 0 10px 2px;"></p>
+                <div class="form-row">
+                    <label>Paid From (Optional)</label>
+                    <select id="invSrcAccountId" class="form-input">
+                        <option value="">— Not linked to an account —</option>
+                    </select>
+                </div>
                 <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📦</span><input type="text" id="invName" required placeholder="Item name" aria-label="Item name"></div>
                 <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📝</span><input type="text" id="invNote" placeholder="Note (Optional)" aria-label="Note"></div>
 

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v320";
+        const APP_VERSION = "v321";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -11638,6 +11638,35 @@
             }).join("");
         }
 
+        // v320: tapping the "📎 N attachment(s)" line on an Inventory card — same one-vs-many
+        // branching as openTxAttachmentsBadge() above (jump straight to the viewer for a single
+        // attachment, otherwise show the shared picker list first), reusing that same picker
+        // modal/viewer wholesale. Passing txId=null into openAttachment() is what keeps the
+        // viewer's Delete button hidden here (see its `activeAttachmentViewerTxId != null`
+        // check) — deleting an inventory item's attachment is done from the item's own Edit
+        // modal instead (see removeExistingInvAttachment/removeTempInvAttachment), never from
+        // this read-only viewer, so there's no transaction record for Delete to update anyway.
+        function openInvAttachmentsBadge(el, event) {
+            if (event) event.stopPropagation();
+            let atts;
+            try { atts = JSON.parse(el.dataset.attachments || "[]"); } catch (err) { atts = []; }
+            if (atts.length === 0) return;
+            txAttachmentsPickerTxId = null;
+            if (atts.length === 1) { openAttachment(atts[0], null); return; }
+
+            const list = document.getElementById("txAttachmentsPickerList");
+            list.innerHTML = atts.map((att, idx) => `
+                <div class="tx-att-item" data-click="openAttachmentFromPicker" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:8px; cursor:pointer;">
+                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--chip-bg); font-size:1.1rem;">
+                        ${att.thumb ? `<img src="${att.thumb}" alt="" style="width:100%; height:100%; object-fit:cover;">` : ((att.mime || "").startsWith("image/") ? "🖼️" : "📄")}
+                    </div>
+                    <div style="flex:1; min-width:0; font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
+                </div>
+            `).join("");
+            txAttachmentsPickerCurrent = atts;
+            openModal("txAttachmentsPickerModal");
+        }
+
         // --- Inventory page ---
 
         let inventoryStatusFilter = "all"; // "all" | "active" | "disposed" | "lost"
@@ -11712,20 +11741,28 @@
                 const noteLine = it.note ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📝 ${escapeHtml(it.note)}</span>` : "";
 
                 const attCount = (it.attachments || []).length;
-                const attLine = attCount ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📎 ${attCount} attachment${attCount === 1 ? "" : "s"}</span>` : "";
+                const attLine = attCount ? `<span class="item-meta" data-click="openInvAttachmentsBadge" data-attachments="${escapeHtml(JSON.stringify(it.attachments || []))}" style="display:block; margin-top:2px; color:var(--primary); cursor:pointer; text-decoration:underline; text-underline-offset:2px;">📎 ${attCount} attachment${attCount === 1 ? "" : "s"}</span>` : "";
 
                 const w = getRepresentativeWarranty(it);
                 let warrantyHTML = "";
                 if (w) {
                     const info = warrantyProgressInfo(w);
-                    const barColor = info.expired ? "var(--text-muted)" : (info.expiringSoon ? "var(--expense-color)" : "var(--income-color)");
-                    const statusText = info.expired
-                        ? `${w.label} expired ${Math.abs(info.daysLeft)}d ago`
-                        : `${w.label} — ${info.daysLeft}d left (ends ${w.endDate})`;
-                    warrantyHTML = `
-                        <div class="progress-bar-container" style="height:6px; margin-top:6px;"><div class="progress-bar-fill" style="width:${info.pct}%; background:${barColor};"></div></div>
-                        <span class="item-meta" style="display:block; margin-top:3px; color:${info.expiringSoon ? "var(--expense-color)" : "var(--text-muted)"}; font-weight:${info.expiringSoon ? 700 : 600};">${info.expiringSoon ? "⚠️ " : ""}${escapeHtml(statusText)}</span>
-                    `;
+                    if (info.expired) {
+                        // v320: an expired warranty has nothing left to show progress toward, so
+                        // a full/grey progress bar was just visual noise — a small badge reads
+                        // faster and matches how Active/Disposed/Lost are already shown as
+                        // badges on the right of this same card.
+                        warrantyHTML = `
+                            <span style="display:inline-block; margin-top:6px; padding:3px 9px; border-radius:999px; background:#fee2e2; color:#b91c1c; font-size:0.7rem; font-weight:700;">⏱️ ${escapeHtml(w.label)} expired ${Math.abs(info.daysLeft)}d ago</span>
+                        `;
+                    } else {
+                        const barColor = info.expiringSoon ? "var(--expense-color)" : "var(--income-color)";
+                        const statusText = `${w.label} — ${info.daysLeft}d left (ends ${w.endDate})`;
+                        warrantyHTML = `
+                            <div class="progress-bar-container" style="height:6px; margin-top:6px;"><div class="progress-bar-fill" style="width:${info.pct}%; background:${barColor};"></div></div>
+                            <span class="item-meta" style="display:block; margin-top:3px; color:${info.expiringSoon ? "var(--expense-color)" : "var(--text-muted)"}; font-weight:${info.expiringSoon ? 700 : 600};">${info.expiringSoon ? "⚠️ " : ""}${escapeHtml(statusText)}</span>
+                        `;
+                    }
                 }
                 return `
                     <div class="ledger-item ledger-item-tx" data-click="inventoryItemCardTap" data-id="${escapeHtml(it.id)}">
@@ -11763,22 +11800,22 @@
             invExistingAttachments = [];
             invTempAttachments = [];
 
+            // v320: "Paid From" is now a real editable account picker (not just an auto-filled
+            // read-only line) — repopulated fresh every time the modal opens so a newly-added
+            // account shows up too. "— Not linked to an account —" covers both a manually-added
+            // item and one whose linked account was later deleted.
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const srcSelect = document.getElementById("invSrcAccountId");
+            srcSelect.innerHTML = '<option value="">— Not linked to an account —</option>' +
+                accounts.map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(accountOptionLabel(a, accounts))}</option>`).join("");
+
             if (id) {
                 const items = await readAllDB(STORES.INVENTORY);
                 const it = items.find(x => x.id === id);
                 if (!it) return;
                 document.getElementById("inventoryModalTitle").textContent = it.name || "Inventory Item";
                 document.getElementById("invLinkedTxId").value = it.linkedTxId || "";
-                document.getElementById("invSrcAccountId").value = it.srcAccountId || "";
-                const accDisplayEl = document.getElementById("invAccountDisplay");
-                if (it.srcAccountId) {
-                    const accounts = await readAllDB(STORES.ACCOUNTS);
-                    const acc = accounts.find(a => a.id === it.srcAccountId);
-                    accDisplayEl.textContent = "🏠 Purchased via " + (acc ? accountOptionLabel(acc, accounts) : "(deleted account)");
-                    accDisplayEl.style.display = "block";
-                } else {
-                    accDisplayEl.style.display = "none";
-                }
+                srcSelect.value = it.srcAccountId || "";
                 document.getElementById("invVendor").value = it.vendor || "";
                 document.getElementById("invName").value = it.name || "";
                 document.getElementById("invNote").value = it.note || "";
@@ -11794,8 +11831,7 @@
             } else {
                 document.getElementById("inventoryModalTitle").textContent = "Add Inventory Item";
                 document.getElementById("invLinkedTxId").value = "";
-                document.getElementById("invSrcAccountId").value = "";
-                document.getElementById("invAccountDisplay").style.display = "none";
+                srcSelect.value = "";
                 document.getElementById("invVendor").value = "";
                 document.getElementById("invName").value = "";
                 document.getElementById("invNote").value = "";
@@ -16694,6 +16730,7 @@
             handleDeleteInventoryItem: () => handleDeleteInventoryItem(),
             removeExistingInvAttachment: (el) => removeExistingInvAttachment(el),
             removeTempInvAttachment: (el) => removeTempInvAttachment(el),
+            openInvAttachmentsBadge: (el, e) => openInvAttachmentsBadge(el, e),
             warrantyReminderItemTap: (el) => { navigateToInventoryPage(); setTimeout(() => openInventoryItemModal(el.dataset.id), 60); },
         };
 
