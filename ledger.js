@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v323";
+        const APP_VERSION = "v324";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7401,6 +7401,12 @@
         function isPrivacyModeEnabled() {
             return privacyModeEnabledSession;
         }
+        // v323: tracks whether the Net Worth hero card's current "revealed" state has already
+        // been used to navigate to the Net Worth Statement page once (see netWorthCardTap in
+        // CLICK_ACTIONS below). Without this, the card's reveal state survives the round trip to
+        // that page and back — so every tap after returning kept re-navigating away instead of
+        // ever getting a chance to re-hide the figure.
+        let netWorthCardNavigatedSinceReveal = false;
         // Feather-style outline icons (viewBox 0 0 24 24, stroke=currentColor, stroke-width=2,
         // round caps/joins) — matches the sidebar nav icons elsewhere in this file exactly,
         // rather than the emoji this button used before. Swapped via innerHTML in
@@ -7424,6 +7430,7 @@
                 // Turning it back ON should hide everything immediately, not leave whatever was
                 // mid-reveal exposed until it's individually re-tapped.
                 document.querySelectorAll(".privacy-amount-value.revealed").forEach(el => el.classList.remove("revealed"));
+                netWorthCardNavigatedSinceReveal = false;
             }
             applyPrivacyModeAttr();
         }
@@ -16509,10 +16516,27 @@
             // an independently-blurred badge would never get its own turn). Gated off the SAME
             // element (amountEl = #netWorthDisplay) it always was, so behavior when the badge is
             // hidden (no secondary currency set) is unchanged.
+            // v323: was tap-to-reveal then tap-to-navigate forever after — since "revealed" never
+            // reset on its own, coming back from the Net Worth Statement page left the figure
+            // revealed, so the very next tap navigated straight back to that page again with no
+            // way to re-hide the amount from the card. Now a THIRD state: once a tap has already
+            // used the current reveal to navigate away (netWorthCardNavigatedSinceReveal), the
+            // next tap re-hides instead of navigating again. Reveal → navigate → hide → reveal...
             netWorthCardTap: (el) => {
                 const amountEl = document.getElementById("netWorthDisplay");
-                if (isPrivacyModeEnabled() && amountEl && !amountEl.classList.contains("revealed")) {
+                if (isPrivacyModeEnabled() && amountEl) {
+                    if (!amountEl.classList.contains("revealed")) {
+                        el.querySelectorAll(".privacy-amount-value").forEach(togglePrivacyAmountReveal);
+                        netWorthCardNavigatedSinceReveal = false;
+                        return;
+                    }
+                    if (!netWorthCardNavigatedSinceReveal) {
+                        netWorthCardNavigatedSinceReveal = true;
+                        navigateToNetWorthStatementPage();
+                        return;
+                    }
                     el.querySelectorAll(".privacy-amount-value").forEach(togglePrivacyAmountReveal);
+                    netWorthCardNavigatedSinceReveal = false;
                     return;
                 }
                 navigateToNetWorthStatementPage();
