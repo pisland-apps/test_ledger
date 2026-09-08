@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v324";
+        const APP_VERSION = "v326";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7381,6 +7381,63 @@
             panel.style.display = isHidden ? "flex" : "none";
         }
 
+        // --- v326: Net Worth Card Style (Setting page) --------------------------------------
+        // Independent of Background Theme above — only recolors the Dashboard's Portfolio Net
+        // Worth hero card (.net-worth-hero-card), via the --net-worth-card-bg CSS var that card's
+        // rule already falls back from (see index.html comment on that rule). "classic" (the
+        // default, matches every user's current look with zero migration) has no `css` field —
+        // selecting it just removes the override so the card falls back to its original
+        // per-Background-Theme-adaptive gradient built from var(--primary); every other preset
+        // sets a fixed gradient regardless of Background Theme, same tradeoff swatch presets like
+        // 蠟筆小新 already accept elsewhere in this app.
+        const NET_WORTH_CARD_STYLE_KEY = "ledgerNetWorthCardStyleId";
+        const NET_WORTH_CARD_STYLES = [
+            { id: "classic", name: "Classic" },
+            // Reference: a "wallet app" screenshot's spend-summary card — deep blue sliding
+            // through violet/magenta into orange/gold, top-left to bottom-right.
+            { id: "sunset",   name: "Sunset Wallet", css: "linear-gradient(135deg, #2a3b8f 0%, #5b3aa8 28%, #b0479a 55%, #e8703f 80%, #f5c542 100%)" },
+            { id: "ocean",    name: "Ocean",          css: "linear-gradient(135deg, #0f2027 0%, #2c5364 55%, #00c9a7 100%)" },
+            { id: "berry",    name: "Berry",          css: "linear-gradient(135deg, #6a11cb 0%, #d61f69 60%, #ff8a65 100%)" },
+            { id: "emerald",  name: "Emerald",        css: "linear-gradient(135deg, #0b3d2e 0%, #0f9d6f 55%, #6ee7b7 100%)" },
+            { id: "midnight", name: "Midnight",       css: "linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%)" },
+            { id: "rosegold", name: "Rose Gold",      css: "linear-gradient(135deg, #7c3f58 0%, #c2547a 50%, #f2a65a 100%)" },
+        ];
+        const NET_WORTH_CARD_STYLE_PREVIEW_FALLBACK = "linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 100%, #000 28%))";
+        function getSavedNetWorthCardStyleId() {
+            const id = localStorage.getItem(NET_WORTH_CARD_STYLE_KEY);
+            return NET_WORTH_CARD_STYLES.some(s => s.id === id) ? id : "classic";
+        }
+        function applyNetWorthCardStyle(styleId, { save = true } = {}) {
+            const style = NET_WORTH_CARD_STYLES.find(s => s.id === styleId) || NET_WORTH_CARD_STYLES[0];
+            if (style.css) document.documentElement.style.setProperty("--net-worth-card-bg", style.css);
+            else document.documentElement.style.removeProperty("--net-worth-card-bg");
+            if (save) {
+                try { localStorage.setItem(NET_WORTH_CARD_STYLE_KEY, style.id); } catch (e) {}
+            }
+            return style;
+        }
+        function buildNetWorthCardStyleSwatchGrid() {
+            const grid = document.getElementById("netWorthCardStyleSwatchGrid");
+            if (!grid) return;
+            const selectedId = getSavedNetWorthCardStyleId();
+            grid.innerHTML = NET_WORTH_CARD_STYLES.map(s => `
+                <span class="bg-theme-swatch-wrap">
+                    <span class="color-swatch${s.id === selectedId ? ' selected' : ''}" style="background:${s.css || NET_WORTH_CARD_STYLE_PREVIEW_FALLBACK};" data-click="selectNetWorthCardStyle" data-style-id="${s.id}" title="${s.name}"></span>
+                    <span class="bg-theme-swatch-label">${s.name}</span>
+                </span>
+            `).join("");
+        }
+        function selectNetWorthCardStyle(el) {
+            applyNetWorthCardStyle(el.dataset.styleId);
+            document.querySelectorAll("#netWorthCardStyleSwatchGrid .color-swatch").forEach(s => s.classList.toggle("selected", s.dataset.styleId === el.dataset.styleId));
+        }
+        function toggleNetWorthCardStyleSettings() {
+            const panel = document.getElementById("netWorthCardStyleSettingsPanel");
+            const isHidden = panel.style.display === "none";
+            if (isHidden) buildNetWorthCardStyleSwatchGrid();
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+
         // v247: manual toggle (Settings > Background Theme > "Handwritten font (Kalam)") for
         // whether the 蠟筆小新 preset uses the self-hosted Kalam font or the app's normal
         // sans-serif — independent of the preset's colors/borders/radius, which stay Kalam-
@@ -7483,6 +7540,10 @@
         } else {
             applyBgTheme(getSavedBgThemeId(), { save: false });
         }
+        // v326: same "apply the saved pick immediately on script parse" treatment as the
+        // Background Theme re-apply just above (no <head> no-flash snippet for this one since
+        // the hero card only ever appears after unlock, not before first paint).
+        applyNetWorthCardStyle(getSavedNetWorthCardStyleId(), { save: false });
 
         // v249: syncs the header button's icon/title with the persisted Privacy Mode choice —
         // the <head> no-flash script already set the CSS-facing attribute before first paint,
@@ -16633,6 +16694,8 @@
             toggleDashboardWidgetsSettings: () => toggleDashboardWidgetsSettings(),
             toggleDefaultAccountsSettings: () => toggleDefaultAccountsSettings(),
             selectBgTheme: (el) => selectBgTheme(el),
+            toggleNetWorthCardStyleSettings: () => toggleNetWorthCardStyleSettings(),
+            selectNetWorthCardStyle: (el) => selectNetWorthCardStyle(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),

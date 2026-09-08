@@ -288,7 +288,12 @@
            presets that already redefine --primary (slate, midnight) get a matching lighter
            gradient automatically, for free. */
         .net-worth-hero-card {
-            background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 100%, #000 28%));
+            /* v326: --net-worth-card-bg lets Settings > Net Worth Card Style override this per
+               user choice (see NET_WORTH_CARD_STYLES in ledger.js). Falls back to the original
+               v273 per-theme-adaptive gradient (built from --primary) when no override is set,
+               i.e. the "Classic" style — so anyone who never opens the new setting sees zero
+               visual change. */
+            background: var(--net-worth-card-bg, linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 100%, #000 28%)));
             border-radius: 14px;
             padding: 18px 16px 16px;
             box-shadow: 0 6px 16px -4px color-mix(in srgb, var(--primary) 55%, transparent);
@@ -4114,6 +4119,17 @@
                         <span class="toggle-slider"></span>
                     </label>
                 </div>
+            </div>
+            <!-- v326: Net Worth Card Style — separate from Background Theme above (that one
+                 recolors the page/chrome; this only recolors the Dashboard's Portfolio Net Worth
+                 hero card, see .net-worth-hero-card / --net-worth-card-bg). -->
+            <div class="config-item" style="cursor:pointer;" data-click="toggleNetWorthCardStyleSettings">
+                <span>🎴 <strong>Net Worth Card Style</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div id="netWorthCardStyleSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes only the background of the Dashboard's Portfolio Net Worth card. "Classic" adapts to whichever Background Theme is active; the others are fixed gradients.</p>
+                <div class="color-swatch-grid" id="netWorthCardStyleSwatchGrid"></div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
                 <span>📊 <strong>Dashboard Widgets</strong></span>
