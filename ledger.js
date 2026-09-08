@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v319";
+        const APP_VERSION = "v320";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -11424,6 +11424,7 @@
                         // everything this entry needs to hand off, so the link is a nice-to-have,
                         // not load-bearing.
                         linkedTxId: null,
+                        srcAccountId: record.src || null,
                         vendor: desc,
                         name: document.getElementById("txNotes").value.trim(),
                         note: null,
@@ -11663,6 +11664,7 @@
 
         async function renderInventoryPage() {
             const items = await readAllDB(STORES.INVENTORY);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
             const expiring = await getExpiringWarrantyItems();
             const stripEl = document.getElementById("inventoryWarrantyStrip");
             if (expiring.length) {
@@ -11677,20 +11679,49 @@
                 .sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
 
             const listEl = document.getElementById("inventoryPageList");
+            const footerEl = document.getElementById("inventoryPageFooter");
             if (filtered.length === 0) {
                 listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:40px 0;">No inventory items yet. Add one from an Expense entry ("📦 Add to Inventory"), or tap + below.</p>`;
+                footerEl.style.display = "none";
                 return;
             }
 
+            const accountName = id => { if (!id) return null; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
+
+            // v319: Total Value footer — same dashed-rule + Kalam-font convention as the Ledger
+            // Calendar's "Net for the day" strip (see renderLedgerCalendarSection()), but summing
+            // Purchase Price across whatever's currently filtered (All/Active/Disposed/Lost),
+            // converted to base currency at today's live rate (purchase-time FX isn't stored on
+            // an inventory item, unlike a transaction's optional manualFxRate).
+            const totalBase = filtered.reduce((sum, it) => sum + convertCurrency(it.purchasePrice || 0, it.currency || baseCurrency, baseCurrency), 0);
+            footerEl.style.display = "flex";
+            footerEl.innerHTML = `
+                <span style="font-family:'Kalam', cursive; font-size:1rem; color:var(--text-muted); font-weight:800;">Total Value (${INV_STATUS_LABELS[inventoryStatusFilter] || "All"})</span>
+                <span style="font-family:'Kalam', cursive; font-size:1.15rem; font-weight:700; color:var(--text-main);">${formatCurrency(totalBase, baseCurrency)}</span>
+            `;
+
             listEl.innerHTML = filtered.map(it => {
+                const specsBits = [];
+                if (it.model) specsBits.push(escapeHtml(it.model));
+                if (it.serialNumber) specsBits.push("SN " + escapeHtml(it.serialNumber));
+                const specsLine = specsBits.length ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${specsBits.join(" · ")}</span>` : "";
+
+                const accName = accountName(it.srcAccountId);
+                const accountLine = accName ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏠 ${accName}</span>` : "";
+
+                const noteLine = it.note ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📝 ${escapeHtml(it.note)}</span>` : "";
+
+                const attCount = (it.attachments || []).length;
+                const attLine = attCount ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📎 ${attCount} attachment${attCount === 1 ? "" : "s"}</span>` : "";
+
                 const w = getRepresentativeWarranty(it);
                 let warrantyHTML = "";
                 if (w) {
                     const info = warrantyProgressInfo(w);
                     const barColor = info.expired ? "var(--text-muted)" : (info.expiringSoon ? "var(--expense-color)" : "var(--income-color)");
                     const statusText = info.expired
-                        ? `${w.label} warranty expired ${Math.abs(info.daysLeft)}d ago`
-                        : `${w.label} warranty — ${info.daysLeft}d left (ends ${w.endDate})`;
+                        ? `${w.label} expired ${Math.abs(info.daysLeft)}d ago`
+                        : `${w.label} — ${info.daysLeft}d left (ends ${w.endDate})`;
                     warrantyHTML = `
                         <div class="progress-bar-container" style="height:6px; margin-top:6px;"><div class="progress-bar-fill" style="width:${info.pct}%; background:${barColor};"></div></div>
                         <span class="item-meta" style="display:block; margin-top:3px; color:${info.expiringSoon ? "var(--expense-color)" : "var(--text-muted)"}; font-weight:${info.expiringSoon ? 700 : 600};">${info.expiringSoon ? "⚠️ " : ""}${escapeHtml(statusText)}</span>
@@ -11702,8 +11733,12 @@
                         <div class="tx-row-body">
                             <div class="item-left">
                                 <span class="item-name">${escapeHtml(it.name || "(unnamed item)")}</span>
-                                <span class="item-meta">${escapeHtml(it.vendor || "—")}${it.model ? " · " + escapeHtml(it.model) : ""}</span>
+                                <span class="item-meta">[${escapeHtml(it.vendor || "—")}]</span>
+                                ${accountLine}
+                                ${specsLine}
                                 <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🗓️ ${escapeHtml(it.purchaseDate || "—")}</span>
+                                ${noteLine}
+                                ${attLine}
                                 ${warrantyHTML}
                             </div>
                             <div class="item-right">
@@ -11734,6 +11769,16 @@
                 if (!it) return;
                 document.getElementById("inventoryModalTitle").textContent = it.name || "Inventory Item";
                 document.getElementById("invLinkedTxId").value = it.linkedTxId || "";
+                document.getElementById("invSrcAccountId").value = it.srcAccountId || "";
+                const accDisplayEl = document.getElementById("invAccountDisplay");
+                if (it.srcAccountId) {
+                    const accounts = await readAllDB(STORES.ACCOUNTS);
+                    const acc = accounts.find(a => a.id === it.srcAccountId);
+                    accDisplayEl.textContent = "🏠 Purchased via " + (acc ? accountOptionLabel(acc, accounts) : "(deleted account)");
+                    accDisplayEl.style.display = "block";
+                } else {
+                    accDisplayEl.style.display = "none";
+                }
                 document.getElementById("invVendor").value = it.vendor || "";
                 document.getElementById("invName").value = it.name || "";
                 document.getElementById("invNote").value = it.note || "";
@@ -11749,6 +11794,8 @@
             } else {
                 document.getElementById("inventoryModalTitle").textContent = "Add Inventory Item";
                 document.getElementById("invLinkedTxId").value = "";
+                document.getElementById("invSrcAccountId").value = "";
+                document.getElementById("invAccountDisplay").style.display = "none";
                 document.getElementById("invVendor").value = "";
                 document.getElementById("invName").value = "";
                 document.getElementById("invNote").value = "";
@@ -11772,6 +11819,7 @@
             const record = {
                 id: idInput || makeInvId(),
                 linkedTxId: document.getElementById("invLinkedTxId").value || null,
+                srcAccountId: document.getElementById("invSrcAccountId").value || null,
                 vendor: document.getElementById("invVendor").value.trim() || null,
                 name,
                 note: document.getElementById("invNote").value.trim() || null,
