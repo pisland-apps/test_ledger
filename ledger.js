@@ -4410,6 +4410,26 @@
             navigateToLedgerPage("all");
         }
 
+        // v325: Dashboard's "Recent Transactions" widget → 📅 Calendar shortcut. Jumps straight
+        // into the same Transactions page reached via sidebar → Transactions, but pre-set to its
+        // Calendar view (see setLedgerViewMode()) instead of landing on the default List view
+        // and requiring an extra tap on the in-page toggle. Mirrors setLedgerViewMode()'s own
+        // "first time entering calendar mode" defaulting so today's month/date are pre-selected
+        // the same way whether the user arrives via this shortcut or the in-page toggle.
+        function navigateToLedgerCalendarView() {
+            if (ledgerViewMode !== "calendar") {
+                ledgerViewMode = "calendar";
+                writeDB(STORES.SETTINGS, { key: "ledgerViewMode", value: "calendar" });
+            }
+            if (ledgerCalSelectedDate === null) {
+                const today = new Date();
+                ledgerCalYear = today.getFullYear();
+                ledgerCalMonth = today.getMonth();
+                ledgerCalSelectedDate = localDateStr(today);
+            }
+            navigateToLedgerPage("all");
+        }
+
         // "Data Security" hub — replaces the old sidebar "Data & Security" section; groups
         // Backup & Restore / Auto-Lock / App Local Database / Lock App Now behind one bottom-of-
         // dashboard button.
@@ -16617,6 +16637,7 @@
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
             setLedgerViewMode: (el) => setLedgerViewMode(el),
+            navigateToLedgerCalendarView: () => navigateToLedgerCalendarView(),
             ledgerCalendarPrevMonth: () => ledgerCalendarPrevMonth(),
             ledgerCalendarNextMonth: () => ledgerCalendarNextMonth(),
             ledgerCalendarGoToday: () => ledgerCalendarGoToday(),
