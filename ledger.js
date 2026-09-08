@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v321";
+        const APP_VERSION = "v322";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -11736,7 +11736,7 @@
                 const specsLine = specsBits.length ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${specsBits.join(" · ")}</span>` : "";
 
                 const accName = accountName(it.srcAccountId);
-                const accountLine = accName ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏠 ${accName}</span>` : "";
+                const accountLine = accName ? ` · 🏠 ${accName}` : "";
 
                 const noteLine = it.note ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📝 ${escapeHtml(it.note)}</span>` : "";
 
@@ -11770,8 +11770,7 @@
                         <div class="tx-row-body">
                             <div class="item-left">
                                 <span class="item-name">${escapeHtml(it.name || "(unnamed item)")}</span>
-                                <span class="item-meta">[${escapeHtml(it.vendor || "—")}]</span>
-                                ${accountLine}
+                                <span class="item-meta">[${escapeHtml(it.vendor || "—")}]${accountLine}</span>
                                 ${specsLine}
                                 <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🗓️ ${escapeHtml(it.purchaseDate || "—")}</span>
                                 ${noteLine}
