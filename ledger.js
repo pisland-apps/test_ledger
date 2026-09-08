@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v316";
+        const APP_VERSION = "v317";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2454,14 +2454,27 @@
         // redundant repeat of it. A category funded from more than one foreign currency (rare)
         // shows each on its own line. Reuses the existing .converted-subtext class (already used
         // for the same "≈" pattern on Account Activity balances) for visual consistency.
+        // v317: "≈" claims the WHOLE row equals that native amount — true only when every cent
+        // of the row's base-currency total actually originated in that one (or those) foreign
+        // currency. If the category ALSO has money that was natively base-currency (e.g. Dining
+        // Out = RM200 KFC + a separate S$100 McDonald's, base=SGD), the combined S$162.85 total
+        // is NOT "≈ RM200" — RM200 only ≈ S$62.85 of it, the other S$100 was never RM at all.
+        // Labeling that "≈ RM200.00" reads as "S$162.85 = RM200.00", which is simply false.
+        // So: only use "≈" when nativeMap has no base-currency entry of its own (the row's total
+        // is wholly a foreign-currency conversion). Otherwise switch to "incl." — "part of this
+        // total came from RM200.00" — which stays true regardless of what else is mixed in.
         function nativeSubtextHTML(nativeMap) {
             if (!nativeMap) return "";
-            const parts = Object.keys(nativeMap)
+            const hasBaseNative = Math.abs(nativeMap[baseCurrency] || 0) >= SAVINGS_ZERO_EPS;
+            const foreignCurs = Object.keys(nativeMap)
                 .filter(cur => cur !== baseCurrency && Math.abs(nativeMap[cur]) >= SAVINGS_ZERO_EPS)
-                .sort((a, b) => a.localeCompare(b))
-                .map(cur => `≈ ${formatCurrency(nativeMap[cur], cur)}`);
-            if (parts.length === 0) return "";
-            return `<span class="converted-subtext">${parts.join(" · ")}</span>`;
+                .sort((a, b) => a.localeCompare(b));
+            if (foreignCurs.length === 0) return "";
+            const amounts = foreignCurs.map(cur => formatCurrency(nativeMap[cur], cur));
+            const text = hasBaseNative
+                ? `incl. ${amounts.join(" + ")}`
+                : foreignCurs.map(cur => `≈ ${formatCurrency(nativeMap[cur], cur)}`).join(" · ");
+            return `<span class="converted-subtext">${text}</span>`;
         }
 
         // Adds every {currency: amount} entry in `source` into `target` in place — used to roll
