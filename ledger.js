@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v322";
+        const APP_VERSION = "v323";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2478,6 +2478,15 @@
         // So: only use "≈" when nativeMap has no base-currency entry of its own (the row's total
         // is wholly a foreign-currency conversion). Otherwise switch to "incl." — "part of this
         // total came from RM200.00" — which stays true regardless of what else is mixed in.
+        // v322: the "incl." case previously stated the foreign amount alone (e.g. "incl.
+        // RM200.00"), leaving the reader to work out what portion of the row's base-currency
+        // total that actually represents. User flagged this from the Dining Out example again
+        // (RM200 KFC + S$100 McDonald's = S$162.85 total) — now appends a live-rate "≈ S$62.85"
+        // conversion after each foreign "incl." amount, using the exact same convertCurrency()
+        // used everywhere else for base-currency valuation (so this line and the row's own total
+        // are always consistent with each other). The pure-"≈" branch (whole row is one foreign
+        // currency) is unchanged — the row's own base-currency figure already IS that conversion,
+        // so repeating it here would be redundant.
         function nativeSubtextHTML(nativeMap) {
             if (!nativeMap) return "";
             const hasBaseNative = Math.abs(nativeMap[baseCurrency] || 0) >= SAVINGS_ZERO_EPS;
@@ -2485,9 +2494,12 @@
                 .filter(cur => cur !== baseCurrency && Math.abs(nativeMap[cur]) >= SAVINGS_ZERO_EPS)
                 .sort((a, b) => a.localeCompare(b));
             if (foreignCurs.length === 0) return "";
-            const amounts = foreignCurs.map(cur => formatCurrency(nativeMap[cur], cur));
             const text = hasBaseNative
-                ? `incl. ${amounts.join(" + ")}`
+                ? foreignCurs.map(cur => {
+                    const nativeAmt = nativeMap[cur];
+                    const converted = convertCurrency(nativeAmt, cur, baseCurrency);
+                    return `incl. ${formatCurrency(nativeAmt, cur)} ≈ ${formatCurrency(converted, baseCurrency)}`;
+                  }).join(" + ")
                 : foreignCurs.map(cur => `≈ ${formatCurrency(nativeMap[cur], cur)}`).join(" · ");
             return `<span class="converted-subtext">${text}</span>`;
         }
