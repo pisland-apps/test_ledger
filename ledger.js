@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v317";
+        const APP_VERSION = "v318";
         const APP_VERSION_DATE = "2026-09-08";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2484,6 +2484,16 @@
             if (!source) return target;
             Object.keys(source).forEach(cur => { target[cur] = (target[cur] || 0) + source[cur]; });
             return target;
+        }
+
+        // v318: shared {category: {currency: nativeAmountSum}} accumulator — same shape/purpose
+        // as renderSavingsStatement's local addNative(), promoted to top-level so Spending/Income
+        // Breakdown (renderSpendingBreakdownPage/renderIncomeBreakdownPage) can build the same
+        // "≈ / incl." native-currency subtext (see nativeSubtextHTML above) on their category
+        // rows without duplicating the helper.
+        function addNativeAmount(bucket, cat, currency, amount) {
+            bucket[cat] = bucket[cat] || {};
+            bucket[cat][currency] = (bucket[cat][currency] || 0) + amount;
         }
 
         function convertCurrency(amount, fromCurr, toCurr) {
@@ -14174,9 +14184,12 @@
                 const icon = getCategoryIcon(e.label, type);
                 return `
                     <div class="category-row-item" data-click="navigateToCategoryPage" data-category="${escapeHtml(e.label)}" data-back="${backTarget}" data-year="${escapeHtml(year)}" data-month="${escapeHtml(month)}" style="font-size:0.75rem; margin-top:4px;">
-                        <div style="display:flex; justify-content:space-between; margin-bottom: 2px;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 2px; align-items:flex-end;">
                             <strong>${icon} ${escapeHtml(e.label.toUpperCase())}</strong>
-                            <span>${formatCurrency(e.value, baseCurrency)} (${pct}%)</span>
+                            <span style="display:flex; flex-direction:column; align-items:flex-end;">
+                                <span>${formatCurrency(e.value, baseCurrency)} (${pct}%)</span>
+                                ${nativeSubtextHTML(e.native)}
+                            </span>
                         </div>
                         <div class="progress-bar-container"><div class="progress-bar-fill" style="width:${pct}%; background:${e.color};"></div></div>
                     </div>
@@ -14367,6 +14380,8 @@
 
             const catTotals = {};
             const excludedTotals = {};
+            const catNative = {};
+            const excludedNative = {};
             let total = 0, excludedTotal = 0;
             txs.forEach(t => {
                 // v88: a refund (income-type, isRefund:true) is folded into this same Spending
@@ -14381,20 +14396,23 @@
                 if (filterY !== "all" && d.getFullYear().toString() !== filterY) return;
                 const tBase = convertTxAmountToBase(t, accounts);
                 const signedBase = isRefundCredit ? -tBase : tBase;
+                const signedNative = isRefundCredit ? -t.amount : t.amount;
                 const cat = t.cat || "Other Expenses";
                 if (excludedCatNames.has(cat)) {
                     excludedTotals[cat] = (excludedTotals[cat] || 0) + signedBase;
                     excludedTotal += signedBase;
+                    addNativeAmount(excludedNative, cat, t.currency, signedNative);
                     return;
                 }
                 catTotals[cat] = (catTotals[cat] || 0) + signedBase;
                 total += signedBase;
+                addNativeAmount(catNative, cat, t.currency, signedNative);
             });
 
             const entries = Object.keys(catTotals)
                 .filter(c => catTotals[c] > 0)
                 .sort((a, b) => catTotals[b] - catTotals[a])
-                .map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+                .map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length], native: catNative[c] }));
 
             document.getElementById("spendingBreakdownTotal").textContent = formatCurrency(total, baseCurrency);
             renderBreakdownChart("spendingBreakdownChartWrap", chartType, entries, total, "expense");
@@ -14403,7 +14421,7 @@
             const excludedEntries = Object.keys(excludedTotals)
                 .filter(c => excludedTotals[c] > 0)
                 .sort((a, b) => excludedTotals[b] - excludedTotals[a])
-                .map((c, i) => ({ label: c, value: excludedTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+                .map((c, i) => ({ label: c, value: excludedTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length], native: excludedNative[c] }));
             const excludedCard = document.getElementById("spendingBreakdownExcludedCard");
             if (excludedEntries.length) {
                 excludedCard.style.display = "";
@@ -14429,6 +14447,8 @@
 
             const catTotals = {};
             const excludedTotals = {};
+            const catNative = {};
+            const excludedNative = {};
             let total = 0, excludedTotal = 0;
             txs.forEach(t => {
                 if (t.type !== "income") return;
@@ -14445,16 +14465,18 @@
                 if (excludedCatNames.has(cat)) {
                     excludedTotals[cat] = (excludedTotals[cat] || 0) + tBase;
                     excludedTotal += tBase;
+                    addNativeAmount(excludedNative, cat, t.currency, t.amount);
                     return;
                 }
                 catTotals[cat] = (catTotals[cat] || 0) + tBase;
                 total += tBase;
+                addNativeAmount(catNative, cat, t.currency, t.amount);
             });
 
             const entries = Object.keys(catTotals)
                 .filter(c => catTotals[c] > 0)
                 .sort((a, b) => catTotals[b] - catTotals[a])
-                .map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+                .map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length], native: catNative[c] }));
 
             document.getElementById("incomeBreakdownTotal").textContent = formatCurrency(total, baseCurrency);
             renderBreakdownChart("incomeBreakdownChartWrap", chartType, entries, total, "income");
@@ -14463,7 +14485,7 @@
             const excludedEntries = Object.keys(excludedTotals)
                 .filter(c => excludedTotals[c] > 0)
                 .sort((a, b) => excludedTotals[b] - excludedTotals[a])
-                .map((c, i) => ({ label: c, value: excludedTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
+                .map((c, i) => ({ label: c, value: excludedTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length], native: excludedNative[c] }));
             const excludedCard = document.getElementById("incomeBreakdownExcludedCard");
             if (excludedEntries.length) {
                 excludedCard.style.display = "";
