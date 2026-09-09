@@ -1458,6 +1458,43 @@
         // Tags row on the Add/Edit Transaction form (filterTxTagSuggestions()).
         let dynamicTags = [];
 
+        // v332: per-tag icon + color, set on the tag record itself (editTag()/handleSaveTagMobile()
+        // in the Manage Tags form) and read from there by every place a tag pill is drawn —
+        // buildTagBadgesHTML() (Ledger rows / Tag Report), renderTagReminderWidget() (Dashboard),
+        // tagsLineHTML (Quick View), buildTxTagPickerRowHTML() (the Tags picker modal) and
+        // renderTagsPage() (Manage Tags list) itself. Older tag records saved before this existed
+        // simply lack .icon/.color — getTagMeta() below falls back to the same 🔖/purple look
+        // every tag used to have, so nothing changes for a tag until someone deliberately picks a
+        // different icon/color for it.
+        const TAG_ICON_CHOICES = ["🔖", "🏷️", "📌", "🎫", "📎", "🗂️", "⭐", "💠", "🔗", "🚩", "🔸", "#"];
+        const TAG_COLOR_PALETTE = {
+            purple: { text: "#6d28d9", bg: "#ede9fe" },
+            red:    { text: "#b91c1c", bg: "#fee2e2" },
+            orange: { text: "#c2410c", bg: "#ffedd5" },
+            amber:  { text: "#92400e", bg: "#fef3c7" },
+            green:  { text: "#15803d", bg: "#dcfce7" },
+            teal:   { text: "#0f766e", bg: "#ccfbf1" },
+            blue:   { text: "#1d4ed8", bg: "#dbeafe" },
+            indigo: { text: "#4338ca", bg: "#e0e7ff" },
+            pink:   { text: "#be185d", bg: "#fce7f3" },
+            gray:   { text: "#374151", bg: "#f3f4f6" },
+        };
+        const DEFAULT_TAG_ICON = "🔖";
+        const DEFAULT_TAG_COLOR = "purple";
+
+        // Looks a tag name up against dynamicTags (case-insensitive, same matching convention as
+        // everywhere else a transaction's plain tag-name string is resolved back to its record —
+        // see toggleTxTagPickerTag()) and returns its display icon + color, defaulting for a tag
+        // with no record (e.g. deleted from Manage Tags but still sitting on old transactions) or
+        // one saved before icon/color existed.
+        function getTagMeta(name) {
+            const rec = dynamicTags.find(t => t.name.toLowerCase() === (name || "").toLowerCase());
+            const icon = (rec && rec.icon) || DEFAULT_TAG_ICON;
+            const colorKey = (rec && rec.color && TAG_COLOR_PALETTE[rec.color]) ? rec.color : DEFAULT_TAG_COLOR;
+            const c = TAG_COLOR_PALETTE[colorKey];
+            return { icon, color: colorKey, text: c.text, bg: c.bg };
+        }
+
         // User-chosen category pre-selected whenever a NEW Income / Expense entry is opened
         // (never applied when editing an existing transaction). Stored in the SETTINGS store,
         // "" / null means "no default — leave the dropdown at its first option" as before.
@@ -2038,7 +2075,10 @@
         // row's, with no stopPropagation() needed.
         function buildTagBadgesHTML(tags, txId) {
             if (!Array.isArray(tags) || tags.length === 0) return "";
-            return tags.map(name => `<span data-click="openReimbursementFromTagBadge" data-id="${escapeHtml(txId)}" data-tag="${escapeHtml(name)}" style="font-size:0.62rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap; display:inline-block; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">${getTagIcon()} ${escapeHtml(name)}</span>`).join("");
+            return tags.map(name => {
+                const meta = getTagMeta(name);
+                return `<span data-click="openReimbursementFromTagBadge" data-id="${escapeHtml(txId)}" data-tag="${escapeHtml(name)}" style="font-size:0.62rem; font-weight:700; color:${meta.text}; background:${meta.bg}; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap; display:inline-block; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">${meta.icon} ${escapeHtml(name)}</span>`;
+            }).join("");
         }
 
         // v286: an expense that already has a Refund/Reimbursement entry against it (some income
@@ -2180,14 +2220,17 @@
             wrap.style.display = rows.length ? "" : "none";
             if (rows.length === 0) return;
 
-            list.innerHTML = rows.map(r => `
+            list.innerHTML = rows.map(r => {
+                const meta = getTagMeta(r.name);
+                return `
                 <div class="config-item" data-click="openTagReminderRow" data-name="${escapeHtml(r.name)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">
-                    <span class="category-display-badge">${getTagIcon()} <strong>${escapeHtml(r.name)}</strong></span>
+                    <span class="category-display-badge" style="color:${meta.text}; background:${meta.bg}; padding:2px 7px; border-radius:5px;">${meta.icon} <strong>${escapeHtml(r.name)}</strong></span>
                     <span style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">
                         ${r.count} item${r.count === 1 ? "" : "s"} · ${formatCurrency(r.expenseTotal, baseCurrency)}
                     </span>
                 </div>
-            `).join("");
+            `;
+            }).join("");
         }
 
         // v283: tapping a specific Tag Reminders row jumps straight into the Spending by Tag
@@ -7496,75 +7539,6 @@
             panel.style.display = isHidden ? "flex" : "none";
         }
 
-        // --- v332: Tag Icon (Setting page) ---------------------------------------------------
-        // Purely cosmetic swap of the glyph shown before tag names — every call site that used
-        // to hardcode "🔖" now calls getTagIcon() instead (buildTagBadgesHTML(), the Tags
-        // picker rows, tag report/report-list badges, remove-tag toast/label). Same
-        // localStorage-only persistence as Net Worth Card Style above (device-local display
-        // preference, not tag data, so it doesn't need to round-trip through STORES.SETTINGS /
-        // sync).
-        const TAG_ICON_KEY = "ledgerTagIconChoice";
-        const TAG_ICON_OPTIONS = [
-            { id: "bookmark", icon: "🔖", name: "Bookmark" },
-            { id: "label",    icon: "🏷️", name: "Label Tag" },
-            { id: "pin",      icon: "📌", name: "Pushpin" },
-            { id: "ticket",   icon: "🎫", name: "Ticket" },
-            { id: "paperclip",icon: "📎", name: "Paperclip" },
-            { id: "folder",   icon: "🗂️", name: "Folder" },
-            { id: "star",     icon: "⭐", name: "Star" },
-            { id: "diamond",  icon: "💠", name: "Diamond" },
-            { id: "link",     icon: "🔗", name: "Link" },
-            { id: "flag",     icon: "🚩", name: "Flag" },
-            { id: "dot",      icon: "🔸", name: "Dot" },
-            { id: "hash",     icon: "#", name: "Plain Hash" },
-        ];
-        function getSavedTagIconId() {
-            const id = localStorage.getItem(TAG_ICON_KEY);
-            return TAG_ICON_OPTIONS.some(o => o.id === id) ? id : "bookmark";
-        }
-        function getTagIcon() {
-            const opt = TAG_ICON_OPTIONS.find(o => o.id === getSavedTagIconId());
-            return opt ? opt.icon : "🔖";
-        }
-        function buildTagIconSwatchGrid() {
-            const grid = document.getElementById("tagIconSwatchGrid");
-            if (!grid) return;
-            const selectedId = getSavedTagIconId();
-            grid.innerHTML = TAG_ICON_OPTIONS.map(o => `
-                <span class="bg-theme-swatch-wrap">
-                    <span class="icon-swatch${o.id === selectedId ? ' selected' : ''}" data-click="selectTagIcon" data-icon-id="${o.id}" title="${o.name}">${o.icon}</span>
-                    <span class="bg-theme-swatch-label">${o.name}</span>
-                </span>
-            `).join("");
-        }
-        function selectTagIcon(el) {
-            try { localStorage.setItem(TAG_ICON_KEY, el.dataset.iconId); } catch (e) {}
-            document.querySelectorAll("#tagIconSwatchGrid .icon-swatch").forEach(s => s.classList.toggle("selected", s.dataset.iconId === el.dataset.iconId));
-            const rowLabel = document.getElementById("tagIconSettingsRowLabel");
-            if (rowLabel) rowLabel.innerHTML = `${getTagIcon()} <strong>Tag Icon</strong>`;
-            // Re-render whatever tag-bearing views are currently on screen so the change is
-            // visible immediately, same "refresh in place" approach as toggleTxTagPickerTag().
-            refreshVisibleTagIconViews();
-        }
-        function refreshVisibleTagIconViews() {
-            if (document.getElementById("txTagPickerModal") && !document.getElementById("txTagPickerModal").classList.contains("hidden")) {
-                const input = document.getElementById("txTagPickerInput");
-                renderTxTagPickerList(input ? input.value : "");
-            }
-            if (activeQuickViewTxId) {
-                openTxQuickView({ dataset: { id: String(activeQuickViewTxId) } }, { skipModalOpen: true });
-            }
-            if (document.getElementById("tagsPageList")) {
-                try { renderTagsPage(); } catch (e) {}
-            }
-        }
-        function toggleTagIconSettings() {
-            const panel = document.getElementById("tagIconSettingsPanel");
-            const isHidden = panel.style.display === "none";
-            if (isHidden) buildTagIconSwatchGrid();
-            panel.style.display = isHidden ? "flex" : "none";
-        }
-
         // v247: manual toggle (Settings > Background Theme > "Handwritten font (Kalam)") for
         // whether the 蠟筆小新 preset uses the self-hosted Kalam font or the app's normal
         // sans-serif — independent of the preset's colors/borders/radius, which stay Kalam-
@@ -7671,13 +7645,6 @@
         // Background Theme re-apply just above (no <head> no-flash snippet for this one since
         // the hero card only ever appears after unlock, not before first paint).
         applyNetWorthCardStyle(getSavedNetWorthCardStyleId(), { save: false });
-
-        // v332: sync the Setting page's "Tag Icon" row label with whatever was saved from a
-        // previous session — same "apply on parse, before the row is ever opened" treatment.
-        document.addEventListener("DOMContentLoaded", () => {
-            const rowLabel = document.getElementById("tagIconSettingsRowLabel");
-            if (rowLabel) rowLabel.innerHTML = `${getTagIcon()} <strong>Tag Icon</strong>`;
-        });
 
         // v249: syncs the header button's icon/title with the persisted Privacy Mode choice —
         // the <head> no-flash script already set the CSS-facing attribute before first paint,
@@ -8868,7 +8835,7 @@
             if (!trimmed) return null;
             const existing = dynamicTags.find(t => t.name.toLowerCase() === trimmed.toLowerCase());
             if (existing) return existing;
-            const rec = { id: "tag_" + Date.now() + "_" + Math.floor(Math.random() * 100000), name: trimmed };
+            const rec = { id: "tag_" + Date.now() + "_" + Math.floor(Math.random() * 100000), name: trimmed, icon: DEFAULT_TAG_ICON, color: DEFAULT_TAG_COLOR };
             await writeDB(STORES.TAGS, rec);
             await syncAndLoadTags();
             return rec;
@@ -8884,15 +8851,78 @@
 
         function renderTagsPage() {
             const listEl = document.getElementById("tagsPageList");
-            listEl.innerHTML = dynamicTags.length ? dynamicTags.map(t => `
+            listEl.innerHTML = dynamicTags.length ? dynamicTags.map(t => {
+                const meta = getTagMeta(t.name);
+                return `
                 <div class="config-item">
-                    <span class="category-display-badge">${getTagIcon()} <strong>${escapeHtml(t.name)}</strong></span>
+                    <span class="category-display-badge" style="color:${meta.text}; background:${meta.bg}; padding:2px 7px; border-radius:5px;">${meta.icon} <strong>${escapeHtml(t.name)}</strong></span>
                     <div style="display:flex; align-items:center;">
-                        <button type="button" class="trash-btn" data-click="editTag" data-id="${escapeHtml(t.id)}" title="Rename tag">✏️</button>
+                        <button type="button" class="trash-btn" data-click="editTag" data-id="${escapeHtml(t.id)}" title="Edit tag">✏️</button>
                         <button type="button" class="trash-btn" data-click="removeTag" data-id="${escapeHtml(t.id)}" title="Delete tag">🗑</button>
                     </div>
-                </div>`).join("")
+                </div>`;
+            }).join("")
                 : `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No tags yet — add one here, or type a new one straight from the Add Income/Expense form's Tags field.</p>`;
+        }
+
+        // v332: renders the tap-to-pick icon grid inside the tagModal, highlighting whichever
+        // icon is currently held in the #tagIcon hidden input. Re-run on every pick (selectTagIcon())
+        // so the highlight moves, same "re-render the whole small list" pattern the rest of this
+        // app already uses for tap-to-select rows (buildTxTagPickerRowHTML() etc.) rather than
+        // hand-patching classes on individual buttons.
+        function renderTagIconGrid() {
+            const wrap = document.getElementById("tagIconGrid");
+            if (!wrap) return;
+            const current = document.getElementById("tagIcon").value || DEFAULT_TAG_ICON;
+            wrap.innerHTML = TAG_ICON_CHOICES.map(ic => `
+                <button type="button" data-click="selectTagIcon" data-icon="${escapeHtml(ic)}"
+                    style="width:38px; height:38px; font-size:1.05rem; border-radius:8px; cursor:pointer;
+                    border:2px solid ${ic === current ? "var(--primary)" : "var(--border-color)"};
+                    background:${ic === current ? "var(--primary-chip-bg)" : "var(--card-bg)"};">${escapeHtml(ic)}</button>
+            `).join("");
+        }
+
+        function selectTagIcon(el) {
+            document.getElementById("tagIcon").value = el.dataset.icon;
+            renderTagIconGrid();
+            updateTagPreviewBadge();
+        }
+
+        // Same tap-to-pick pattern as renderTagIconGrid(), one round swatch per TAG_COLOR_PALETTE
+        // entry — the ring shows which color is selected instead of a label, since the swatch's
+        // own fill already names the color visually.
+        function renderTagColorGrid() {
+            const wrap = document.getElementById("tagColorGrid");
+            if (!wrap) return;
+            const current = document.getElementById("tagColor").value || DEFAULT_TAG_COLOR;
+            wrap.innerHTML = Object.keys(TAG_COLOR_PALETTE).map(key => {
+                const c = TAG_COLOR_PALETTE[key];
+                const selected = key === current;
+                return `<button type="button" data-click="selectTagColor" data-color="${key}" title="${key}"
+                    style="width:30px; height:30px; border-radius:50%; cursor:pointer; background:${c.bg};
+                    border:2px solid ${selected ? c.text : "transparent"}; box-shadow:0 0 0 1px var(--border-color)${selected ? (", 0 0 0 3px " + c.bg) : ""};"></button>`;
+            }).join("");
+        }
+
+        function selectTagColor(el) {
+            document.getElementById("tagColor").value = el.dataset.color;
+            renderTagColorGrid();
+            updateTagPreviewBadge();
+        }
+
+        // Live preview pill at the bottom of the tagModal — kept in sync on every icon/color tap
+        // (selectTagIcon()/selectTagColor()) and every keystroke in the name field (data-input on
+        // #tagName, INPUT_ACTIONS below) so what's about to be saved is never a guess.
+        function updateTagPreviewBadge() {
+            const el = document.getElementById("tagPreviewBadge");
+            if (!el) return;
+            const icon = document.getElementById("tagIcon").value || DEFAULT_TAG_ICON;
+            const colorKey = document.getElementById("tagColor").value || DEFAULT_TAG_COLOR;
+            const c = TAG_COLOR_PALETTE[colorKey] || TAG_COLOR_PALETTE[DEFAULT_TAG_COLOR];
+            const name = document.getElementById("tagName").value.trim() || "Tag name";
+            el.innerHTML = `${icon} <strong>${escapeHtml(name)}</strong>`;
+            el.style.color = c.text;
+            el.style.background = c.bg;
         }
 
         function openTagFormModal() {
@@ -8901,6 +8931,11 @@
             document.getElementById("tagEditId").value = "";
             document.getElementById("tagName").value = "";
             document.getElementById("tagShowOnDashboard").checked = false;
+            document.getElementById("tagIcon").value = DEFAULT_TAG_ICON;
+            document.getElementById("tagColor").value = DEFAULT_TAG_COLOR;
+            renderTagIconGrid();
+            renderTagColorGrid();
+            updateTagPreviewBadge();
             openModal("tagModal");
         }
 
@@ -8914,13 +8949,22 @@
             // v281: older tags saved before this field existed simply have it undefined —
             // treated as off, same as everywhere else this flag is read.
             document.getElementById("tagShowOnDashboard").checked = t.showOnDashboard === true;
+            // v332: same fallback as getTagMeta() — an older tag with no icon/color saved yet
+            // opens the form on the same 🔖/purple default it's currently displayed with.
+            document.getElementById("tagIcon").value = t.icon || DEFAULT_TAG_ICON;
+            document.getElementById("tagColor").value = (t.color && TAG_COLOR_PALETTE[t.color]) ? t.color : DEFAULT_TAG_COLOR;
+            renderTagIconGrid();
+            renderTagColorGrid();
+            updateTagPreviewBadge();
             openModal("tagModal");
         }
 
         // Renaming here only affects the tag's entry in Manage Tags / future pickers — it does
         // NOT retroactively rewrite the name string already saved on past transactions (see the
         // STORE_KEYPATHS-adjacent comment on createObjectStore(STORES.TAGS) above), same
-        // tradeoff Category renames already live with in this app.
+        // tradeoff Category renames already live with in this app. Icon/color changes, by
+        // contrast, apply everywhere instantly — every pill looks the tag record up by name at
+        // render time (getTagMeta()) rather than freezing a copy onto each transaction.
         async function handleSaveTagMobile() {
             const name = document.getElementById("tagName").value.trim();
             if (!name) { alert("Please enter a tag name."); return; }
@@ -8928,7 +8972,9 @@
             const dupe = dynamicTags.find(t => t.name.toLowerCase() === name.toLowerCase() && t.id !== editId);
             if (dupe) { alert("A tag with that name already exists."); return; }
             const showOnDashboard = document.getElementById("tagShowOnDashboard").checked;
-            const record = { id: editId || ("tag_" + Date.now() + "_" + Math.floor(Math.random() * 100000)), name, showOnDashboard };
+            const icon = document.getElementById("tagIcon").value || DEFAULT_TAG_ICON;
+            const color = document.getElementById("tagColor").value || DEFAULT_TAG_COLOR;
+            const record = { id: editId || ("tag_" + Date.now() + "_" + Math.floor(Math.random() * 100000)), name, showOnDashboard, icon, color };
             try {
                 await writeDB(STORES.TAGS, record);
             } catch (err) {
@@ -12770,12 +12816,15 @@
             const tagsLineHTML = `
                 <div style="margin-top:4px; display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
                     <span>Tags:</span>
-                    ${(Array.isArray(tx.tags) ? tx.tags : []).map(name => `
-                        <span style="font-size:0.72rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:2px 5px 2px 7px; border-radius:4px; white-space:nowrap; display:inline-flex; align-items:center; gap:4px;">
-                            ${getTagIcon()} ${escapeHtml(name)}
-                            <span data-click="removeTagFromQuickViewTx" data-tag="${escapeHtml(name)}" title="Remove this tag" style="cursor:pointer; font-weight:900; color:#4c1d95; padding:0 2px;">✕</span>
+                    ${(Array.isArray(tx.tags) ? tx.tags : []).map(name => {
+                        const meta = getTagMeta(name);
+                        return `
+                        <span style="font-size:0.72rem; font-weight:700; color:${meta.text}; background:${meta.bg}; padding:2px 5px 2px 7px; border-radius:4px; white-space:nowrap; display:inline-flex; align-items:center; gap:4px;">
+                            ${meta.icon} ${escapeHtml(name)}
+                            <span data-click="removeTagFromQuickViewTx" data-tag="${escapeHtml(name)}" title="Remove this tag" style="cursor:pointer; font-weight:900; color:${meta.text}; padding:0 2px;">✕</span>
                         </span>
-                    `).join("")}
+                    `;
+                    }).join("")}
                     <button type="button" data-click="openTxTagPickerFromQuickView" title="Add tag" style="font-size:0.72rem; font-weight:700; color:var(--primary); background:var(--primary-chip-bg); border:none; padding:2px 8px; border-radius:4px; cursor:pointer; line-height:1.5;">+ Add</button>
                 </div>
             `;
@@ -12827,7 +12876,7 @@
                 alert("Could not remove tag: " + (err && err.message ? err.message : err));
                 return;
             }
-            showToast(`${getTagIcon()} "${tagName}" tag removed`);
+            showToast(`${getTagMeta(tagName).icon} "${tagName}" tag removed`);
             await refreshAfterTransactionChange();
             await openTxQuickView({ dataset: { id: String(txId) } }, { skipModalOpen: true });
         }
@@ -12839,9 +12888,10 @@
         // but multi-select (tapping a row toggles it on/off and writes immediately) rather than
         // single-select-and-close, since a transaction can carry any number of tags at once.
         function buildTxTagPickerRowHTML(name, selected) {
+            const meta = getTagMeta(name);
             return `
                 <button type="button" class="option-menu-btn" data-click="toggleTxTagPickerTag" data-tag="${escapeHtml(name)}" style="display:flex; justify-content:space-between; align-items:center; ${selected ? "background:var(--primary-chip-bg);" : ""}">
-                    <span>${getTagIcon()} ${escapeHtml(name)}</span>
+                    <span>${meta.icon} ${escapeHtml(name)}</span>
                     ${selected ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
                 </button>
             `;
@@ -13352,7 +13402,7 @@
             const removeTagWrap = document.getElementById("txRemoveTagWrap");
             if (tagToOffer && removeTagWrap) {
                 pendingRemoveTagName = tagToOffer;
-                document.getElementById("txRemoveTagLabel").textContent = `${getTagIcon()} Remove "${tagToOffer}" tag from the original transaction`;
+                document.getElementById("txRemoveTagLabel").textContent = `${getTagMeta(tagToOffer).icon} Remove "${tagToOffer}" tag from the original transaction`;
                 document.getElementById("txRemoveTagToggle").checked = true;
                 removeTagWrap.style.display = "";
             } else {
@@ -16994,8 +17044,6 @@
             selectBgTheme: (el) => selectBgTheme(el),
             toggleNetWorthCardStyleSettings: () => toggleNetWorthCardStyleSettings(),
             selectNetWorthCardStyle: (el) => selectNetWorthCardStyle(el),
-            toggleTagIconSettings: () => toggleTagIconSettings(),
-            selectTagIcon: (el) => selectTagIcon(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
@@ -17119,6 +17167,8 @@
             editTag: (el) => editTag(el.dataset.id),
             removeTag: (el) => removeTag(el.dataset.id),
             handleSaveTagMobile: () => handleSaveTagMobile(),
+            selectTagIcon: (el) => selectTagIcon(el),
+            selectTagColor: (el) => selectTagColor(el),
             navigateToBudgetPage: (el) => navigateToBudgetPage(el && el.dataset ? el.dataset.scope : undefined),
             budgetSetScope: (el) => budgetSetScope(el),
             budgetPagePrevPeriod: () => budgetPagePrevPeriod(),
@@ -17231,6 +17281,7 @@
             filterTxTagSuggestions: (el) => filterTxTagSuggestions(el),
             filterTxTagPickerList: (el) => filterTxTagPickerList(el),
             recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),
+            updateTagPreviewBadge: () => updateTagPreviewBadge(),
         };
 
         document.addEventListener("click", (e) => {

@@ -1474,16 +1474,6 @@
         .bg-theme-swatch-wrap .color-swatch.selected { box-shadow: none; }
         .bg-theme-swatch-label { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-align: center; line-height: 1.2; }
 
-        /* v332: Tag Icon swatches (Setting page) — same wrap/label shell as the Background
-           Theme / Net Worth Card Style pickers above, but each "swatch" is a square glyph
-           tile instead of a color circle, since what's being chosen is a symbol, not a color. */
-        .icon-swatch {
-            width: 32px; height: 32px; border-radius: 9px; cursor: pointer; border: 3px solid transparent;
-            box-shadow: 0 0 0 1.5px var(--border-color) inset; background: var(--card-bg);
-            display: flex; align-items: center; justify-content: center; font-size: 1.05rem; line-height: 1;
-        }
-        .icon-swatch.selected { border-color: var(--text-main); box-shadow: none; background: var(--primary-chip-bg); }
-
         /* ============ v181: Desktop "Insights" right rail ============
            Fills the empty space to the right of the centered content column that appears once
            the viewport is wide enough that the docked sidebar (336px, see the 768px breakpoint
@@ -4048,17 +4038,6 @@
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes only the background of the Dashboard's Portfolio Net Worth card. "Classic" adapts to whichever Background Theme is active; the others are fixed gradients.</p>
                 <div class="color-swatch-grid" id="netWorthCardStyleSwatchGrid"></div>
             </div>
-            <!-- v332: Tag Icon — swaps the glyph shown before every tag name/pill across the app
-                 (tag pills on transactions, the Tags picker rows, category-style tag badges,
-                 remove/removed toasts) — purely cosmetic, doesn't touch tag data itself. -->
-            <div class="config-item" style="cursor:pointer;" data-click="toggleTagIconSettings">
-                <span id="tagIconSettingsRowLabel">🔖 <strong>Tag Icon</strong></span>
-                <span style="color:var(--text-muted);">›</span>
-            </div>
-            <div id="tagIconSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes the icon shown next to tag names everywhere in the app — the Tags picker, tag pills on transactions, and tag reports.</p>
-                <div class="color-swatch-grid" id="tagIconSwatchGrid"></div>
-            </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
                 <span>📊 <strong>Dashboard Widgets</strong></span>
                 <span style="color:var(--text-muted);">›</span>
@@ -4690,7 +4669,28 @@
                 <input type="hidden" id="tagEditId" value="">
                 <div class="form-row">
                     <label>Tag Name</label>
-                    <input type="text" id="tagName" placeholder="e.g. Japan Holiday Aug 2026" required>
+                    <input type="text" id="tagName" placeholder="e.g. Japan Holiday Aug 2026" data-input="updateTagPreviewBadge" required>
+                </div>
+                <!-- v332: icon + color pickers — grids are drawn by renderTagIconGrid()/
+                     renderTagColorGrid() in ledger.js (openTagFormModal()/editTag()), which also
+                     keep the highlighted swatch in sync as one is tapped (selectTagIcon()/
+                     selectTagColor()). #tagIcon/#tagColor are the values actually saved
+                     (handleSaveTagMobile()); this app's markup convention is a hidden input
+                     holding the "real" value with a rendered grid/list next to it, same as the
+                     account/category picker rows elsewhere. -->
+                <div class="form-row">
+                    <label>Icon</label>
+                    <div id="tagIconGrid" style="display:flex; flex-wrap:wrap; gap:8px;"></div>
+                    <input type="hidden" id="tagIcon" value="🔖">
+                </div>
+                <div class="form-row">
+                    <label>Color</label>
+                    <div id="tagColorGrid" style="display:flex; flex-wrap:wrap; gap:10px;"></div>
+                    <input type="hidden" id="tagColor" value="purple">
+                </div>
+                <div class="form-row">
+                    <label>Preview</label>
+                    <span id="tagPreviewBadge" class="category-display-badge" style="padding:3px 8px; border-radius:5px; width:fit-content;">🔖 <strong>Tag name</strong></span>
                 </div>
                 <!-- v281: "Show on Dashboard" — when on, a Dashboard reminder widget shows how many
                      transactions currently carry this tag (see renderTagReminderWidget()). Purely a
