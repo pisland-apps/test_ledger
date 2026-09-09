@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v331";
+        const APP_VERSION = "v332";
         const APP_VERSION_DATE = "2026-09-09";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2640,8 +2640,24 @@
                     resetAccountForm();
                 }
                 const idx = modalStack.lastIndexOf(id);
+                // v331 hardening: if something is stacked ON TOP of `id` (idx isn't the top of
+                // the stack), those entries get dropped from modalStack same as before — but
+                // now their DOM "active" class is removed too. Previously they were left
+                // visually active while no longer tracked by modalStack, so a subsequent
+                // history.back() (from THIS close, or any later one) had nothing left in
+                // modalStack to attribute to them — the popstate handler's own "pop the top
+                // entry" logic ended up closing the WRONG modal (whatever `id` itself was, or
+                // later, page-level navigation) while the orphaned one stayed stuck open,
+                // unresponsive to its own × or any of its buttons (see the v330
+                // openClaimSettleFromSalary() nested-modal case this was first caught from).
+                // Only ever reached for the same "shouldn't normally happen" case the original
+                // v88 comment already flagged — this is a safety net, not a new supported flow.
                 if (idx !== -1 && idx !== modalStack.length - 1) {
-                    modalStack.splice(idx + 1);
+                    const orphaned = modalStack.splice(idx + 1);
+                    orphaned.forEach(orphanId => {
+                        const orphanEl = document.getElementById(orphanId);
+                        if (orphanEl) orphanEl.classList.remove("active");
+                    });
                 }
                 window.history.back();
             }

@@ -4691,9 +4691,19 @@
 
     <!-- MODAL: Settle Multiple Claims (v291, redesigned v295) — settles several unclaimed
          Transfers into the Claims Receivable account (still carrying PENDING_CLAIM_TAG, not yet
-         individually settled) against ONE lump-sum payment received back. Opened only
-         from the "Pending Claim" Spending by Tag view (see claimSettleTriggerBtn above) via
-         openClaimSettleModal(). On save this writes: (1) one isRefund Transfer moving
+         individually settled) against ONE lump-sum payment received back. Opened either from the
+         "Pending Claim" Spending by Tag view (see claimSettleTriggerBtn above) via
+         openClaimSettleModal(), OR (v330) from mid-way through the Salary Entry form via
+         openClaimSettleFromSalary() — the latter stacks this ON TOP of the still-open Salary
+         modal. v331 fix: every .modal shares the same base z-index (1000) and otherwise stacks
+         purely by DOM order, so without an explicit bump here this modal — declared earlier in
+         the file than #salaryModal — rendered BEHIND it instead of on top, letting a click reach
+         through to Salary Entry's own × button and corrupt modalStack (closing a modal that
+         wasn't actually the top of the stack left this one orphaned: still visually "active" but
+         no longer tracked, so its own × and Save Settlement appeared to do nothing). z-index:1400
+         matches the same "second-layer modal opened from inside another modal" convention already
+         used by #templatePickerModal/#txSplitPickerModal/#accountPickerModal below. On save this
+         writes: (1) one isRefund Transfer moving
          min(received, billed) OUT of Claims Receivable into whichever account received the
          payment, with every selected bill's date/description/amount listed in its Notes; (2) if
          the received amount doesn't exactly match the selected bills' total, a SEPARATE ordinary
@@ -4703,7 +4713,7 @@
          (non-excluded) category so it DOES flow into Budget/Net Savings/Spending Breakdown as real
          personal spending/income; and (3) removes PENDING_CLAIM_TAG from every settled bill. See
          handleClaimSettleSubmit()/findReimbursementFor()'s refundOfIds handling in ledger.js. -->
-    <div class="modal" id="claimSettleModal">
+    <div class="modal" id="claimSettleModal" style="z-index:1400;">
         <div class="modal-sheet">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
                 <h3 style="font-weight:800;">Settle Multiple Claims</h3>
