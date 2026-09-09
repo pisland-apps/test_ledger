@@ -4,7 +4,7 @@
 // files the Service Worker serves; APP_VERSION is just the display label in the corner of the
 // screen. They don't sync automatically (different files, different load times) — when you bump
 // one, bump the other too. See the matching reminder comment on APP_VERSION in ledger.js.
-const CACHE_NAME = "ledger-cache-v326";
+const CACHE_NAME = "ledger-cache-v331";
 // NOTE: deliberately does NOT include "./index.html" here. On hosts that
 // redirect /index.html -> / (e.g. Cloudflare Pages -- GitHub Pages doesn't do
 // this), caching that URL bakes in a redirected Response, and Chrome refuses
@@ -14,6 +14,10 @@ const CACHE_NAME = "ledger-cache-v326";
 const ASSETS_TO_CACHE = [
     "./",
     "./ledger.js",
+    // v326: was an inline <script> in index.html's <head> until the CSP-self-block security
+    // fix moved it out to this external file (see its own header comment) — needs precaching
+    // same as ledger.js since it also runs on every load, before first paint.
+    "./theme-init.js",
     "./manifest.json",
     "./icon-192.png",
     "./icon-512.png",
@@ -55,6 +59,18 @@ const NETWORK_FIRST_ASSETS = new Set(["./ledger.js"]);
 self.addEventListener("fetch", (event) => {
     if (event.request.method !== "GET") return;
 
+    // v326 security/correctness fix: previously nothing here filtered by origin, so the one
+    // cross-origin request this app ever makes — the "Fetch Live Rates" GET to
+    // open.er-api.com — fell into the generic cache-first branch below just like any other
+    // same-origin asset. That meant the very first fetch got cached permanently, and every
+    // later tap of "Fetch Live Rates" (for the same base currency) silently returned that
+    // same stale response from the Cache Storage instead of ever hitting the network again —
+    // defeating the button's entire purpose. Cross-origin requests are left alone here and
+    // handled by the browser's normal network stack (which already has its own HTTP caching
+    // rules); this also means any future third-party request added to the app is never
+    // accidentally captured by this Service Worker without a deliberate opt-in.
+    if (new URL(event.request.url).origin !== self.location.origin) return;
+
     // Navigation requests (address bar, installed-shortcut launch, link click):
     // this is a single-page app, so ALWAYS resolve through the canonical "./"
     // entry regardless of the exact URL requested -- "/", "/index.html", or any
@@ -62,6 +78,18 @@ self.addEventListener("fetch", (event) => {
     // hand Chrome a redirected Response for a navigation (it fails the whole
     // load with net::ERR_FAILED) -- see README for the full story.
     if (event.request.mode === "navigate") {
+        // v326 fix: caches.match("./") can itself resolve to undefined (nothing cached yet —
+        // e.g. the very first install on a host that redirects "./"). Handing respondWith() an
+        // undefined resolution fails the whole navigation with a generic error instead of
+        // showing anything useful, so every fallback below is routed through this helper,
+        // which guarantees a real Response either way.
+        const navigationFallback = () =>
+            caches.match("./").then((cached) =>
+                cached || new Response(
+                    "Offline and this page hasn't been cached yet — connect once so it can be, then it'll work offline too.",
+                    { status: 503, headers: { "Content-Type": "text/plain" } }
+                )
+            );
         event.respondWith(
             fetch("./", { redirect: "follow" })
                 .then((response) => {
@@ -69,13 +97,13 @@ self.addEventListener("fetch", (event) => {
                         // The host itself is redirecting "./" -- don't hand a
                         // redirected Response to a navigation. Fall back to
                         // whatever's cached (may be nothing on first-ever load).
-                        return caches.match("./");
+                        return navigationFallback();
                     }
                     const responseClone = response.clone();
                     caches.open(CACHE_NAME).then((cache) => cache.put("./", responseClone));
                     return response;
                 })
-                .catch(() => caches.match("./"))
+                .catch(navigationFallback)
         );
         return;
     }

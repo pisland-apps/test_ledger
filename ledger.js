@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v326";
-        const APP_VERSION_DATE = "2026-09-08";
+        const APP_VERSION = "v331";
+        const APP_VERSION_DATE = "2026-09-09";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -750,20 +750,61 @@
         // Re-encrypts every record in every store under a new AES-GCM key — the bulk-data half of
         // Change Passcode. Every store is fully read (decrypted under whichever key is currently
         // in `appKey`, i.e. the OLD one) before `appKey` is swapped to the new one, then every
-        // record is written back (encryptRecord() inside writeDB() picks up the new global
-        // `appKey` automatically). Reading everything up front, then swapping once, then writing
-        // everything — never interleaved — avoids a partial state where some stores are already
-        // readable only with the new key while others still need the old one.
+        // record is re-encrypted under the new key.
+        //
+        // v326 security fix: the write-back used to go through writeDB() store-by-store,
+        // record-by-record — each call opening its own separate IndexedDB transaction. If the
+        // app was interrupted partway (tab killed by the OS, battery died, browser crash —
+        // realistic on a mobile PWA), some records would already be re-encrypted under the new
+        // key while others weren't, yet the persisted lock config (saved by the caller, only
+        // *after* this function returns) would still expect the OLD one — the old passcode
+        // would keep unlocking, but a subset of records would silently fail to decrypt under
+        // the key it derives.
+        //
+        // Fixed by pre-computing every encrypted record first (encryptRecord() is async and
+        // can't safely run *inside* an IndexedDB transaction — awaiting anything beyond a
+        // microtask auto-closes the transaction in most browsers), then writing all of them in
+        // ONE transaction spanning every object store. IndexedDB transactions are atomic:
+        // either every put() in it commits, or — on any error, or the page dying before it
+        // settles — none of them do, and the whole re-encryption rolls back to the untouched
+        // old-key state. If that happens, `appKey` is rolled back too, so it still matches what
+        // is actually on disk; the caller's own try/catch shows an error and never calls
+        // saveLockConfig(), so the old passcode/old key remain the source of truth throughout.
         async function reencryptAllStoresWithKey(newKey) {
+            const oldKey = appKey;
             const snapshots = {};
             for (const storeName of Object.values(STORES)) {
                 snapshots[storeName] = await readAllDB(storeName);
             }
             appKey = newKey;
-            for (const storeName of Object.values(STORES)) {
-                for (const rec of snapshots[storeName]) {
-                    await writeDB(storeName, rec);
+
+            try {
+                const encryptedByStore = {};
+                for (const storeName of Object.values(STORES)) {
+                    encryptedByStore[storeName] = await Promise.all(
+                        snapshots[storeName].map(rec => encryptRecord(storeName, rec))
+                    );
                 }
+
+                await new Promise((resolve, reject) => {
+                    const tx = db.transaction(Object.values(STORES), "readwrite");
+                    tx.oncomplete = () => resolve();
+                    tx.onerror = () => reject(tx.error);
+                    tx.onabort = () => reject(tx.error || new Error("re-encryption transaction aborted"));
+                    for (const storeName of Object.values(STORES)) {
+                        const store = tx.objectStore(storeName);
+                        for (const encrypted of encryptedByStore[storeName]) {
+                            store.put(encrypted);
+                        }
+                    }
+                });
+            } catch (err) {
+                // Nothing on disk changed (that's the transaction guarantee above), so appKey
+                // must be rolled back to match — otherwise the very next unrelated write
+                // elsewhere in the app would start encrypting under a key nothing on disk uses
+                // yet, recreating the exact mixed-key problem this fix exists to prevent.
+                appKey = oldKey;
+                throw err;
             }
         }
 
@@ -1604,8 +1645,23 @@
         function getCategoryIcon(catName, type = "expense") {
             const clean = catName.toLowerCase().trim();
             const matched = dynamicCategories.find(c => c.name.toLowerCase() === clean);
-            if (matched) return matched.icon;
-            return fallbackIcons[clean] || (type === "income" ? "🟢" : "🔴");
+            // v326 security fix: matched.icon used to be returned raw. Every call site below
+            // interpolates the result straight into innerHTML, and while the normal Add/Edit
+            // Category UI only ever lets a user pick from a fixed emoji grid (never free text),
+            // importBackup() doesn't validate field contents beyond checking accounts/
+            // transactions exist — so a tampered backup file could set a category's icon to
+            // arbitrary markup. script-src has no 'unsafe-inline', so that couldn't run <script>,
+            // but style-src does allow 'unsafe-inline', so an injected <style> block or a fake
+            // <a href> / modal overlay was a real, no-code-execution-needed phishing path.
+            // escapeHtml() doesn't touch emoji, so this is a no-op for every legitimate icon.
+            // v327: syncAndLoadCategories() now ALSO escapes `icon` when it loads categories
+            // into `dynamicCategories` (some render sites read `.icon` straight off that array,
+            // bypassing this function entirely — that was the actual gap). Escaping here too is
+            // deliberate defense-in-depth, not redundant dead code: escapeHtml() is idempotent
+            // for every real value this field ever holds (a bare emoji has no & < > " ' to
+            // double-encode), so keep both layers rather than removing either one.
+            if (matched) return escapeHtml(matched.icon);
+            return escapeHtml(fallbackIcons[clean] || (type === "income" ? "🟢" : "🔴"));
         }
 
         // v101: shared builder for every <select> that lists categories for picking on a
@@ -1764,6 +1820,7 @@
             const memberPage = document.getElementById("page-member");
             const fundActivityPage = document.getElementById("page-fundactivity");
             const currencyActivityPage = document.getElementById("page-currencyactivity");
+            const inventoryPage = document.getElementById("page-inventory");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
@@ -1803,7 +1860,8 @@
                 !ownerNetWorthReportPage.classList.contains("hidden") ||
                 !currencyReportPage.classList.contains("hidden") ||
                 !navUpdatePage.classList.contains("hidden") ||
-                !dataSecurityPage.classList.contains("hidden")
+                !dataSecurityPage.classList.contains("hidden") ||
+                !inventoryPage.classList.contains("hidden")
             ) {
                 navigateToWorkspace();
             }
@@ -4776,7 +4834,7 @@
                 let filled = 0;
                 others.forEach(c => {
                     const rate = data.rates[c];
-                    if (rate && rate > 0) { merged[c] = rate; filled++; }
+                    if (typeof rate === "number" && Number.isFinite(rate) && rate > 0) { merged[c] = rate; filled++; }
                 });
                 renderFxRatesInputs(merged);
                 const missed = others.length - filled;
@@ -8674,7 +8732,22 @@
             // predictable order without each call site needing to sort separately. Income
             // and expense categories are filtered by type at each use site, so this single
             // alphabetical sort keeps both lists sorted within their own type.
-            dynamicCategories = customCats.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+            //
+            // v327 security fix: sanitize `icon` here, at the single point every category
+            // record enters memory, rather than only inside getCategoryIcon(). Several render
+            // sites (category picker <optgroup>/<option> in the transaction form, the "parent
+            // category" select, the Categories manager list, the Savings breakdown rows) read
+            // `.icon` straight off these objects and interpolate it into innerHTML directly,
+            // bypassing getCategoryIcon() entirely — so escaping only inside that helper left
+            // those call sites exposed to whatever a tampered backup's `icon` field contained
+            // (importBackup() writes bundle.categories with no field validation beyond checking
+            // accounts/transactions exist). Escaping here means every current AND future reader
+            // of `dynamicCategories` gets an already-safe value with no per-call-site opt-in
+            // required. No-op for real icons: normal Add/Edit Category only ever writes a plain
+            // emoji from the fixed picker grid, and escapeHtml() doesn't touch emoji.
+            dynamicCategories = customCats
+                .map(c => ({ ...c, icon: escapeHtml(c.icon) }))
+                .sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
         }
 
         // --- TAGS SYSTEM (v257, showOnDashboard added v281) ---
@@ -11773,6 +11846,7 @@
 
         function navigateToInventoryPage() {
             showPage("page-inventory");
+            pushVirtualState("inventory");
             renderInventoryPage();
         }
 
@@ -11886,6 +11960,62 @@
                     </div>
                 `;
             }).join("");
+        }
+
+        // v329: CSV export for Inventory — same csvEscape()/BOM convention as exportLedgerCsv()
+        // and exportTotalSummaryCsv() (see exportLedgerCsv()'s own comment for why plain CSV
+        // rather than a real xlsx library). Scoped to whatever the on-screen status filter
+        // (All/Active/Disposed/Lost) currently shows, matching the "Total Value" footer just
+        // above it — same reasoning as exportLedgerCsv() only ever exporting what the page
+        // itself represents, so the file never silently includes/excludes something the user
+        // wouldn't expect from looking at the screen.
+        async function exportInventoryCsv() {
+            const [items, accounts] = await Promise.all([
+                readAllDB(STORES.INVENTORY),
+                readAllDB(STORES.ACCOUNTS)
+            ]);
+            const accountName = id => { if (!id) return ""; const a = accounts.find(acc => acc.id === id); return a ? accountOptionLabel(a, accounts) : "(deleted account)"; };
+
+            const filtered = items.filter(it => inventoryStatusFilter === "all" || it.status === inventoryStatusFilter)
+                .sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
+
+            if (filtered.length === 0) {
+                showToast("No inventory items to export");
+                return;
+            }
+
+            const warrantyText = it => (it.warranties || [])
+                .map(w => `${w.label || "Warranty"} (ends ${w.endDate || "?"})`)
+                .join("; ");
+
+            const header = ["Name", "Vendor", "Model", "Serial Number", "Purchase Date", "Purchase Price", "Currency", "Status", "Paid From", "Note", "Warranty", "Attachments"];
+            const rows = filtered.map(it => [
+                it.name || "",
+                it.vendor || "",
+                it.model || "",
+                it.serialNumber || "",
+                it.purchaseDate || "",
+                (it.purchasePrice || 0).toFixed(2),
+                it.currency || baseCurrency,
+                INV_STATUS_LABELS[it.status] || it.status || "",
+                accountName(it.srcAccountId),
+                it.note || "",
+                warrantyText(it),
+                (it.attachments || []).length
+            ]);
+
+            const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
+            // Leading BOM: same reasoning as exportLedgerCsv() — makes Excel detect UTF-8
+            // correctly instead of garbling non-ASCII text (e.g. a vendor name or note).
+            const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const scopeLabel = inventoryStatusFilter === "all" ? "all" : inventoryStatusFilter;
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `inventory_export_${scopeLabel}_${todayLocalStr()}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast(`\ud83d\udce4 Exported ${filtered.length} item${filtered.length === 1 ? "" : "s"} to CSV`);
         }
 
         // --- Inventory item add/edit modal ---
@@ -12124,6 +12254,44 @@
             openModal("salaryModal");
         }
 
+        // v330: hand-off from the Salary form's Handphone Claim field to the existing Settle
+        // Multiple Claims flow, so a bill already logged via 🧾 Lend/Claim gets contra'd against
+        // Claims Receivable instead of double-booked as fresh Income (see
+        // #salaryHandphoneContraHint in index.html). Deliberately does NOT reimplement bill
+        // selection/variance handling here — it opens the real openClaimSettleModal() (stacks on
+        // top of the still-open Salary modal, same as any other nested picker/modal in this app)
+        // and just pre-fills what the Salary form already knows: the amount typed, the salary's
+        // own date, and the account the salary itself is going into (since that's presumably
+        // where this reimbursement landed too, bundled into the same payday deposit). The
+        // Handphone Claim field is cleared afterward so resuming and saving the Salary record
+        // doesn't also book it a second time as Income.
+        async function openClaimSettleFromSalary() {
+            const amount = document.getElementById("salaryHandphoneClaim").value;
+            const date = document.getElementById("salaryDate").value;
+            const bankAccountId = document.getElementById("salaryBankAccount").value;
+
+            await openClaimSettleModal();
+
+            if (claimSettleCandidates.length === 0) {
+                closeModal("claimSettleModal");
+                alert("No Pending Claim bills found — log the bill via 🧾 Lend/Claim first, then come back here to settle it.");
+                return;
+            }
+
+            if (amount) document.getElementById("claimSettleReceivedAmount").value = amount;
+            if (date) document.getElementById("claimSettleDate").value = date;
+            if (bankAccountId) {
+                document.getElementById("claimSettleAccount").value = bankAccountId;
+                syncAccountPickerButtonText("claimSettleAccount");
+            }
+            recalcClaimSettlePreview();
+
+            // Clear it here (not on the settlement's own Save, which might be cancelled) so the
+            // Salary preview immediately reflects that this amount moved out of "fresh Income".
+            document.getElementById("salaryHandphoneClaim").value = "";
+            recalcSalaryPreview();
+        }
+
         // --- CLAIM ENTRY (v295) — quick-entry shortcut for logging money owed back to you (a
         // company expense claim, money lent to someone, etc.) against
         // Claims Receivable, so the daily habit stays close to "pick account, amount,
@@ -12315,6 +12483,11 @@
             document.getElementById("salaryPreviewHandphone").textContent = formatCurrency(handphone, currency);
             document.getElementById("salaryPreviewOverseas").textContent = formatCurrency(overseas, currency);
             document.getElementById("salaryPreviewBackpay").textContent = formatCurrency(backpay, currency);
+
+            // v330: see openClaimSettleFromSalary() — only worth surfacing once there's actually
+            // an amount typed here to potentially hand off.
+            const contraHint = document.getElementById("salaryHandphoneContraHint");
+            if (contraHint) contraHint.style.display = handphone > 0 ? "block" : "none";
 
             // Backpay Note only makes sense once there's a Backpay amount to attach it to —
             // hidden (not cleared) when Backpay drops back to 0, so re-entering an amount
@@ -16721,6 +16894,7 @@
             openCreditCardPaymentFromLedgerHeader: () => openCreditCardPaymentFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportLedgerCsv: () => exportLedgerCsv(),
+            exportInventoryCsv: () => exportInventoryCsv(),
             exportTotalSummaryCsv: () => exportTotalSummaryCsv(),
             exportBackup: () => exportBackup(),
             exportBackupQuick: () => exportBackupQuick(),
@@ -16810,6 +16984,7 @@
             openTagReminderRow: (el) => openTagReminderRow(el),
             openReimbursementFromTagBadge: (el) => openReimbursementFromTagBadge(el),
             openClaimSettleModal: () => openClaimSettleModal(),
+            openClaimSettleFromSalary: () => openClaimSettleFromSalary(),
             handleClaimSettleSubmit: () => handleClaimSettleSubmit(),
             openTagFormModal: () => openTagFormModal(),
             editTag: (el) => editTag(el.dataset.id),
