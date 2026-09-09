@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v331";
+        const APP_VERSION = "v332";
         const APP_VERSION_DATE = "2026-09-09";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2038,7 +2038,7 @@
         // row's, with no stopPropagation() needed.
         function buildTagBadgesHTML(tags, txId) {
             if (!Array.isArray(tags) || tags.length === 0) return "";
-            return tags.map(name => `<span data-click="openReimbursementFromTagBadge" data-id="${escapeHtml(txId)}" data-tag="${escapeHtml(name)}" style="font-size:0.62rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap; display:inline-block; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">🔖 ${escapeHtml(name)}</span>`).join("");
+            return tags.map(name => `<span data-click="openReimbursementFromTagBadge" data-id="${escapeHtml(txId)}" data-tag="${escapeHtml(name)}" style="font-size:0.62rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap; display:inline-block; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">${getTagIcon()} ${escapeHtml(name)}</span>`).join("");
         }
 
         // v286: an expense that already has a Refund/Reimbursement entry against it (some income
@@ -2182,7 +2182,7 @@
 
             list.innerHTML = rows.map(r => `
                 <div class="config-item" data-click="openTagReminderRow" data-name="${escapeHtml(r.name)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">
-                    <span class="category-display-badge">🔖 <strong>${escapeHtml(r.name)}</strong></span>
+                    <span class="category-display-badge">${getTagIcon()} <strong>${escapeHtml(r.name)}</strong></span>
                     <span style="font-size:0.8rem; color:var(--text-muted); font-weight:600;">
                         ${r.count} item${r.count === 1 ? "" : "s"} · ${formatCurrency(r.expenseTotal, baseCurrency)}
                     </span>
@@ -7496,6 +7496,75 @@
             panel.style.display = isHidden ? "flex" : "none";
         }
 
+        // --- v332: Tag Icon (Setting page) ---------------------------------------------------
+        // Purely cosmetic swap of the glyph shown before tag names — every call site that used
+        // to hardcode "🔖" now calls getTagIcon() instead (buildTagBadgesHTML(), the Tags
+        // picker rows, tag report/report-list badges, remove-tag toast/label). Same
+        // localStorage-only persistence as Net Worth Card Style above (device-local display
+        // preference, not tag data, so it doesn't need to round-trip through STORES.SETTINGS /
+        // sync).
+        const TAG_ICON_KEY = "ledgerTagIconChoice";
+        const TAG_ICON_OPTIONS = [
+            { id: "bookmark", icon: "🔖", name: "Bookmark" },
+            { id: "label",    icon: "🏷️", name: "Label Tag" },
+            { id: "pin",      icon: "📌", name: "Pushpin" },
+            { id: "ticket",   icon: "🎫", name: "Ticket" },
+            { id: "paperclip",icon: "📎", name: "Paperclip" },
+            { id: "folder",   icon: "🗂️", name: "Folder" },
+            { id: "star",     icon: "⭐", name: "Star" },
+            { id: "diamond",  icon: "💠", name: "Diamond" },
+            { id: "link",     icon: "🔗", name: "Link" },
+            { id: "flag",     icon: "🚩", name: "Flag" },
+            { id: "dot",      icon: "🔸", name: "Dot" },
+            { id: "hash",     icon: "#", name: "Plain Hash" },
+        ];
+        function getSavedTagIconId() {
+            const id = localStorage.getItem(TAG_ICON_KEY);
+            return TAG_ICON_OPTIONS.some(o => o.id === id) ? id : "bookmark";
+        }
+        function getTagIcon() {
+            const opt = TAG_ICON_OPTIONS.find(o => o.id === getSavedTagIconId());
+            return opt ? opt.icon : "🔖";
+        }
+        function buildTagIconSwatchGrid() {
+            const grid = document.getElementById("tagIconSwatchGrid");
+            if (!grid) return;
+            const selectedId = getSavedTagIconId();
+            grid.innerHTML = TAG_ICON_OPTIONS.map(o => `
+                <span class="bg-theme-swatch-wrap">
+                    <span class="icon-swatch${o.id === selectedId ? ' selected' : ''}" data-click="selectTagIcon" data-icon-id="${o.id}" title="${o.name}">${o.icon}</span>
+                    <span class="bg-theme-swatch-label">${o.name}</span>
+                </span>
+            `).join("");
+        }
+        function selectTagIcon(el) {
+            try { localStorage.setItem(TAG_ICON_KEY, el.dataset.iconId); } catch (e) {}
+            document.querySelectorAll("#tagIconSwatchGrid .icon-swatch").forEach(s => s.classList.toggle("selected", s.dataset.iconId === el.dataset.iconId));
+            const rowLabel = document.getElementById("tagIconSettingsRowLabel");
+            if (rowLabel) rowLabel.innerHTML = `${getTagIcon()} <strong>Tag Icon</strong>`;
+            // Re-render whatever tag-bearing views are currently on screen so the change is
+            // visible immediately, same "refresh in place" approach as toggleTxTagPickerTag().
+            refreshVisibleTagIconViews();
+        }
+        function refreshVisibleTagIconViews() {
+            if (document.getElementById("txTagPickerModal") && !document.getElementById("txTagPickerModal").classList.contains("hidden")) {
+                const input = document.getElementById("txTagPickerInput");
+                renderTxTagPickerList(input ? input.value : "");
+            }
+            if (activeQuickViewTxId) {
+                openTxQuickView({ dataset: { id: String(activeQuickViewTxId) } }, { skipModalOpen: true });
+            }
+            if (document.getElementById("tagsPageList")) {
+                try { renderTagsPage(); } catch (e) {}
+            }
+        }
+        function toggleTagIconSettings() {
+            const panel = document.getElementById("tagIconSettingsPanel");
+            const isHidden = panel.style.display === "none";
+            if (isHidden) buildTagIconSwatchGrid();
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+
         // v247: manual toggle (Settings > Background Theme > "Handwritten font (Kalam)") for
         // whether the 蠟筆小新 preset uses the self-hosted Kalam font or the app's normal
         // sans-serif — independent of the preset's colors/borders/radius, which stay Kalam-
@@ -7602,6 +7671,13 @@
         // Background Theme re-apply just above (no <head> no-flash snippet for this one since
         // the hero card only ever appears after unlock, not before first paint).
         applyNetWorthCardStyle(getSavedNetWorthCardStyleId(), { save: false });
+
+        // v332: sync the Setting page's "Tag Icon" row label with whatever was saved from a
+        // previous session — same "apply on parse, before the row is ever opened" treatment.
+        document.addEventListener("DOMContentLoaded", () => {
+            const rowLabel = document.getElementById("tagIconSettingsRowLabel");
+            if (rowLabel) rowLabel.innerHTML = `${getTagIcon()} <strong>Tag Icon</strong>`;
+        });
 
         // v249: syncs the header button's icon/title with the persisted Privacy Mode choice —
         // the <head> no-flash script already set the CSS-facing attribute before first paint,
@@ -8810,7 +8886,7 @@
             const listEl = document.getElementById("tagsPageList");
             listEl.innerHTML = dynamicTags.length ? dynamicTags.map(t => `
                 <div class="config-item">
-                    <span class="category-display-badge">🔖 <strong>${escapeHtml(t.name)}</strong></span>
+                    <span class="category-display-badge">${getTagIcon()} <strong>${escapeHtml(t.name)}</strong></span>
                     <div style="display:flex; align-items:center;">
                         <button type="button" class="trash-btn" data-click="editTag" data-id="${escapeHtml(t.id)}" title="Rename tag">✏️</button>
                         <button type="button" class="trash-btn" data-click="removeTag" data-id="${escapeHtml(t.id)}" title="Delete tag">🗑</button>
@@ -12696,7 +12772,7 @@
                     <span>Tags:</span>
                     ${(Array.isArray(tx.tags) ? tx.tags : []).map(name => `
                         <span style="font-size:0.72rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:2px 5px 2px 7px; border-radius:4px; white-space:nowrap; display:inline-flex; align-items:center; gap:4px;">
-                            🔖 ${escapeHtml(name)}
+                            ${getTagIcon()} ${escapeHtml(name)}
                             <span data-click="removeTagFromQuickViewTx" data-tag="${escapeHtml(name)}" title="Remove this tag" style="cursor:pointer; font-weight:900; color:#4c1d95; padding:0 2px;">✕</span>
                         </span>
                     `).join("")}
@@ -12751,7 +12827,7 @@
                 alert("Could not remove tag: " + (err && err.message ? err.message : err));
                 return;
             }
-            showToast(`🔖 "${tagName}" tag removed`);
+            showToast(`${getTagIcon()} "${tagName}" tag removed`);
             await refreshAfterTransactionChange();
             await openTxQuickView({ dataset: { id: String(txId) } }, { skipModalOpen: true });
         }
@@ -12765,7 +12841,7 @@
         function buildTxTagPickerRowHTML(name, selected) {
             return `
                 <button type="button" class="option-menu-btn" data-click="toggleTxTagPickerTag" data-tag="${escapeHtml(name)}" style="display:flex; justify-content:space-between; align-items:center; ${selected ? "background:var(--primary-chip-bg);" : ""}">
-                    <span>🔖 ${escapeHtml(name)}</span>
+                    <span>${getTagIcon()} ${escapeHtml(name)}</span>
                     ${selected ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
                 </button>
             `;
@@ -13276,7 +13352,7 @@
             const removeTagWrap = document.getElementById("txRemoveTagWrap");
             if (tagToOffer && removeTagWrap) {
                 pendingRemoveTagName = tagToOffer;
-                document.getElementById("txRemoveTagLabel").textContent = `🔖 Remove "${tagToOffer}" tag from the original transaction`;
+                document.getElementById("txRemoveTagLabel").textContent = `${getTagIcon()} Remove "${tagToOffer}" tag from the original transaction`;
                 document.getElementById("txRemoveTagToggle").checked = true;
                 removeTagWrap.style.display = "";
             } else {
@@ -16918,6 +16994,8 @@
             selectBgTheme: (el) => selectBgTheme(el),
             toggleNetWorthCardStyleSettings: () => toggleNetWorthCardStyleSettings(),
             selectNetWorthCardStyle: (el) => selectNetWorthCardStyle(el),
+            toggleTagIconSettings: () => toggleTagIconSettings(),
+            selectTagIcon: (el) => selectTagIcon(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
