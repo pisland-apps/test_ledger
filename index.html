@@ -4691,19 +4691,9 @@
 
     <!-- MODAL: Settle Multiple Claims (v291, redesigned v295) — settles several unclaimed
          Transfers into the Claims Receivable account (still carrying PENDING_CLAIM_TAG, not yet
-         individually settled) against ONE lump-sum payment received back. Opened either from the
-         "Pending Claim" Spending by Tag view (see claimSettleTriggerBtn above) via
-         openClaimSettleModal(), OR (v330) from mid-way through the Salary Entry form via
-         openClaimSettleFromSalary() — the latter stacks this ON TOP of the still-open Salary
-         modal. v331 fix: every .modal shares the same base z-index (1000) and otherwise stacks
-         purely by DOM order, so without an explicit bump here this modal — declared earlier in
-         the file than #salaryModal — rendered BEHIND it instead of on top, letting a click reach
-         through to Salary Entry's own × button and corrupt modalStack (closing a modal that
-         wasn't actually the top of the stack left this one orphaned: still visually "active" but
-         no longer tracked, so its own × and Save Settlement appeared to do nothing). z-index:1400
-         matches the same "second-layer modal opened from inside another modal" convention already
-         used by #templatePickerModal/#txSplitPickerModal/#accountPickerModal below. On save this
-         writes: (1) one isRefund Transfer moving
+         individually settled) against ONE lump-sum payment received back. Opened only
+         from the "Pending Claim" Spending by Tag view (see claimSettleTriggerBtn above) via
+         openClaimSettleModal(). On save this writes: (1) one isRefund Transfer moving
          min(received, billed) OUT of Claims Receivable into whichever account received the
          payment, with every selected bill's date/description/amount listed in its Notes; (2) if
          the received amount doesn't exactly match the selected bills' total, a SEPARATE ordinary
@@ -4713,7 +4703,7 @@
          (non-excluded) category so it DOES flow into Budget/Net Savings/Spending Breakdown as real
          personal spending/income; and (3) removes PENDING_CLAIM_TAG from every settled bill. See
          handleClaimSettleSubmit()/findReimbursementFor()'s refundOfIds handling in ledger.js. -->
-    <div class="modal" id="claimSettleModal" style="z-index:1400;">
+    <div class="modal" id="claimSettleModal">
         <div class="modal-sheet">
             <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:12px;">
                 <h3 style="font-weight:800;">Settle Multiple Claims</h3>
@@ -5267,6 +5257,21 @@
         </div>
     </div>
 
+    <!-- MODAL: Tag picker for Quick View (v331) — opened from the "+ Add" button on the Tags row
+         inside txQuickViewModal. Same ✓-tick "ticked = attached" list style as accountPickerModal
+         above, but multi-select: tapping a row toggles that tag on/off the transaction right away
+         instead of picking one value and closing. See openTxTagPickerFromQuickView() in ledger.js. -->
+    <div class="modal" id="txTagPickerModal" style="z-index:1450;">
+        <div class="modal-sheet" style="max-width:400px;">
+            <div class="modal-header" style="display:flex; justify-content:space-between; margin-bottom:10px;">
+                <h3 style="font-weight:800;">Tags</h3>
+                <button data-click="closeModal" data-modal="txTagPickerModal" style="background:none; border:none; font-size:1.5rem; padding:8px;">&times;</button>
+            </div>
+            <input type="text" id="txTagPickerInput" data-input="filterTxTagPickerList" class="form-input" placeholder="Search or create a tag..." style="margin-bottom:10px;">
+            <div id="txTagPickerList" style="display:flex; flex-direction:column; gap:8px; max-height:50vh; overflow-y:auto;"></div>
+        </div>
+    </div>
+
     <!-- MODAL: Resolve Fixed Deposit Maturity (renew or withdraw) -->
     <div class="modal" id="resolveFdModal">
         <div class="modal-sheet">
@@ -5495,18 +5500,6 @@
                     <input type="number" id="salaryHandphoneClaim" step="0.01" min="0" inputmode="decimal" placeholder="0.00" aria-label="Handphone Claim" data-input="recalcSalaryPreview">
                 </div>
             </div>
-            <!-- v330: this field defaults to plain Income (new money, on top of Gross Salary) —
-                 correct only if the phone bill was never tracked as a claim in the first place. If
-                 it WAS logged via 🧾 Lend/Claim (money already sitting in Claims Receivable, waiting
-                 to be paid back), counting it here again as fresh Income double-books it. This hint
-                 only appears once an amount is typed (see recalcSalaryPreview's
-                 salaryHandphoneContraHint toggle) and hands off to the already-vetted Settle
-                 Multiple Claims flow — see openClaimSettleFromSalary() — instead of duplicating its
-                 bill-picking/variance logic here. -->
-            <p id="salaryHandphoneContraHint" style="display:none; font-size:0.72rem; color:var(--text-muted); margin:-8px 0 10px; padding:0 2px;">
-                Reimbursing a bill already logged via 🧾 Lend/Claim?
-                <button type="button" data-click="openClaimSettleFromSalary" style="background:none; border:none; padding:0; margin:0; font:inherit; font-weight:700; color:var(--income-color); text-decoration:underline; cursor:pointer;">Contra it against Claims Receivable instead →</button>
-            </p>
 
             <div class="form-row-inline">
                 <div class="form-row-icon">

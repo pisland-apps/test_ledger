@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v332";
+        const APP_VERSION = "v331";
         const APP_VERSION_DATE = "2026-09-09";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2640,24 +2640,8 @@
                     resetAccountForm();
                 }
                 const idx = modalStack.lastIndexOf(id);
-                // v331 hardening: if something is stacked ON TOP of `id` (idx isn't the top of
-                // the stack), those entries get dropped from modalStack same as before — but
-                // now their DOM "active" class is removed too. Previously they were left
-                // visually active while no longer tracked by modalStack, so a subsequent
-                // history.back() (from THIS close, or any later one) had nothing left in
-                // modalStack to attribute to them — the popstate handler's own "pop the top
-                // entry" logic ended up closing the WRONG modal (whatever `id` itself was, or
-                // later, page-level navigation) while the orphaned one stayed stuck open,
-                // unresponsive to its own × or any of its buttons (see the v330
-                // openClaimSettleFromSalary() nested-modal case this was first caught from).
-                // Only ever reached for the same "shouldn't normally happen" case the original
-                // v88 comment already flagged — this is a safety net, not a new supported flow.
                 if (idx !== -1 && idx !== modalStack.length - 1) {
-                    const orphaned = modalStack.splice(idx + 1);
-                    orphaned.forEach(orphanId => {
-                        const orphanEl = document.getElementById(orphanId);
-                        if (orphanEl) orphanEl.classList.remove("active");
-                    });
+                    modalStack.splice(idx + 1);
                 }
                 window.history.back();
             }
@@ -12270,44 +12254,6 @@
             openModal("salaryModal");
         }
 
-        // v330: hand-off from the Salary form's Handphone Claim field to the existing Settle
-        // Multiple Claims flow, so a bill already logged via 🧾 Lend/Claim gets contra'd against
-        // Claims Receivable instead of double-booked as fresh Income (see
-        // #salaryHandphoneContraHint in index.html). Deliberately does NOT reimplement bill
-        // selection/variance handling here — it opens the real openClaimSettleModal() (stacks on
-        // top of the still-open Salary modal, same as any other nested picker/modal in this app)
-        // and just pre-fills what the Salary form already knows: the amount typed, the salary's
-        // own date, and the account the salary itself is going into (since that's presumably
-        // where this reimbursement landed too, bundled into the same payday deposit). The
-        // Handphone Claim field is cleared afterward so resuming and saving the Salary record
-        // doesn't also book it a second time as Income.
-        async function openClaimSettleFromSalary() {
-            const amount = document.getElementById("salaryHandphoneClaim").value;
-            const date = document.getElementById("salaryDate").value;
-            const bankAccountId = document.getElementById("salaryBankAccount").value;
-
-            await openClaimSettleModal();
-
-            if (claimSettleCandidates.length === 0) {
-                closeModal("claimSettleModal");
-                alert("No Pending Claim bills found — log the bill via 🧾 Lend/Claim first, then come back here to settle it.");
-                return;
-            }
-
-            if (amount) document.getElementById("claimSettleReceivedAmount").value = amount;
-            if (date) document.getElementById("claimSettleDate").value = date;
-            if (bankAccountId) {
-                document.getElementById("claimSettleAccount").value = bankAccountId;
-                syncAccountPickerButtonText("claimSettleAccount");
-            }
-            recalcClaimSettlePreview();
-
-            // Clear it here (not on the settlement's own Save, which might be cancelled) so the
-            // Salary preview immediately reflects that this amount moved out of "fresh Income".
-            document.getElementById("salaryHandphoneClaim").value = "";
-            recalcSalaryPreview();
-        }
-
         // --- CLAIM ENTRY (v295) — quick-entry shortcut for logging money owed back to you (a
         // company expense claim, money lent to someone, etc.) against
         // Claims Receivable, so the daily habit stays close to "pick account, amount,
@@ -12499,11 +12445,6 @@
             document.getElementById("salaryPreviewHandphone").textContent = formatCurrency(handphone, currency);
             document.getElementById("salaryPreviewOverseas").textContent = formatCurrency(overseas, currency);
             document.getElementById("salaryPreviewBackpay").textContent = formatCurrency(backpay, currency);
-
-            // v330: see openClaimSettleFromSalary() — only worth surfacing once there's actually
-            // an amount typed here to potentially hand off.
-            const contraHint = document.getElementById("salaryHandphoneContraHint");
-            if (contraHint) contraHint.style.display = handphone > 0 ? "block" : "none";
 
             // Backpay Note only makes sense once there's a Backpay amount to attach it to —
             // hidden (not cleared) when Backpay drops back to 0, so re-entering an amount
@@ -12747,17 +12688,21 @@
             // served its purpose, without detouring through the Reimbursement flow (that flow's
             // own "remove this tag" toggle — fillReimbursementForm()/handleTransactionSubmitMobile()
             // — only ever offers the ONE tag that opened it, and only mid-save).
-            const tagsLineHTML = (Array.isArray(tx.tags) && tx.tags.length) ? `
+            // v331: the row now always renders (even with zero tags) and always ends in a small
+            // "+" button — see openTxTagPickerFromQuickView() below — so adding a tag no longer
+            // requires leaving Quick View for the full editor's Tags field.
+            const tagsLineHTML = `
                 <div style="margin-top:4px; display:flex; align-items:center; flex-wrap:wrap; gap:5px;">
                     <span>Tags:</span>
-                    ${tx.tags.map(name => `
+                    ${(Array.isArray(tx.tags) ? tx.tags : []).map(name => `
                         <span style="font-size:0.72rem; font-weight:700; color:#6d28d9; background:#ede9fe; padding:2px 5px 2px 7px; border-radius:4px; white-space:nowrap; display:inline-flex; align-items:center; gap:4px;">
                             🔖 ${escapeHtml(name)}
                             <span data-click="removeTagFromQuickViewTx" data-tag="${escapeHtml(name)}" title="Remove this tag" style="cursor:pointer; font-weight:900; color:#4c1d95; padding:0 2px;">✕</span>
                         </span>
                     `).join("")}
+                    <button type="button" data-click="openTxTagPickerFromQuickView" title="Add tag" style="font-size:0.72rem; font-weight:700; color:var(--primary); background:var(--primary-chip-bg); border:none; padding:2px 8px; border-radius:4px; cursor:pointer; line-height:1.5;">+ Add</button>
                 </div>
-            ` : "";
+            `;
 
             document.getElementById("txQuickViewDetails").innerHTML = `
                 ${splitBreakdownHTML}
@@ -12809,6 +12754,94 @@
             showToast(`🔖 "${tagName}" tag removed`);
             await refreshAfterTransactionChange();
             await openTxQuickView({ dataset: { id: String(txId) } }, { skipModalOpen: true });
+        }
+
+        // v331: TAG PICKER FOR QUICK VIEW — the "+ Add" button on the tagsLineHTML row above
+        // (tagsLineHTML in openTxQuickView()) opens this instead of routing into the full
+        // Add/Edit Transaction editor's type-to-search Tags field. Same ✓-tick "ticked = attached"
+        // convention as openAccountPicker()'s rounded-list modal (see that section's comment) —
+        // but multi-select (tapping a row toggles it on/off and writes immediately) rather than
+        // single-select-and-close, since a transaction can carry any number of tags at once.
+        function buildTxTagPickerRowHTML(name, selected) {
+            return `
+                <button type="button" class="option-menu-btn" data-click="toggleTxTagPickerTag" data-tag="${escapeHtml(name)}" style="display:flex; justify-content:space-between; align-items:center; ${selected ? "background:var(--primary-chip-bg);" : ""}">
+                    <span>🔖 ${escapeHtml(name)}</span>
+                    ${selected ? '<span style="color:var(--primary); font-weight:900; margin-left:8px; flex:0 0 auto;">✓</span>' : ""}
+                </button>
+            `;
+        }
+
+        // Rebuilds the picker's list against the current search text — every known tag whose name
+        // contains the query (case-insensitive, matches anywhere like filterTxTagSuggestions()),
+        // ticked if it's on the transaction currently open in Quick View (activeQuickViewTxId).
+        // When the typed text doesn't exactly match an existing tag, a trailing "+ Create tag"
+        // row is appended so a brand-new tag can be created and attached in the same tap — same
+        // convention as filterTxTagSuggestions()/createAndAddTxTag() on the full editor's field.
+        async function renderTxTagPickerList(query) {
+            const listEl = document.getElementById("txTagPickerList");
+            if (!listEl) return;
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = txs.find(t => t.id === activeQuickViewTxId);
+            const currentTags = (tx && Array.isArray(tx.tags)) ? tx.tags : [];
+            const q = (query || "").trim().toLowerCase();
+            const matches = dynamicTags.map(t => t.name).filter(n => !q || n.toLowerCase().includes(q));
+            let html = matches.length
+                ? matches.map(n => buildTxTagPickerRowHTML(n, currentTags.some(sel => sel.toLowerCase() === n.toLowerCase()))).join("")
+                : '<p style="font-size:0.78rem; text-align:center; color:var(--text-muted); margin:8px 0;">No tags found.</p>';
+            const rawTyped = (query || "").trim();
+            const exactExists = dynamicTags.some(t => t.name.toLowerCase() === rawTyped.toLowerCase());
+            if (rawTyped && !exactExists) {
+                html += `<button type="button" class="option-menu-btn" data-click="createTxTagPickerTag" data-value="${escapeHtml(rawTyped)}" style="font-weight:700; color:var(--primary);">+ Create tag "${escapeHtml(rawTyped)}"</button>`;
+            }
+            listEl.innerHTML = html;
+        }
+
+        function filterTxTagPickerList(el) {
+            renderTxTagPickerList(el.value);
+        }
+
+        async function openTxTagPickerFromQuickView() {
+            if (!activeQuickViewTxId) return;
+            await syncAndLoadTags();
+            const input = document.getElementById("txTagPickerInput");
+            if (input) input.value = "";
+            await renderTxTagPickerList("");
+            openModal("txTagPickerModal");
+        }
+
+        // Adds or removes one tag on the transaction currently open in Quick View, then re-renders
+        // both this picker's list (so its ✓ stays in sync) and Quick View's own details underneath
+        // (tagsLineHTML) — mirrors removeTagFromQuickViewTx()'s "already open underneath, just
+        // refresh in place" pattern, minus its confirm() (toggling here is low-stakes/reversible
+        // with a single tap either way, unlike the ✕ pill's more deliberate removal action).
+        async function toggleTxTagPickerTag(el) {
+            const tagName = el.dataset.tag;
+            const txId = activeQuickViewTxId;
+            if (!txId || !tagName) return;
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const tx = txs.find(t => t.id === txId);
+            if (!tx) return;
+            const current = Array.isArray(tx.tags) ? tx.tags : [];
+            const already = current.some(t => t.toLowerCase() === tagName.toLowerCase());
+            tx.tags = already ? current.filter(t => t.toLowerCase() !== tagName.toLowerCase()) : [...current, tagName];
+            try {
+                await writeDB(STORES.TRANSACTIONS, tx);
+            } catch (err) {
+                alert("Could not update tag: " + (err && err.message ? err.message : err));
+                return;
+            }
+            await refreshAfterTransactionChange();
+            const input = document.getElementById("txTagPickerInput");
+            await renderTxTagPickerList(input ? input.value : "");
+            await openTxQuickView({ dataset: { id: String(txId) } }, { skipModalOpen: true });
+        }
+
+        async function createTxTagPickerTag(el) {
+            const rec = await createTag(el.dataset.value);
+            if (!rec) return;
+            const input = document.getElementById("txTagPickerInput");
+            if (input) input.value = "";
+            await toggleTxTagPickerTag({ dataset: { tag: rec.name } });
         }
 
         function updateTxQuickViewCheckedBtn(isChecked) {
@@ -16984,6 +17017,9 @@
             calcPadApply: () => calcPadApply(),
             openTxQuickView: (el) => openTxQuickView(el),
             removeTagFromQuickViewTx: (el) => removeTagFromQuickViewTx(el),
+            openTxTagPickerFromQuickView: () => openTxTagPickerFromQuickView(),
+            toggleTxTagPickerTag: (el) => toggleTxTagPickerTag(el),
+            createTxTagPickerTag: (el) => createTxTagPickerTag(el),
             toggleTxCheckedFromQuickView: () => toggleTxCheckedFromQuickView(),
             openTxOptionsMenu: () => openTxOptionsMenu(),
             closeTxOptionsMenu: () => closeTxOptionsMenu(),
@@ -17000,7 +17036,6 @@
             openTagReminderRow: (el) => openTagReminderRow(el),
             openReimbursementFromTagBadge: (el) => openReimbursementFromTagBadge(el),
             openClaimSettleModal: () => openClaimSettleModal(),
-            openClaimSettleFromSalary: () => openClaimSettleFromSalary(),
             handleClaimSettleSubmit: () => handleClaimSettleSubmit(),
             openTagFormModal: () => openTagFormModal(),
             editTag: (el) => editTag(el.dataset.id),
@@ -17116,6 +17151,7 @@
             recalcSalaryPreview: () => recalcSalaryPreview(),
             filterDescSuggestions: (el) => filterDescSuggestions(el),
             filterTxTagSuggestions: (el) => filterTxTagSuggestions(el),
+            filterTxTagPickerList: (el) => filterTxTagPickerList(el),
             recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),
         };
 
