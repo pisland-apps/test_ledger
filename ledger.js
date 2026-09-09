@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v332";
-        const APP_VERSION_DATE = "2026-09-09";
+        const APP_VERSION = "v333";
+        const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -1466,7 +1466,7 @@
         // simply lack .icon/.color — getTagMeta() below falls back to the same 🔖/purple look
         // every tag used to have, so nothing changes for a tag until someone deliberately picks a
         // different icon/color for it.
-        const TAG_ICON_CHOICES = ["🔖", "🏷️", "📌", "🎫", "📎", "🗂️", "⭐", "💠", "🔗", "🚩", "🔸", "#"];
+        const TAG_ICON_CHOICES = ["🔖", "🏷️", "📌", "🎫", "📎", "🗂️", "⭐", "💠", "🔗", "🚩", "🔸", "#", "✅", "🧮", "✈️"];
         const TAG_COLOR_PALETTE = {
             purple: { text: "#6d28d9", bg: "#ede9fe" },
             red:    { text: "#b91c1c", bg: "#fee2e2" },
@@ -1558,7 +1558,7 @@
         const DEFAULT_CATEGORIES = [
             { name: "Salary", type: "income", icon: "💼" },
             { name: "Housing Allowance", type: "income", icon: "🏠", parent: "Salary" },
-            { name: "Handphone Claim", type: "income", icon: "📱", parent: "Salary" },
+            { name: "Phone Bill Claim", type: "income", icon: "📱", parent: "Salary" },
             { name: "Overseas Allowance", type: "income", icon: "✈️", parent: "Salary" },
             { name: "Backpay", type: "income", icon: "🕒", parent: "Salary" },
             { name: "Investments", type: "income", icon: "📈" },
@@ -1585,6 +1585,7 @@
             { name: "Clothing", type: "expense", icon: "👕" },
             { name: "Gift Given", type: "expense", icon: "🎁" },
             { name: "Subscription", type: "expense", icon: "📡" },
+            { name: "Mobile", type: "expense", icon: "📱" },
             { name: "Tech Appliances", type: "expense", icon: "💻" },
             { name: "Travelling", type: "expense", icon: "✈️" },
             { name: "Tax", type: "expense", icon: "🧾" },
@@ -9468,6 +9469,25 @@
                 }
             }
 
+            // One-time migration: "Handphone Claim" (Salary subcategory) was renamed to "Phone
+            // Bill Claim" per user request. Only touches the record if it still has the
+            // auto-seeded id, never a category the user has since renamed away from "Handphone
+            // Claim". Existing transactions filed under the old name are updated too (mirrors
+            // migrateOthersCategoryRename()'s approach below), so nothing shows up as an
+            // orphaned "Handphone Claim" string in reports or Salary Entry's split legs.
+            const legacyHandphoneClaim = existing.find(c => c.id === "cat_handphone_claim");
+            if (legacyHandphoneClaim && legacyHandphoneClaim.name.toLowerCase() === "handphone claim") {
+                legacyHandphoneClaim.name = "Phone Bill Claim";
+                await writeDB(STORES.CATEGORIES, legacyHandphoneClaim);
+                const txs = await readAllDB(STORES.TRANSACTIONS);
+                for (const t of txs) {
+                    if (t.cat === "Handphone Claim") {
+                        t.cat = "Phone Bill Claim";
+                        await writeDB(STORES.TRANSACTIONS, t);
+                    }
+                }
+            }
+
             const slugify = s => "cat_" + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 
             // Matched by EITHER current name OR the deterministic id a DEFAULT_CATEGORIES entry
@@ -12310,7 +12330,7 @@
         // listing every account (sorted group-then-name, owner shown per accountOptionLabel) —
         // same convention as the ordinary Income/Expense/Transfer form's own account pickers.
         // v138 added four fixed, always-visible optional allowance fields (Housing Allowance,
-        // Handphone Claim, Overseas Allowance, Backpay) — each folds into the "Gross Salary"
+        // Phone Bill Claim, Overseas Allowance, Backpay) — each folds into the "Gross Salary"
         // total shown in the preview but never passes through the EE/ER split (see
         // recalcSalaryPreview()/handleSaveSalaryRecord()); each non-zero amount is saved as its
         // own Income leg straight to the Bank Account under its own category (seeded as
@@ -12529,7 +12549,7 @@
         // Live preview box (mirrors the reference screenshot's "Gross → Bank + EPF" breakdown):
         // Bank leg = (base Gross − EE) + allowances — EE never appears twice (deducted from
         // gross, not on top of it), and allowances are added straight into the Bank leg without
-        // ever passing through the EE/ER split (Housing/Handphone/Overseas/Backpay aren't
+        // ever passing through the EE/ER split (Housing/Phone Bill/Overseas/Backpay aren't
         // statutory-deductible). The "Gross Salary" total line shown up top is base + all four
         // allowances combined, so the preview reads as one true gross-pay figure even though only
         // the base portion actually goes through the EPF/CPF split below it. The ER leg is purely
@@ -12614,7 +12634,7 @@
             if (ee > gross) { alert("EE contribution can't be greater than Gross Salary."); return; }
             if (housing < 0 || handphone < 0 || overseas < 0 || backpay < 0) { alert("Allowance amounts can't be negative."); return; }
 
-            // Housing/Handphone/Overseas/Backpay are additive allowances that never pass through
+            // Housing/Phone Bill/Overseas/Backpay are additive allowances that never pass through
             // the EE/ER split (see recalcSalaryPreview()) — each is its own Income leg, in its
             // own category, straight to the Bank Account. The base salary's Net leg (Gross − EE)
             // is unaffected by their presence.
@@ -12647,7 +12667,7 @@
                 }
                 const allowanceLegs = [
                     { amount: housing, cat: "Housing Allowance", notes: null },
-                    { amount: handphone, cat: "Handphone Claim", notes: null },
+                    { amount: handphone, cat: "Phone Bill Claim", notes: null },
                     { amount: overseas, cat: "Overseas Allowance", notes: null },
                     { amount: backpay, cat: "Backpay", notes: backpayNote }
                 ];
