@@ -4094,6 +4094,16 @@
                         <select id="recentTxCountSelect" style="display:none;" data-change="handleRecentTxSettingChange"></select>
                     </div>
                 </div>
+                <!-- v334: lets the user pick which of THIS MONTH's Category Budgets also get
+                     their own mini progress row on the Dashboard's Remaining Budget widget, which
+                     otherwise only ever shows the overall Monthly/Yearly total. Pool is built live
+                     from the current month's budget record — see renderDashboardBudgetCategoryToggles(). -->
+                <div>
+                    <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">BUDGET WIDGET</p>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin:0 0 8px;">Choose which category budgets also show on the Dashboard.</p>
+                    <div id="dashboardBudgetCategoryToggles" style="display:flex; flex-direction:column; gap:2px;"></div>
+                    <p id="dashboardBudgetCategoryTogglesEmpty" style="font-size:0.8rem; color:var(--text-muted); display:none;">No category budgets set for this month yet — add some on the Budget page first.</p>
+                </div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="openCurrencyConfig">
                 <span>💱 <strong>Currency Setting</strong></span>

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v333";
+        const APP_VERSION = "v334";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2023,6 +2023,11 @@
         // first — configured from Setting > Dashboard Widgets, applied via
         // applyDashboardWidgetOrder(). Persisted via SETTINGS like the filters above.
         let dashboardWidgetOrder = "accounts-first"; // "accounts-first" | "recenttx-first"
+        // v334: which of the current month's Category Budgets (if any) also get their own mini
+        // progress row on the Dashboard's "Remaining Budget" widget, opted in one-by-one via the
+        // Dashboard Widgets settings panel — see renderDashboardBudgetCategoryToggles(). Empty by
+        // default (unchanged prior behavior: only the overall Monthly/Yearly totals show).
+        let dashboardBudgetCategoriesShown = [];
 
         // Dashboard "Accounts" widget settings (v75) — persisted via SETTINGS store, loaded in
         // bootstrap(). Mirrors the Recent Transactions widget above, but instead of a type/account
@@ -2271,8 +2276,57 @@
                 const orderSel = document.getElementById("dashboardWidgetOrderSelect");
                 if (orderSel) orderSel.value = dashboardWidgetOrder;
                 syncAccountPickerButtonText("dashboardWidgetOrderSelect");
+                renderDashboardBudgetCategoryToggles();
             }
             panel.style.display = isHidden ? "flex" : "none";
+        }
+
+        // v334: builds the BUDGET WIDGET checklist inside the Dashboard Widgets settings panel —
+        // one toggle-switch row per category budget that exists on THIS MONTH's budget record
+        // (mirrors the same "only explicit month records have category budgets" rule the Budget
+        // page's own category rows use — a virtual/auto-derived month never had any to begin
+        // with, so the pool is just empty there rather than showing something misleading). Picked
+        // categories are remembered by name in dashboardBudgetCategoriesShown and simply skipped
+        // by renderDashboardBudgetWidget() if a category's budget is later removed or renamed.
+        async function renderDashboardBudgetCategoryToggles() {
+            const wrap = document.getElementById("dashboardBudgetCategoryToggles");
+            const empty = document.getElementById("dashboardBudgetCategoryTogglesEmpty");
+            if (!wrap) return;
+            const rec = await getBudgetRecord(currentMonthKey());
+            const cats = (rec && rec.categoryBudgets) || [];
+            if (cats.length === 0) {
+                wrap.innerHTML = "";
+                if (empty) empty.style.display = "";
+                return;
+            }
+            if (empty) empty.style.display = "none";
+            wrap.innerHTML = cats.map(cb => {
+                const checked = dashboardBudgetCategoriesShown.includes(cb.cat);
+                return `
+                    <div class="toggle-switch-row" style="margin-top:0;">
+                        <span class="toggle-switch-label" style="display:flex; align-items:center; gap:8px;">
+                            <span class="split-cat-icon" style="background:${getCategoryAvatarColor(cb.cat)}; width:22px; height:22px; font-size:0.8rem; flex-shrink:0;">${getCategoryIcon(cb.cat, "expense")}</span>
+                            ${escapeHtml(cb.cat)}
+                        </span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" data-change="handleDashboardBudgetCategoryToggleChange" data-cat="${escapeHtml(cb.cat)}" ${checked ? "checked" : ""}>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        async function handleDashboardBudgetCategoryToggleChange(el) {
+            const cat = el.dataset.cat;
+            if (!cat) return;
+            if (el.checked) {
+                if (!dashboardBudgetCategoriesShown.includes(cat)) dashboardBudgetCategoriesShown.push(cat);
+            } else {
+                dashboardBudgetCategoriesShown = dashboardBudgetCategoriesShown.filter(c => c !== cat);
+            }
+            await writeDB(STORES.SETTINGS, { key: "dashboardBudgetCategoriesShown", value: dashboardBudgetCategoriesShown });
+            await renderApp();
         }
 
         // v227: single toggle for the relocated Default Payment/Receive Account settings panel
@@ -3777,7 +3831,10 @@
         // independent Yearly bar alongside it: two numbers that could disagree (e.g. RM2,000/month
         // next to RM100,000/year) reads as broken, not informative. If the month's number IS
         // derived from a Yearly budget, a small note says so instead of duplicating a whole bar.
-        function renderDashboardBudgetWidget(monthResolved, yearRec, yearSpent) {
+        // v334: `byCategory` (this month's actual spend per category, from computePeriodActuals)
+        // is used only to build the optional per-category mini rows below the main bar — the main
+        // bar/figure logic above is completely unchanged from before that feature existed.
+        function renderDashboardBudgetWidget(monthResolved, yearRec, yearSpent, byCategory) {
             const wrap = document.getElementById("dashboardBudgetWidget");
             if (!wrap) return;
             if (!monthResolved) {
@@ -3812,6 +3869,42 @@
                 `;
             }
 
+            // v334: user-selected Category Budget mini rows — only ever sourced from THIS MONTH's
+            // explicit categoryBudgets (never available on a virtual/auto-derived month, same as
+            // the Budget page's own category section), and only for names the user opted into via
+            // the Dashboard Widgets settings panel. A category whose budget was since deleted or
+            // renamed just silently drops out here (dashboardBudgetCategoriesShown still lists it,
+            // but find() below returns nothing for it) rather than showing a broken row.
+            let catRowsHTML = "";
+            if (!isVirtual && dashboardBudgetCategoriesShown.length > 0) {
+                const allCatBudgets = monthResolved.rec.categoryBudgets || [];
+                const rows = dashboardBudgetCategoriesShown
+                    .map(name => allCatBudgets.find(cb => cb.cat === name))
+                    .filter(Boolean)
+                    .map(cb => {
+                        const catSpent = (byCategory && byCategory[cb.cat]) || 0;
+                        const catPct = cb.amount > 0 ? Math.max(Math.min((catSpent / cb.amount) * 100, 100), 0) : (catSpent > 0 ? 100 : 0);
+                        const catOver = catSpent > cb.amount;
+                        return `
+                            <div data-click="navigateToBudgetPage" data-scope="month" style="margin-top:8px;">
+                                <div style="display:flex; justify-content:space-between; align-items:center;">
+                                    <span style="display:flex; align-items:center; gap:6px; font-size:0.75rem; color:var(--text-muted);">
+                                        <span class="split-cat-icon" style="background:${getCategoryAvatarColor(cb.cat)}; width:18px; height:18px; font-size:0.68rem; flex-shrink:0;">${getCategoryIcon(cb.cat, "expense")}</span>
+                                        ${escapeHtml(cb.cat)}
+                                    </span>
+                                    <span style="font-size:0.72rem; ${catOver ? "color:var(--expense-color); font-weight:700;" : "color:var(--text-muted);"}">${formatCurrency(Math.max(catSpent, 0), baseCurrency)} / ${formatCurrency(cb.amount, baseCurrency)}</span>
+                                </div>
+                                <div class="progress-bar-container" style="height:6px; margin-top:4px;">
+                                    <div class="progress-bar-fill" style="width:${catPct}%; ${catOver ? "background:var(--expense-color);" : ""}"></div>
+                                </div>
+                            </div>
+                        `;
+                    }).join("");
+                if (rows) {
+                    catRowsHTML = `<div style="margin-top:10px; border-top:1px solid var(--border-color); padding-top:2px;">${rows}</div>`;
+                }
+            }
+
             wrap.innerHTML = `
                 <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage" data-scope="month">
                     <div style="display:flex; justify-content:space-between; align-items:baseline;">
@@ -3827,6 +3920,7 @@
                     </div>
                     ${isVirtual ? `<div style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">🔄 From your ${escapeHtml(sourceYearRec.id)} Yearly Budget</div>` : ""}
                     ${yearLineHTML}
+                    ${catRowsHTML}
                 </div>
             `;
         }
@@ -13967,7 +14061,8 @@
                 const curMonthResolved = await resolveMonthBudget(currentMonthKey(), txs, accounts);
                 const curYearRec = await getBudgetRecord(currentYearKey());
                 const { total: curYearSpent } = computePeriodActuals(currentYearKey(), txs, accounts);
-                renderDashboardBudgetWidget(curMonthResolved, curYearRec, curYearSpent);
+                const { byCategory: curMonthByCategory } = computePeriodActuals(currentMonthKey(), txs, accounts);
+                renderDashboardBudgetWidget(curMonthResolved, curYearRec, curYearSpent, curMonthByCategory);
             }
 
             // --- Fixed Deposit maturity reminders ---
@@ -16464,6 +16559,9 @@
             const storedDashboardWidgetOrder = await readKeyDB("settings", "dashboardWidgetOrder");
             if (storedDashboardWidgetOrder) dashboardWidgetOrder = storedDashboardWidgetOrder.value === "recenttx-first" ? "recenttx-first" : "accounts-first";
 
+            const storedDashboardBudgetCategoriesShown = await readKeyDB("settings", "dashboardBudgetCategoriesShown");
+            if (storedDashboardBudgetCategoriesShown && Array.isArray(storedDashboardBudgetCategoriesShown.value)) dashboardBudgetCategoriesShown = storedDashboardBudgetCategoriesShown.value;
+
             const storedPinnedCount = await readKeyDB("settings", "pinnedAccountCount");
             if (storedPinnedCount) pinnedAccountCount = storedPinnedCount.value || 5;
 
@@ -16914,6 +17012,7 @@
                                 case "recentTxAccountFilter": recentTxAccountFilter = rec.value || "all"; break;
                                 case "recentTxCount": recentTxCount = rec.value || 5; break;
                                 case "dashboardWidgetOrder": dashboardWidgetOrder = rec.value === "recenttx-first" ? "recenttx-first" : "accounts-first"; break;
+                                case "dashboardBudgetCategoriesShown": dashboardBudgetCategoriesShown = Array.isArray(rec.value) ? rec.value : []; break;
                                 case "pinnedAccountCount": pinnedAccountCount = rec.value || 5; break;
                                 case "pinnedAccountIds": pinnedAccountIds = Array.isArray(rec.value) ? rec.value : []; break;
                                 case "memberNetWorthCollapsed": memberNetWorthCollapsed = !!rec.value; break;
@@ -17265,6 +17364,7 @@
             handleRecentTxSettingChange: () => handleRecentTxSettingChange(),
             handlePinnedAccountCountChange: () => handlePinnedAccountCountChange(),
             handleDashboardWidgetOrderChange: () => handleDashboardWidgetOrderChange(),
+            handleDashboardBudgetCategoryToggleChange: (el) => handleDashboardBudgetCategoryToggleChange(el),
             handlePinnedAccountSlotChange: (el) => handlePinnedAccountSlotChange(el),
             ledgerYearSelectChange: () => ledgerYearSelectChange(),
             handleAccGroupChange: () => handleAccGroupChange(),
