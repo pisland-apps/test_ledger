@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v339";
+        const APP_VERSION = "v340";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -16835,7 +16835,7 @@
             showToast(`\ud83d\udce4 Exported ${sorted.length} transaction${sorted.length === 1 ? "" : "s"} to CSV`);
         }
 
-        // v337: exports the Financial Accounts list exactly as currently shown — respects the
+        // v340: exports the Financial Accounts list exactly as currently shown — respects the
         // active sidebar type-shortcut filter (accountsPageTypeFilter) and its own "hide zero-
         // balance accounts on a filtered view" rule from renderAccountsPage(), same "export
         // exactly what's on screen" principle exportLedgerCsv()/exportTotalSummaryCsv() already
@@ -16930,6 +16930,21 @@
                         const value = (f.units || 0) * (f.currentNav || 0);
                         rows.push(detailRow(f.name, `${f.currency || ""} ${value.toFixed(2)}`, convertCurrency(value, f.currency, baseCurrency)));
                     });
+                } else if (a.initialBalance) {
+                    // v340: user feedback — a plain account's Opening Balance (the starting
+                    // amount set when the account was created, see a.initialBalance) was already
+                    // included in the account's own Native Amount/total (computeAccountBalances()
+                    // starts every "normal" account's running balance from it), but never
+                    // appeared as its own line — same "money's in the total but not visibly
+                    // itemized" gap v339 fixed for a Main Category's direct amount on the Net
+                    // Savings Statement. Only accounts that actually have a non-zero Opening
+                    // Balance get split into breakdown rows; an account with none (the common
+                    // case) keeps the single simpleRow below, unchanged.
+                    rows.push(parentTotalRow());
+                    const nativeTotal = nativeBalances[a.id] || 0;
+                    const netTx = nativeTotal - a.initialBalance;
+                    rows.push(detailRow("Opening Balance", `${a.currency || ""} ${a.initialBalance.toFixed(2)}`, convertCurrency(a.initialBalance, a.currency, baseCurrency)));
+                    rows.push(detailRow("Transactions (Net)", `${a.currency || ""} ${netTx.toFixed(2)}`, convertCurrency(netTx, a.currency, baseCurrency)));
                 } else {
                     rows.push(simpleRow(`${a.currency || ""} ${(nativeBalances[a.id] || 0).toFixed(2)}`));
                 }
