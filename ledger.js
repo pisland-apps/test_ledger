@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v337";
+        const APP_VERSION = "v338";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -16824,7 +16824,17 @@
                 (fdPlacementsByAccountId[t.dest] = fdPlacementsByAccountId[t.dest] || []).push(t);
             });
 
-            const header = ["Account Name", "Group", "Sub-Group", "Owner(s)", "Detail", "Native Amount", `Base Value (${baseCurrency})`];
+            // v338: user feedback on v337's layout — the account-level Total and each breakdown
+            // line's own converted value were sharing one "Base Value" column, so a plain
+            // spreadsheet SUM() over that column double-counts (once for the parent's total, once
+            // more for every detail row underneath it). Split into two columns instead: "Detail
+            // Value" is populated only on a breakdown row (a currency basket / fund / FD
+            // placement) or on a plain single-currency account's one row — never on a multi/fd/
+            // unittrust parent row, since that row has no single value of its own to attribute.
+            // "Account Total" is populated exactly once per account (its first row) regardless of
+            // type, so summing THAT column alone always gives a correct, non-duplicated grand
+            // total across every account in the export.
+            const header = ["Account Name", "Group", "Sub-Group", "Owner(s)", "Detail", "Native Amount", `Detail Value (${baseCurrency})`, `Account Total (${baseCurrency})`];
             const rows = [];
 
             sorted.forEach(a => {
@@ -16832,30 +16842,40 @@
                 const subgroup = a.subgroup || "";
                 const owners = accountOwnerNamesText(a);
                 const baseTotal = accountBaseValue(a, nativeBalances);
-                const parentRow = (detail, nativeAmount, baseVal) =>
-                    [a.name || "", group, subgroup, owners, detail, nativeAmount, baseVal.toFixed(2)];
+                // Parent row for a multi/fd/unittrust account: no Detail/Native Amount/Detail
+                // Value of its own — just the Account Total, once.
+                const parentTotalRow = () =>
+                    [a.name || "", group, subgroup, owners, "", "", "", baseTotal.toFixed(2)];
+                // Breakdown row (currency basket / fund / placement): its own Detail Value, blank
+                // Account Total — the total already appeared once, on the parent row above it.
+                const detailRow = (detail, nativeAmount, detailVal) =>
+                    [a.name || "", group, subgroup, owners, detail, nativeAmount, detailVal.toFixed(2), ""];
+                // Plain single-currency account: one row only, so Detail Value and Account Total
+                // are the same number — no ambiguity since there's nothing else to sum against it.
+                const simpleRow = (nativeAmount) =>
+                    [a.name || "", group, subgroup, owners, "", nativeAmount, baseTotal.toFixed(2), baseTotal.toFixed(2)];
 
                 if (a.type === "multi") {
-                    rows.push(parentRow("", "", baseTotal));
+                    rows.push(parentTotalRow());
                     const baskets = nativeBalances[a.id] || {};
                     Object.keys(baskets).filter(c => Math.abs(baskets[c]) >= 0.005).sort().forEach(curr => {
-                        rows.push(parentRow(curr, `${curr} ${baskets[curr].toFixed(2)}`, convertCurrency(baskets[curr], curr, baseCurrency)));
+                        rows.push(detailRow(curr, `${curr} ${baskets[curr].toFixed(2)}`, convertCurrency(baskets[curr], curr, baseCurrency)));
                     });
                 } else if (a.type === "fd") {
-                    rows.push(parentRow("", "", baseTotal));
+                    rows.push(parentTotalRow());
                     const placements = (fdPlacementsByAccountId[a.id] || []).slice().sort((x, y) => new Date(y.date) - new Date(x.date));
                     placements.forEach(t => {
-                        rows.push(parentRow(`Placement, matures ${t.fdMaturityDate}`, `${t.currency || ""} ${(t.amount || 0).toFixed(2)}`, convertCurrency(t.amount, t.currency, baseCurrency)));
+                        rows.push(detailRow(`Placement, matures ${t.fdMaturityDate}`, `${t.currency || ""} ${(t.amount || 0).toFixed(2)}`, convertCurrency(t.amount, t.currency, baseCurrency)));
                     });
                 } else if (a.type === "unittrust") {
-                    rows.push(parentRow("", "", baseTotal));
+                    rows.push(parentTotalRow());
                     const funds = (fundsByAccountId[a.id] || []).slice().sort((x, y) => x.name.localeCompare(y.name));
                     funds.forEach(f => {
                         const value = (f.units || 0) * (f.currentNav || 0);
-                        rows.push(parentRow(f.name, `${f.currency || ""} ${value.toFixed(2)}`, convertCurrency(value, f.currency, baseCurrency)));
+                        rows.push(detailRow(f.name, `${f.currency || ""} ${value.toFixed(2)}`, convertCurrency(value, f.currency, baseCurrency)));
                     });
                 } else {
-                    rows.push(parentRow("", `${a.currency || ""} ${(nativeBalances[a.id] || 0).toFixed(2)}`, baseTotal));
+                    rows.push(simpleRow(`${a.currency || ""} ${(nativeBalances[a.id] || 0).toFixed(2)}`));
                 }
             });
 
