@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v334";
+        const APP_VERSION = "v335";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2028,6 +2028,10 @@
         // Dashboard Widgets settings panel — see renderDashboardBudgetCategoryToggles(). Empty by
         // default (unchanged prior behavior: only the overall Monthly/Yearly totals show).
         let dashboardBudgetCategoriesShown = [];
+        // v335: master on/off for the whole Dashboard Budget widget (header + card) — separate
+        // from dashboardBudgetCategoriesShown above, which only controls the optional per-category
+        // rows *within* the widget. Defaults to shown (true), matching prior behavior.
+        let dashboardBudgetWidgetEnabled = true;
 
         // Dashboard "Accounts" widget settings (v75) — persisted via SETTINGS store, loaded in
         // bootstrap(). Mirrors the Recent Transactions widget above, but instead of a type/account
@@ -2123,6 +2127,7 @@
         function renderRecentTransactionsWidget(accounts, txs) {
             const list = document.getElementById("recentTxList");
             if (!list) return;
+            const widgetWrap = document.getElementById("dashboardRecentTxWidget");
 
             populateRecentTxCountSelect();
             populateRecentTxAccountSelect(accounts);
@@ -2132,6 +2137,12 @@
             if (countSel) countSel.value = String(recentTxCount);
             syncAccountPickerButtonText("recentTxTypeSelect");
             syncAccountPickerButtonText("recentTxCountSelect");
+
+            // v335: "None (Hide Widget)" hides the whole widget (header + Calendar shortcut
+            // included), not just an empty list — same wrapper-level hide pattern as the Accounts
+            // widget's "0 items" above.
+            if (widgetWrap) widgetWrap.style.display = recentTxTypeFilter === "none" ? "none" : "";
+            if (recentTxTypeFilter === "none") return;
 
             let filtered = txs.filter(t => t.type === "income" || t.type === "expense");
             if (recentTxTypeFilter !== "both") filtered = filtered.filter(t => t.type === recentTxTypeFilter);
@@ -2276,9 +2287,17 @@
                 const orderSel = document.getElementById("dashboardWidgetOrderSelect");
                 if (orderSel) orderSel.value = dashboardWidgetOrder;
                 syncAccountPickerButtonText("dashboardWidgetOrderSelect");
+                const budgetToggle = document.getElementById("dashboardBudgetWidgetToggle");
+                if (budgetToggle) budgetToggle.checked = dashboardBudgetWidgetEnabled;
                 renderDashboardBudgetCategoryToggles();
             }
             panel.style.display = isHidden ? "flex" : "none";
+        }
+
+        async function handleDashboardBudgetWidgetToggleChange(el) {
+            dashboardBudgetWidgetEnabled = !!el.checked;
+            await writeDB(STORES.SETTINGS, { key: "dashboardBudgetWidgetEnabled", value: dashboardBudgetWidgetEnabled });
+            await renderApp();
         }
 
         // v334: builds the BUDGET WIDGET checklist inside the Dashboard Widgets settings panel —
@@ -2468,6 +2487,7 @@
         function populatePinnedAccountCountSelect() {
             const sel = document.getElementById("pinnedAccountCountSelect");
             if (!sel || sel.options.length > 0) return;
+            sel.innerHTML += `<option value="0">None (Hide Widget)</option>`;
             for (let i = 1; i <= 10; i++) {
                 sel.innerHTML += `<option value="${i}">${i} item${i === 1 ? '' : 's'}</option>`;
             }
@@ -2511,7 +2531,11 @@
         }
 
         async function handlePinnedAccountCountChange() {
-            pinnedAccountCount = parseInt(document.getElementById("pinnedAccountCountSelect").value, 10) || 5;
+            // v335: parseInt("0") is 0, which is falsy — a plain `|| 5` fallback would silently
+            // turn "None (Hide Widget)" back into 5 items. Only fall back to the 5-item default
+            // when the value genuinely didn't parse (NaN), not when it parsed to a legit 0.
+            const parsed = parseInt(document.getElementById("pinnedAccountCountSelect").value, 10);
+            pinnedAccountCount = Number.isNaN(parsed) ? 5 : parsed;
             // Trim or pad the pinned list to match the new count — existing picks in slots that
             // still exist are preserved; slots beyond the new count are simply dropped (not
             // deleted from anywhere else, they just stop being one of the numbered slots).
@@ -2537,12 +2561,19 @@
         function renderPinnedAccountsWidget(accounts, nativeBalances) {
             const list = document.getElementById("pinnedAccountsList");
             if (!list) return;
+            const widgetWrap = document.getElementById("dashboardAccountsWidget");
 
             populatePinnedAccountCountSelect();
             const countSel = document.getElementById("pinnedAccountCountSelect");
             if (countSel) countSel.value = String(pinnedAccountCount);
             syncAccountPickerButtonText("pinnedAccountCountSelect");
             renderPinnedAccountSlotSelects(accounts);
+
+            // v335: "0 items"/"None" hides the whole widget (header included), not just an empty
+            // list — same wrapper-level hide pattern used by the Recent Transactions widget's own
+            // "None" option below.
+            if (widgetWrap) widgetWrap.style.display = pinnedAccountCount === 0 ? "none" : "";
+            if (pinnedAccountCount === 0) return;
 
             const rows = pinnedAccountIds
                 .map(id => accounts.find(a => a.id === id))
@@ -14058,11 +14089,15 @@
             // budget — see resolveMonthBudget()), regardless of what the full Budget page (if open
             // elsewhere) is browsing.
             {
-                const curMonthResolved = await resolveMonthBudget(currentMonthKey(), txs, accounts);
-                const curYearRec = await getBudgetRecord(currentYearKey());
-                const { total: curYearSpent } = computePeriodActuals(currentYearKey(), txs, accounts);
-                const { byCategory: curMonthByCategory } = computePeriodActuals(currentMonthKey(), txs, accounts);
-                renderDashboardBudgetWidget(curMonthResolved, curYearRec, curYearSpent, curMonthByCategory);
+                const budgetContainer = document.getElementById("dashboardBudgetWidgetContainer");
+                if (budgetContainer) budgetContainer.style.display = dashboardBudgetWidgetEnabled ? "" : "none";
+                if (dashboardBudgetWidgetEnabled) {
+                    const curMonthResolved = await resolveMonthBudget(currentMonthKey(), txs, accounts);
+                    const curYearRec = await getBudgetRecord(currentYearKey());
+                    const { total: curYearSpent } = computePeriodActuals(currentYearKey(), txs, accounts);
+                    const { byCategory: curMonthByCategory } = computePeriodActuals(currentMonthKey(), txs, accounts);
+                    renderDashboardBudgetWidget(curMonthResolved, curYearRec, curYearSpent, curMonthByCategory);
+                }
             }
 
             // --- Fixed Deposit maturity reminders ---
@@ -16562,8 +16597,11 @@
             const storedDashboardBudgetCategoriesShown = await readKeyDB("settings", "dashboardBudgetCategoriesShown");
             if (storedDashboardBudgetCategoriesShown && Array.isArray(storedDashboardBudgetCategoriesShown.value)) dashboardBudgetCategoriesShown = storedDashboardBudgetCategoriesShown.value;
 
+            const storedDashboardBudgetWidgetEnabled = await readKeyDB("settings", "dashboardBudgetWidgetEnabled");
+            if (storedDashboardBudgetWidgetEnabled && typeof storedDashboardBudgetWidgetEnabled.value === "boolean") dashboardBudgetWidgetEnabled = storedDashboardBudgetWidgetEnabled.value;
+
             const storedPinnedCount = await readKeyDB("settings", "pinnedAccountCount");
-            if (storedPinnedCount) pinnedAccountCount = storedPinnedCount.value || 5;
+            if (storedPinnedCount) pinnedAccountCount = (typeof storedPinnedCount.value === "number") ? storedPinnedCount.value : 5;
 
             const storedPinnedIds = await readKeyDB("settings", "pinnedAccountIds");
             if (storedPinnedIds && Array.isArray(storedPinnedIds.value)) pinnedAccountIds = storedPinnedIds.value;
@@ -17013,7 +17051,8 @@
                                 case "recentTxCount": recentTxCount = rec.value || 5; break;
                                 case "dashboardWidgetOrder": dashboardWidgetOrder = rec.value === "recenttx-first" ? "recenttx-first" : "accounts-first"; break;
                                 case "dashboardBudgetCategoriesShown": dashboardBudgetCategoriesShown = Array.isArray(rec.value) ? rec.value : []; break;
-                                case "pinnedAccountCount": pinnedAccountCount = rec.value || 5; break;
+                                case "dashboardBudgetWidgetEnabled": dashboardBudgetWidgetEnabled = rec.value !== false; break;
+                                case "pinnedAccountCount": pinnedAccountCount = (typeof rec.value === "number") ? rec.value : 5; break;
                                 case "pinnedAccountIds": pinnedAccountIds = Array.isArray(rec.value) ? rec.value : []; break;
                                 case "memberNetWorthCollapsed": memberNetWorthCollapsed = !!rec.value; break;
                                 case "expandedAccountSubrows":
@@ -17365,6 +17404,7 @@
             handlePinnedAccountCountChange: () => handlePinnedAccountCountChange(),
             handleDashboardWidgetOrderChange: () => handleDashboardWidgetOrderChange(),
             handleDashboardBudgetCategoryToggleChange: (el) => handleDashboardBudgetCategoryToggleChange(el),
+            handleDashboardBudgetWidgetToggleChange: (el) => handleDashboardBudgetWidgetToggleChange(el),
             handlePinnedAccountSlotChange: (el) => handlePinnedAccountSlotChange(el),
             ledgerYearSelectChange: () => ledgerYearSelectChange(),
             handleAccGroupChange: () => handleAccGroupChange(),

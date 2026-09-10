@@ -2791,10 +2791,12 @@
         <div id="fdReminderContainer"></div>
         <div id="ccReminderContainer"></div>
 
+        <div id="dashboardBudgetWidgetContainer">
         <div class="section-header">
             <span class="section-title">Budget</span>
         </div>
         <div id="dashboardBudgetWidget" style="margin-bottom:16px;"></div>
+        </div>
 
         <div class="section-header">
             <span class="section-title">Financial Report Card</span>
@@ -4075,6 +4077,7 @@
                             <option value="both">Income + Expense</option>
                             <option value="income">Income Only</option>
                             <option value="expense">Expense Only</option>
+                            <option value="none">None (Hide Widget)</option>
                         </select>
                     </div>
                     <div class="form-row" style="margin-bottom:0; margin-top:8px;">
@@ -4100,7 +4103,14 @@
                      from the current month's budget record — see renderDashboardBudgetCategoryToggles(). -->
                 <div>
                     <p style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin:0 0 8px;">BUDGET WIDGET</p>
-                    <p style="font-size:0.75rem; color:var(--text-muted); margin:0 0 8px;">Choose which category budgets also show on the Dashboard.</p>
+                    <div class="toggle-switch-row" style="margin-top:0;">
+                        <span class="toggle-switch-label">Show on Dashboard</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="dashboardBudgetWidgetToggle" data-change="handleDashboardBudgetWidgetToggleChange">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin:10px 0 8px;">Choose which category budgets also show on the Dashboard.</p>
                     <div id="dashboardBudgetCategoryToggles" style="display:flex; flex-direction:column; gap:2px;"></div>
                     <p id="dashboardBudgetCategoryTogglesEmpty" style="font-size:0.8rem; color:var(--text-muted); display:none;">No category budgets set for this month yet — add some on the Budget page first.</p>
                 </div>
