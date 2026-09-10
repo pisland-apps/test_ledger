@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v335";
+        const APP_VERSION = "v336";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -16779,6 +16779,66 @@
             showToast(`\ud83d\udce4 Exported ${sorted.length} transaction${sorted.length === 1 ? "" : "s"} to CSV`);
         }
 
+        // v336: exports the Financial Accounts list exactly as currently shown — respects the
+        // active sidebar type-shortcut filter (accountsPageTypeFilter) and its own "hide zero-
+        // balance accounts on a filtered view" rule from renderAccountsPage(), same "export
+        // exactly what's on screen" principle exportLedgerCsv()/exportTotalSummaryCsv() already
+        // follow. Multi-currency/Fixed Deposit/Unit Trust accounts hold a currency-basket balance
+        // rather than one scalar (see accountBaseValue) — Native Balance lists each currency's
+        // amount semicolon-separated so nothing is silently dropped, while Base Value is always
+        // the single converted total either way (works the same for a plain single-currency
+        // account too).
+        async function exportAccountsCsv() {
+            const { accounts, nativeBalances } = await computeAccountBalances();
+            const filter = accountsPageTypeFilter;
+            const filtered = filter
+                ? accounts.filter(a => (a.group || DEFAULT_ACCOUNT_GROUP) === filter.group && (a.subgroup || "") === (filter.subgroup || ""))
+                : accounts;
+            const withoutZeroBalance = filter
+                ? filtered.filter(a => Math.abs(accountBaseValue(a, nativeBalances)) >= 0.005)
+                : filtered;
+            const sorted = sortAccountsByGroupThenName(withoutZeroBalance);
+
+            if (sorted.length === 0) {
+                showToast("No accounts to export");
+                return;
+            }
+
+            const nativeBalanceText = (a) => {
+                if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
+                    const baskets = nativeBalances[a.id] || {};
+                    return Object.keys(baskets)
+                        .filter(curr => Math.abs(baskets[curr]) >= 0.005)
+                        .map(curr => `${curr} ${baskets[curr].toFixed(2)}`)
+                        .join("; ");
+                }
+                return `${a.currency || ""} ${(nativeBalances[a.id] || 0).toFixed(2)}`;
+            };
+
+            const header = ["Account Name", "Group", "Sub-Group", "Owner(s)", "Native Balance", `Base Value (${baseCurrency})`];
+            const rows = sorted.map(a => [
+                a.name || "",
+                a.group || DEFAULT_ACCOUNT_GROUP,
+                a.subgroup || "",
+                accountOwnerNamesText(a),
+                nativeBalanceText(a),
+                accountBaseValue(a, nativeBalances).toFixed(2)
+            ]);
+
+            const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
+            const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const scopeLabel = filter
+                ? filter.label.replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "")
+                : "all-accounts";
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `accounts_export_${scopeLabel}_${todayLocalStr()}.csv`;
+            link.click();
+            URL.revokeObjectURL(url);
+            showToast(`\ud83d\udce4 Exported ${sorted.length} account${sorted.length === 1 ? "" : "s"} to CSV`);
+        }
+
         async function exportBackup(forceEncrypted = false) {
             const bundle = {
                 accounts: await readAllDB(STORES.ACCOUNTS),
@@ -17231,6 +17291,7 @@
             openCreditCardPaymentFromLedgerHeader: () => openCreditCardPaymentFromLedgerHeader(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportLedgerCsv: () => exportLedgerCsv(),
+            exportAccountsCsv: () => exportAccountsCsv(),
             exportInventoryCsv: () => exportInventoryCsv(),
             exportTotalSummaryCsv: () => exportTotalSummaryCsv(),
             exportBackup: () => exportBackup(),
