@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v336";
+        const APP_VERSION = "v337";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -16779,15 +16779,26 @@
             showToast(`\ud83d\udce4 Exported ${sorted.length} transaction${sorted.length === 1 ? "" : "s"} to CSV`);
         }
 
-        // v336: exports the Financial Accounts list exactly as currently shown — respects the
+        // v337: exports the Financial Accounts list exactly as currently shown — respects the
         // active sidebar type-shortcut filter (accountsPageTypeFilter) and its own "hide zero-
         // balance accounts on a filtered view" rule from renderAccountsPage(), same "export
         // exactly what's on screen" principle exportLedgerCsv()/exportTotalSummaryCsv() already
-        // follow. Multi-currency/Fixed Deposit/Unit Trust accounts hold a currency-basket balance
-        // rather than one scalar (see accountBaseValue) — Native Balance lists each currency's
-        // amount semicolon-separated so nothing is silently dropped, while Base Value is always
-        // the single converted total either way (works the same for a plain single-currency
-        // account too).
+        // follow.
+        //
+        // v336 squeezed a Multi-Currency account's whole currency basket into one semicolon-
+        // joined cell (e.g. "BND 96.00; CNY 3546.00; ..."), which just gets visually cut off by
+        // Excel's default column width and can't be summed/filtered per currency anyway. Rebuilt
+        // to instead emit one DETAIL ROW per currency basket / Unit Trust fund holding / Fixed
+        // Deposit placement directly under its parent account — the exact same breakdown the
+        // Accounts page itself already shows as collapsible subrows (see renderAccountsPage's
+        // Multi-Currency/Unit Trust/Fixed Deposit subrowsHtml block, which this mirrors: currency
+        // baskets for "multi", fund holdings for "unittrust", open placements for "fd" — an FD
+        // account's raw currency basket is deliberately NOT also listed, since the on-screen page
+        // doesn't show it either, only its placements). The parent account's own row is left with
+        // a blank Detail/Native Amount and just its overall Base Value, matching how the on-screen
+        // main row for these three types only ever shows one converted total, never a native
+        // figure. A plain single-currency account (Current/Savings/Real Estate/etc.) still gets
+        // just one row, Native Amount included, same as before.
         async function exportAccountsCsv() {
             const { accounts, nativeBalances } = await computeAccountBalances();
             const filter = accountsPageTypeFilter;
@@ -16804,26 +16815,49 @@
                 return;
             }
 
-            const nativeBalanceText = (a) => {
-                if (a.type === "multi" || a.type === "fd" || a.type === "unittrust") {
-                    const baskets = nativeBalances[a.id] || {};
-                    return Object.keys(baskets)
-                        .filter(curr => Math.abs(baskets[curr]) >= 0.005)
-                        .map(curr => `${curr} ${baskets[curr].toFixed(2)}`)
-                        .join("; ");
-                }
-                return `${a.currency || ""} ${(nativeBalances[a.id] || 0).toFixed(2)}`;
-            };
+            const allFunds = await readAllDB(STORES.FUNDS);
+            const fundsByAccountId = {};
+            allFunds.forEach(f => { (fundsByAccountId[f.accountId] = fundsByAccountId[f.accountId] || []).push(f); });
+            const allTxs = await readAllDB(STORES.TRANSACTIONS);
+            const fdPlacementsByAccountId = {};
+            allTxs.filter(t => t.type === "transfer" && t.fdMaturityDate && !t.fdResolved && t.dest).forEach(t => {
+                (fdPlacementsByAccountId[t.dest] = fdPlacementsByAccountId[t.dest] || []).push(t);
+            });
 
-            const header = ["Account Name", "Group", "Sub-Group", "Owner(s)", "Native Balance", `Base Value (${baseCurrency})`];
-            const rows = sorted.map(a => [
-                a.name || "",
-                a.group || DEFAULT_ACCOUNT_GROUP,
-                a.subgroup || "",
-                accountOwnerNamesText(a),
-                nativeBalanceText(a),
-                accountBaseValue(a, nativeBalances).toFixed(2)
-            ]);
+            const header = ["Account Name", "Group", "Sub-Group", "Owner(s)", "Detail", "Native Amount", `Base Value (${baseCurrency})`];
+            const rows = [];
+
+            sorted.forEach(a => {
+                const group = a.group || DEFAULT_ACCOUNT_GROUP;
+                const subgroup = a.subgroup || "";
+                const owners = accountOwnerNamesText(a);
+                const baseTotal = accountBaseValue(a, nativeBalances);
+                const parentRow = (detail, nativeAmount, baseVal) =>
+                    [a.name || "", group, subgroup, owners, detail, nativeAmount, baseVal.toFixed(2)];
+
+                if (a.type === "multi") {
+                    rows.push(parentRow("", "", baseTotal));
+                    const baskets = nativeBalances[a.id] || {};
+                    Object.keys(baskets).filter(c => Math.abs(baskets[c]) >= 0.005).sort().forEach(curr => {
+                        rows.push(parentRow(curr, `${curr} ${baskets[curr].toFixed(2)}`, convertCurrency(baskets[curr], curr, baseCurrency)));
+                    });
+                } else if (a.type === "fd") {
+                    rows.push(parentRow("", "", baseTotal));
+                    const placements = (fdPlacementsByAccountId[a.id] || []).slice().sort((x, y) => new Date(y.date) - new Date(x.date));
+                    placements.forEach(t => {
+                        rows.push(parentRow(`Placement, matures ${t.fdMaturityDate}`, `${t.currency || ""} ${(t.amount || 0).toFixed(2)}`, convertCurrency(t.amount, t.currency, baseCurrency)));
+                    });
+                } else if (a.type === "unittrust") {
+                    rows.push(parentRow("", "", baseTotal));
+                    const funds = (fundsByAccountId[a.id] || []).slice().sort((x, y) => x.name.localeCompare(y.name));
+                    funds.forEach(f => {
+                        const value = (f.units || 0) * (f.currentNav || 0);
+                        rows.push(parentRow(f.name, `${f.currency || ""} ${value.toFixed(2)}`, convertCurrency(value, f.currency, baseCurrency)));
+                    });
+                } else {
+                    rows.push(parentRow("", `${a.currency || ""} ${(nativeBalances[a.id] || 0).toFixed(2)}`, baseTotal));
+                }
+            });
 
             const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
             const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
