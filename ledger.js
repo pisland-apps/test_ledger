@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v338";
+        const APP_VERSION = "v339";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -9632,6 +9632,7 @@
             await migrateStaleCategoryOnTransfersCleanup();
             await migrateAccountGroupRename();
             await migrateHandphoneClaimRename();
+            await migrateDuplicateCategoryCleanup();
             // migrateFdInterestDuplicateCleanup()/migrateRemoveEmptyClaimableCategory() may have
             // deleted a Categories record (the legacy "FD Interest" duplicate / the retired
             // "Company Expenses (Claimable)" category), so dynamicCategories — loaded further
@@ -9722,7 +9723,48 @@
             }
         }
 
-        // One-time cleanup for a fixed bug: the "To Account" <select> used to keep whatever value
+        // One-time cleanup: migrateHandphoneClaimRename() above renames the legacy "Handphone
+        // Claim" category to "Phone Allowance" — but for anyone who already had that legacy
+        // category AND had already been seeded the newer "Phone Allowance" DEFAULT_CATEGORIES
+        // entry (added at the same time as the rename), the rename created a genuine duplicate:
+        // two separate Categories records both named "Phone Allowance" — the default's own id
+        // ("cat_phone_allowance") and the renamed legacy one ("cat_handphone_claim"). Since
+        // transactions reference a category by NAME (t.cat), not id, both duplicate records
+        // matched the exact same set of transactions, which is why anything that groups by
+        // category RECORD (the Net Savings Statement's Subcategory breakdown, the category
+        // picker) showed "Phone Allowance" twice with an identical total each time — no
+        // transaction was ever actually duplicated, just the category record it's grouped under.
+        // Keeps whichever duplicate has the canonical default-seeded id (slugify(name)) when one
+        // exists among them, else keeps the first found; any Subcategory whose parentId pointed
+        // at a deleted duplicate is re-pointed to the survivor first. Written generally (grouped
+        // by name+type, not hardcoded to "Phone Allowance") so it also catches any other
+        // accidental duplicate category name, not just this one case.
+        async function migrateDuplicateCategoryCleanup() {
+            const cats = await readAllDB(STORES.CATEGORIES);
+            const slugify = s => "cat_" + s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+            const byNameType = new Map();
+            cats.forEach(c => {
+                const key = c.type + "::" + c.name.toLowerCase().trim();
+                if (!byNameType.has(key)) byNameType.set(key, []);
+                byNameType.get(key).push(c);
+            });
+            for (const group of byNameType.values()) {
+                if (group.length < 2) continue;
+                const survivor = group.find(c => c.id === slugify(c.name)) || group[0];
+                const duplicates = group.filter(c => c.id !== survivor.id);
+                for (const dup of duplicates) {
+                    for (const c of cats) {
+                        if (c.parentId === dup.id) {
+                            c.parentId = survivor.id;
+                            await writeDB(STORES.CATEGORIES, c);
+                        }
+                    }
+                    await deleteDB(STORES.CATEGORIES, dup.id);
+                }
+            }
+        }
+
+
         // it last held from an earlier Transfer entry even after being hidden for Income/Expense,
         // so some already-saved Income/Expense records may carry a leftover `dest` pointing at an
         // unrelated account. That stray `dest` made the record wrongly show up in that other
@@ -15117,12 +15159,26 @@
                     const v = catSummary[s.name] || 0;
                     combined += v;
                     mergeNativeInto(combinedNative, catNative[s.name]);
-                    if (Math.abs(v) >= SAVINGS_ZERO_EPS) subRowsData.push({ name: s.name, value: v, icon: s.icon, native: catNative[s.name] });
+                    if (Math.abs(v) >= SAVINGS_ZERO_EPS) subRowsData.push({ name: s.name, category: s.name, value: v, icon: s.icon, native: catNative[s.name] });
                 });
+
+                const icon = main.icon || getCategoryIcon(main.name, type);
+
+                // v339: a Main Category's own direct amount — posted via its own "(General)"
+                // option in the category picker, see buildCategoryOptionsHTML's `${main.name}
+                // (General)` option — used to be folded silently into the combined header total
+                // with no line of its own whenever Subcategory rows were also being shown, so the
+                // visible breakdown never summed to the header total (looked like the rest of the
+                // money had vanished). Give it the same "(General)" label the picker itself uses,
+                // as the first subrow, whenever there's other breakdown to sit alongside — a Main
+                // Category with no real Subcategories this period still renders as one flat row,
+                // unchanged, since there's nothing to disambiguate it from.
+                if (subRowsData.length > 0 && Math.abs(directVal) >= SAVINGS_ZERO_EPS) {
+                    subRowsData.unshift({ name: `${main.name} (General)`, category: main.name, value: directVal, icon, native: catNative[main.name] });
+                }
 
                 if (Math.abs(combined) < SAVINGS_ZERO_EPS && subRowsData.length === 0) return;
 
-                const icon = main.icon || getCategoryIcon(main.name, type);
                 const hasSubs = subRowsData.length > 0;
                 const expanded = savingsExpandedMains.has(main.id);
 
@@ -15144,7 +15200,7 @@
                 if (hasSubs && expanded) {
                     subRowsData.forEach(s => {
                         html += `
-                            <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(s.name)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}" style="padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;">
+                            <div class="statement-row" data-click="navigateToCategoryPage" data-category="${escapeHtml(s.category)}" data-back="savings" data-year="${escapeHtml(filterY)}" data-month="${escapeHtml(filterM)}" style="padding-left:22px; border-left:2px solid var(--border-color); margin-left:6px;">
                                 <span><span style="color:var(--text-muted);">↳</span> ${s.icon} ${escapeHtml(s.name)}</span>
                                 <span style="display:flex; flex-direction:column; align-items:flex-end;">
                                     ${savingsAmountHTML(s.value, type)}
