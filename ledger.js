@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v340";
+        const APP_VERSION = "v341";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -16789,7 +16789,19 @@
                 ? txsAll
                 : txsAll.filter(t => t.src === viewAccountId || t.dest === viewAccountId);
 
-            if (scoped.length === 0) {
+            // v341: an account can have an Opening Balance but zero real transactions yet — the
+            // on-screen ledger still shows its "[Opening Balance Setup]" row in that case (see
+            // the isEarliestYear gate's own "or, if the account has no transactions at all, on
+            // every visit" comment above openingBalanceHTML), so bailing out here on an empty
+            // `scoped` would wrongly skip an export that actually has exactly one row worth
+            // writing. Resolved once up front so both this guard and the row-append below (which
+            // needs the same account lookup) share one answer.
+            const viewingAccForOpeningBalance = viewAccountId !== "all" ? accounts.find(a => a.id === viewAccountId) : null;
+            const hasOpeningBalanceRow = !!(viewingAccForOpeningBalance
+                && viewingAccForOpeningBalance.type !== "multi" && viewingAccForOpeningBalance.type !== "fd" && viewingAccForOpeningBalance.type !== "unittrust"
+                && viewingAccForOpeningBalance.initialBalance);
+
+            if (scoped.length === 0 && !hasOpeningBalanceRow) {
                 showToast("No transactions to export");
                 return;
             }
@@ -16818,6 +16830,24 @@
                 ];
             });
 
+            // v341: the on-screen ledger for a single account shows a synthetic "[Opening
+            // Balance Setup]" row at the very bottom (see openingBalanceHTML in renderApp's
+            // ledger-page section) representing account.initialBalance — the starting point
+            // every balance is calculated from. It was never a real Transactions record, so
+            // this export (which only ever reads from STORES.TRANSACTIONS) silently skipped it
+            // even though it's genuinely part of the account's history. Appended here as one
+            // more row, same gating the on-screen version uses (hasOpeningBalanceRow, resolved
+            // above) — always included regardless of which year happens to be currently browsed
+            // on screen, since the export itself always covers the account's FULL history, not
+            // just one year's page.
+            if (hasOpeningBalanceRow) {
+                rows.push([
+                    "", "opening_balance", viewingAccForOpeningBalance.name, "", "",
+                    "[Opening Balance Setup]", "Account Opening Initial Vault Point",
+                    viewingAccForOpeningBalance.initialBalance.toFixed(2), viewingAccForOpeningBalance.currency || "", ""
+                ]);
+            }
+
             const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
             // Leading BOM: without it, Excel guesses the wrong encoding for a plain UTF-8 file
             // and can garble non-ASCII characters (e.g. a currency symbol or accented name typed
@@ -16832,7 +16862,8 @@
             a.download = `ledger_export_${scopeLabel}_${todayLocalStr()}.csv`;
             a.click();
             URL.revokeObjectURL(url);
-            showToast(`\ud83d\udce4 Exported ${sorted.length} transaction${sorted.length === 1 ? "" : "s"} to CSV`);
+            const openingNote = hasOpeningBalanceRow ? " (plus Opening Balance)" : "";
+            showToast(`\ud83d\udce4 Exported ${sorted.length} transaction${sorted.length === 1 ? "" : "s"}${openingNote} to CSV`);
         }
 
         // v340: exports the Financial Accounts list exactly as currently shown — respects the
