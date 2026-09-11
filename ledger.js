@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v351";
+        const APP_VERSION = "v352";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1451,9 +1451,11 @@
         // whole Transactions store on every keypress would be slow. filterDescSuggestions() below
         // does a plain in-memory substring filter against this array.
         let dynamicDescSuggestions = [];
-        // v351: desc.toLowerCase() -> {cat, type, src} of the most recent transaction with that
-        // exact description — built alongside dynamicDescSuggestions in loadDescSuggestionsCache()
-        // below, used by Quick Add's history-match step (parseQuickAddText()).
+        // v351: desc.toLowerCase() -> {cat, type, src, desc} of the most recent transaction with
+        // that description (`desc` here is the ORIGINAL casing, e.g. "Rest Mee Ngar" — used to
+        // replace Quick Add's raw typed fragment with the full canonical name on a history match,
+        // see parseQuickAddText()) — built alongside dynamicDescSuggestions in
+        // loadDescSuggestionsCache() below, used by Quick Add's history-match step.
         let dynamicDescHistoryMap = {};
 
         // v257: in-memory registry of saved Tags (trip/claim labels — id + name only), refreshed
@@ -10415,6 +10417,7 @@
             // entry is a stronger signal than a guessed keyword. Exact match first, then a loose
             // substring match (either string contains the other, min 2 chars) as a fallback for
             // near-identical re-typing ("mcd" vs "McD Drive Thru").
+            let histDesc = null;
             if (cleaned.length >= 2) {
                 const key = cleaned.toLowerCase();
                 let hist = dynamicDescHistoryMap[key];
@@ -10427,6 +10430,13 @@
                     result.type = hist.type;
                     result.account = hist.src;
                     result.categorySource = "history";
+                    // v351 fix: previously left `result.desc` as whatever fragment the user
+                    // actually typed ("mee ngar"), forcing an extra tap on the pre-existing v252
+                    // desc-suggest dropdown to pick up the real saved name ("Rest Mee Ngar") —
+                    // defeats the point of a history match if it doesn't also fill in the name it
+                    // matched against. Now carries the matched record's own original-cased
+                    // description through as the fill value (see result.desc below).
+                    histDesc = hist.desc;
                 }
             }
 
@@ -10446,7 +10456,10 @@
                 }
             }
 
-            result.desc = cleaned;
+            // A history match's own saved description wins over the raw typed fragment (see the
+            // comment above) — a keyword-map guess or no match at all still just uses whatever's
+            // left of what the user actually typed.
+            result.desc = histDesc || cleaned;
             return result;
         }
 
@@ -10539,7 +10552,7 @@
                     out.push(t.desc.trim());
                 }
                 if (!(key in historyMap) && t.cat) {
-                    historyMap[key] = { cat: t.cat, type: t.type, src: t.src };
+                    historyMap[key] = { cat: t.cat, type: t.type, src: t.src, desc: t.desc.trim() };
                 }
             }
             dynamicDescSuggestions = out;
