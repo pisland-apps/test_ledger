@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v343";
+        const APP_VERSION = "v344";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7891,7 +7891,13 @@
                 if (pet.id === "custom") {
                     const img = getCompanionCustomImage();
                     if (img) {
-                        el.innerHTML = `<img src="${img}" alt="Companion" style="width:34px; height:34px; object-fit:cover; border-radius:9px;">`;
+                        // v344: object-fit:fill (not cover) — stretches a non-square upload to
+                        // completely fill this fixed 34x34 box with no cropping and no leftover
+                        // gaps, at the cost of some distortion on a very long/wide source image.
+                        // Deliberate trade-off per user request: a small mascot square reads fine
+                        // stretched, and this box is too small for cover's cropped edges to be
+                        // worth it anyway.
+                        el.innerHTML = `<img src="${img}" alt="Companion" style="width:34px; height:34px; object-fit:fill; border-radius:9px;">`;
                         el.style.display = "flex";
                         el.title = "Custom — tap to change in Settings";
                     } else {
@@ -7919,7 +7925,7 @@
                 // "select" otherwise); an image → it's an ordinary swatch like any other pet.
                 if (c.id === "custom") {
                     const inner = customImg
-                        ? `<img src="${customImg}" alt="Custom" style="width:100%; height:100%; object-fit:cover; border-radius:12px;">`
+                        ? `<img src="${customImg}" alt="Custom" style="width:100%; height:100%; object-fit:fill; border-radius:12px;">`
                         : `<span style="color:#fff; font-size:1.3rem; line-height:1;">＋</span>`;
                     const clickAction = customImg ? "selectCompanion" : "triggerCompanionCustomImageUpload";
                     return `

@@ -2158,3 +2158,22 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v343.
+
+## v344: Companion custom image now stretches to fill its box completely
+
+- **Reported via screenshot**: a non-square custom upload left visible
+  gaps in the swatch/hero-card box instead of filling it edge to edge.
+- **Fix**: both places the custom image renders (the hero card's
+  `#netWorthCompanion` slot and its Settings swatch preview) switched
+  from `object-fit:cover` to `object-fit:fill` — the image now
+  stretches non-uniformly to exactly fill the fixed square box, no
+  cropping and no leftover space, at the cost of some distortion on a
+  very long/wide source photo. Deliberate trade-off: at this box's
+  small size (34px on the dashboard, 48px in Settings), a slightly
+  stretched mascot reads better than one with empty corners.
+- No change to how the image is read/compressed/stored
+  (`readFileAsDataUrl()`/`compressImage()`, `ledgerCompanionCustomImageDataUrl`)
+  — display-only fix. Verified with `node --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v344.
