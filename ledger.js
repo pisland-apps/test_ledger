@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v349";
+        const APP_VERSION = "v351";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1451,6 +1451,10 @@
         // whole Transactions store on every keypress would be slow. filterDescSuggestions() below
         // does a plain in-memory substring filter against this array.
         let dynamicDescSuggestions = [];
+        // v351: desc.toLowerCase() -> {cat, type, src} of the most recent transaction with that
+        // exact description — built alongside dynamicDescSuggestions in loadDescSuggestionsCache()
+        // below, used by Quick Add's history-match step (parseQuickAddText()).
+        let dynamicDescHistoryMap = {};
 
         // v257: in-memory registry of saved Tags (trip/claim labels — id + name only), refreshed
         // by syncAndLoadTags() at bootstrap and after every add/rename/delete — same pattern as
@@ -10261,6 +10265,251 @@
             }
         }
 
+        // --- QUICK ADD (v351) ---
+        // Local, fully-offline natural-language parser for a new transaction's Quick Add field
+        // (#txQuickAdd, index.html) — no network call, no AI/LLM. Parses out Amount + a relative
+        // Date expression, then guesses a Category (own transaction history first, then a
+        // keyword map), and pre-fills the real form fields for the user to review/adjust before
+        // saving. See handleQuickAddInput() below for how this wires into the field's oninput.
+        //
+        // Deliberately scoped for v1: only RELATIVE dates ("today", "yesterday", "last Friday",
+        // "上周五") are parsed — an ABSOLUTE date like "9/5" is ambiguous (5 Sep vs 9 May
+        // depending on locale) and is left for a later version rather than guessing wrong.
+        // Account is never guessed from scratch (see the design note in chat) — the one
+        // exception is copying the account from an exact/near history match, since that's the
+        // user's own past choice for this same description, not a blind AI guess.
+
+        // Plain keyword -> category lookup, kept as a swappable data structure (not inline
+        // if/else) specifically so a later "let the user edit this list in Settings" feature only
+        // needs to swap where this object is loaded from — the parsing logic below never needs to
+        // change. Category names here match this app's actual DEFAULT_CATEGORIES/legacy-fallback
+        // names (see buildCategoryOptionsHTML()'s legacyFallback), not generic placeholders.
+        const DEFAULT_KEYWORD_MAP = {
+            expense: {
+                "grabfood": "Dining Out", "grab food": "Dining Out", "foodpanda": "Dining Out",
+                "restaurant": "Dining Out", "makan": "Dining Out", "lunch": "Dining Out",
+                "dinner": "Dining Out", "breakfast": "Dining Out", "coffee": "Dining Out",
+                "kopi": "Dining Out", "mamak": "Dining Out", "cafe": "Dining Out",
+                "咖啡": "Dining Out", "吃饭": "Dining Out", "午餐": "Dining Out", "晚餐": "Dining Out",
+                "早餐": "Dining Out", "外卖": "Dining Out", "餐厅": "Dining Out", "喝咖啡": "Dining Out",
+                "grocery": "Groceries & Household", "groceries": "Groceries & Household",
+                "supermarket": "Groceries & Household", "market": "Groceries & Household",
+                "杂货": "Groceries & Household", "超市": "Groceries & Household", "买菜": "Groceries & Household",
+                "grab": "Commute", "uber": "Commute", "taxi": "Commute", "toll": "Commute",
+                "打车": "Commute", "地铁": "Commute", "公交": "Commute", "德士": "Commute",
+                "parking": "Parking", "停车": "Parking",
+                "petrol": "Fuel", "fuel": "Fuel", "petronas": "Fuel", "shell": "Fuel", "加油": "Fuel",
+                "shopee": "Clothing", "lazada": "Clothing", "shopping": "Clothing",
+                "网购": "Clothing", "购物": "Clothing", "衣服": "Clothing",
+                "netflix": "Subscription", "spotify": "Subscription", "subscription": "Subscription",
+                "订阅": "Subscription",
+                "phone bill": "Mobile", "hp bill": "Mobile", "手机费": "Mobile", "话费": "Mobile",
+                "electric": "Electricity Bill", "electricity": "Electricity Bill", "电费": "Electricity Bill",
+                "water bill": "Water Bill", "水费": "Water Bill",
+                "rent": "Rent", "房租": "Rent",
+                "movie": "Entertainment", "cinema": "Entertainment", "电影": "Entertainment",
+                "clinic": "Medical", "doctor": "Medical", "medicine": "Medical",
+                "看病": "Medical", "看医生": "Medical", "买药": "Medical",
+                "insurance": "Insurance", "保险": "Insurance"
+            },
+            income: {
+                "salary": "Salary", "工资": "Salary", "薪水": "Salary", "薪水入账": "Salary",
+                "freelance": "Freelance", "自由职业": "Freelance",
+                "dividend": "Investments", "股息": "Investments",
+                "bank interest": "Bank Interest", "利息": "Bank Interest",
+                "rental income": "Rental Income", "租金收入": "Rental Income",
+                "gift": "Gift Received", "红包": "Gift Received",
+                "rebate": "Rebate", "回扣": "Rebate", "返现": "Rebate"
+            }
+        };
+
+        // index 0=Sunday..6=Saturday, matching Date.prototype.getDay()
+        const WEEKDAY_NAMES_EN = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+        const ZH_WEEKDAY_CHAR = ["日", "一", "二", "三", "四", "五", "六"]; // "天" also accepted for Sunday below
+
+        // Given a target day-of-week, walks back to the most recent occurrence STRICTLY before
+        // `fromDate` — so "last Friday" said on a Friday means a week ago, not today (matches
+        // everyday usage of "last <weekday>"/"上周X").
+        function mostRecentWeekdayBefore(fromDate, targetDow) {
+            const d = new Date(fromDate);
+            let diff = (d.getDay() - targetDow + 7) % 7;
+            if (diff === 0) diff = 7;
+            d.setDate(d.getDate() - diff);
+            return d;
+        }
+
+        // Finds the first relative-date expression in `text` and returns {date, index, length}
+        // (index/length in TEXT's own coordinates, so the caller can splice it back out) or null
+        // if none found. Checked in order: today/今天, yesterday/昨天, "last <weekday>",
+        // "上周X"/"上星期X".
+        function parseRelativeDate(text) {
+            const lower = text.toLowerCase();
+            const today = new Date();
+
+            let m = lower.match(/today|今天/);
+            if (m) return { date: todayLocalStr(), index: m.index, length: m[0].length };
+
+            m = lower.match(/yesterday|昨天/);
+            if (m) {
+                const d = new Date(today); d.setDate(d.getDate() - 1);
+                return { date: localDateStr(d), index: m.index, length: m[0].length };
+            }
+
+            for (let i = 0; i < WEEKDAY_NAMES_EN.length; i++) {
+                const re = new RegExp("last\\s+" + WEEKDAY_NAMES_EN[i], "i");
+                const mm = lower.match(re);
+                if (mm) return { date: localDateStr(mostRecentWeekdayBefore(today, i)), index: mm.index, length: mm[0].length };
+            }
+
+            const zh = text.match(/上(?:周|星期)([一二三四五六日天])/);
+            if (zh) {
+                const idx = zh[1] === "天" ? 0 : ZH_WEEKDAY_CHAR.indexOf(zh[1]);
+                if (idx !== -1) return { date: localDateStr(mostRecentWeekdayBefore(today, idx)), index: zh.index, length: zh[0].length };
+            }
+
+            return null;
+        }
+
+        // Parses free text typed into #txQuickAdd. Returns { amount, date, category, type,
+        // account, categorySource, desc } — any field the parser couldn't determine is left
+        // null/undefined. Matched tokens (amount, date expression) are spliced out of the text as
+        // they're found, so `desc` ends up as whatever's left — the part of what the user typed
+        // that isn't already captured by a structured field.
+        function parseQuickAddText(raw) {
+            let text = raw;
+            const result = { amount: null, date: null, category: null, type: null, account: null, categorySource: null };
+
+            // Amount: currency-prefixed (RM25, S$25, $25 ...) takes priority over a bare number,
+            // so "RM25" isn't misread as amount=25 with a stray "RM" left dangling in the
+            // description. Chinese amount-suffix (25块/25元) checked next, bare number last.
+            let m = text.match(/(RM|MYR|S\$|SGD|USD|US\$|¥|CNY|RMB|\$)\s*(\d+(?:[.,]\d{1,2})?)/i);
+            if (m) {
+                result.amount = parseFloat(m[2].replace(",", ""));
+                text = text.slice(0, m.index) + text.slice(m.index + m[0].length);
+            } else {
+                m = text.match(/(\d+(?:\.\d{1,2})?)\s*(?:块钱|块|元|圆)/);
+                if (m) {
+                    result.amount = parseFloat(m[1]);
+                    text = text.slice(0, m.index) + text.slice(m.index + m[0].length);
+                } else {
+                    m = text.match(/\d+(?:\.\d{1,2})?/);
+                    if (m) {
+                        result.amount = parseFloat(m[0]);
+                        text = text.slice(0, m.index) + text.slice(m.index + m[0].length);
+                    }
+                }
+            }
+
+            // Relative date (see parseRelativeDate's own comment for why absolute dates like
+            // "9/5" are deliberately NOT attempted here).
+            const dr = parseRelativeDate(text);
+            if (dr) {
+                result.date = dr.date;
+                text = text.slice(0, dr.index) + text.slice(dr.index + dr.length);
+            }
+
+            const cleaned = text.replace(/\s{2,}/g, " ").trim();
+
+            // Category, priority 1: the user's OWN transaction history (dynamicDescHistoryMap,
+            // built alongside dynamicDescSuggestions in loadDescSuggestionsCache()) — a real past
+            // entry is a stronger signal than a guessed keyword. Exact match first, then a loose
+            // substring match (either string contains the other, min 2 chars) as a fallback for
+            // near-identical re-typing ("mcd" vs "McD Drive Thru").
+            if (cleaned.length >= 2) {
+                const key = cleaned.toLowerCase();
+                let hist = dynamicDescHistoryMap[key];
+                if (!hist) {
+                    const altKey = Object.keys(dynamicDescHistoryMap).find(k => k.length >= 2 && (k.includes(key) || key.includes(k)));
+                    if (altKey) hist = dynamicDescHistoryMap[altKey];
+                }
+                if (hist) {
+                    result.category = hist.cat;
+                    result.type = hist.type;
+                    result.account = hist.src;
+                    result.categorySource = "history";
+                }
+            }
+
+            // Category, priority 2: keyword map, only if history found nothing.
+            if (!result.category) {
+                const lowerCleaned = cleaned.toLowerCase();
+                outer:
+                for (const type of ["expense", "income"]) {
+                    for (const kw of Object.keys(DEFAULT_KEYWORD_MAP[type])) {
+                        if (lowerCleaned.includes(kw.toLowerCase())) {
+                            result.category = DEFAULT_KEYWORD_MAP[type][kw];
+                            result.type = type;
+                            result.categorySource = "keyword";
+                            break outer;
+                        }
+                    }
+                }
+            }
+
+            result.desc = cleaned;
+            return result;
+        }
+
+        // Wired as data-input on #txQuickAdd (index.html). Live-fills Amount/Date/Description as
+        // soon as they're recognized (all unambiguous once matched), and renders the guessed
+        // Category as a tappable chip below the field instead of auto-committing it — a category
+        // guess is the one part of this that can be wrong often enough to want a confirm tap
+        // (see applyQuickAddCategory() below). Never touches Account unless a history match
+        // supplied one, and never overwrites #txDesc with an empty string just because the field
+        // was cleared back to blank (so clearing Quick Add doesn't blank out a Description the
+        // user already started editing directly).
+        function handleQuickAddInput(el) {
+            const raw = el.value;
+            const suggestWrap = document.getElementById("txQuickAddCatSuggest");
+            if (!raw.trim()) { suggestWrap.style.display = "none"; suggestWrap.innerHTML = ""; return; }
+
+            const parsed = parseQuickAddText(raw);
+
+            if (parsed.amount !== null) document.getElementById("txAmount").value = parsed.amount;
+            if (parsed.date) document.getElementById("txDate").value = parsed.date;
+            if (parsed.desc) document.getElementById("txDesc").value = parsed.desc;
+
+            if (parsed.account) {
+                const srcSelect = document.getElementById("srcAccount");
+                if ([...srcSelect.options].some(o => o.value === parsed.account)) {
+                    srcSelect.value = parsed.account;
+                    syncAccountPickerButtonText("srcAccount");
+                }
+            }
+
+            // The Category row/select only exists (and is only populated) for whichever type
+            // this specific form instance was opened as — openTransactionForm() takes a fixed
+            // `type` per open, there's no live Income/Expense toggle inside an already-open form.
+            // So a guess only gets offered when it agrees with the type already open; a
+            // same-text-different-type guess (e.g. "salary" typed while an Expense form is open)
+            // is silently dropped rather than shown as an unusable chip — same reasoning as never
+            // guessing an Account from scratch: an option the user can't actually act on here
+            // isn't worth surfacing.
+            const currentType = document.getElementById("txType").value;
+            if (parsed.category && parsed.type === currentType && currentType !== "transfer") {
+                const sourceLabel = parsed.categorySource === "history" ? "from your history" : "guessed";
+                suggestWrap.innerHTML = `<button type="button" class="quickadd-chip" data-click="applyQuickAddCategory" data-cat="${escapeHtml(parsed.category)}">${getCategoryIcon(parsed.category, parsed.type)} ${escapeHtml(parsed.category)} <span class="qc-source">(${sourceLabel})</span></button>`;
+                suggestWrap.style.display = "flex";
+            } else {
+                suggestWrap.style.display = "none";
+                suggestWrap.innerHTML = "";
+            }
+        }
+
+        // Tapping the guessed-category chip applies it to the real Category field — same
+        // select+picker-button pattern every other direct-set uses (see the comment on
+        // syncAccountPickerButtonText()).
+        function applyQuickAddCategory(el) {
+            const cat = el.dataset.cat;
+            const catSelect = document.getElementById("txCategory");
+            if ([...catSelect.options].some(o => o.value === cat)) {
+                catSelect.value = cat;
+                catSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                syncAccountPickerButtonText("txCategory");
+            }
+            document.getElementById("txQuickAddCatSuggest").style.display = "none";
+        }
+
         // --- TRANSACTION CREATION / EDITOR CORE ---
         // v252: DESCRIPTION AUTOCOMPLETE — the browser's own native autofill dropdown on #txDesc
         // (see the v195 CSS comment on input:-webkit-autofill) only prefix-matches from the start
@@ -10278,13 +10527,23 @@
             const sorted = txs.filter(t => t.desc && t.desc.trim()).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
             const seen = new Set();
             const out = [];
+            // v351: separate from the desc-suggest dedupe above — keeps the most recent
+            // (category/type/account) for every distinct description, for Quick Add's history
+            // match. `sorted` is newest-first, so the first time a key is seen here is already
+            // its most recent occurrence — no extra sort/lookup needed.
+            const historyMap = {};
             for (const t of sorted) {
                 const key = t.desc.trim().toLowerCase();
-                if (seen.has(key)) continue;
-                seen.add(key);
-                out.push(t.desc.trim());
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    out.push(t.desc.trim());
+                }
+                if (!(key in historyMap) && t.cat) {
+                    historyMap[key] = { cat: t.cat, type: t.type, src: t.src };
+                }
             }
             dynamicDescSuggestions = out;
+            dynamicDescHistoryMap = historyMap;
         }
 
         // Wraps the matched substring in <mark> so it's visually obvious why each row matched —
@@ -10335,6 +10594,14 @@
             // dropdown left open from a previous session can't linger into this one.
             await loadDescSuggestionsCache();
             closeDescSuggestions();
+
+            // v351: Quick Add is a new-entry-only affordance (see its own comment block above,
+            // near parseQuickAddText()) — always cleared here so leftover text/suggestions from a
+            // previous open never linger, and hidden entirely while editing an existing record.
+            document.getElementById("txQuickAdd").value = "";
+            document.getElementById("txQuickAddCatSuggest").style.display = "none";
+            document.getElementById("txQuickAddCatSuggest").innerHTML = "";
+            document.getElementById("txQuickAddRow").style.display = existingTxId === null ? "flex" : "none";
 
             const accounts = await readAllDB(STORES.ACCOUNTS);
             if(accounts.length === 0) { alert("Add an account first!"); return; }
@@ -10659,6 +10926,17 @@
             syncAccountPickerButtonText("txCategory");
 
             openModal("txModal");
+
+            // v351: autofocus Quick Add on a brand-new entry so the user can start typing the
+            // instant the form is open, no tap needed — the whole point of the feature is
+            // cutting the typing/tapping down, so making them tap the field first would undercut
+            // it. Skipped when editing (the row itself is hidden then). A tiny setTimeout is
+            // needed because openModal()'s own transition/display change hasn't necessarily
+            // finished painting yet on this same tick — focusing an element that's still
+            // display:none (or mid-transition on some mobile browsers) silently no-ops.
+            if (existingTxId === null) {
+                setTimeout(() => document.getElementById("txQuickAdd").focus(), 50);
+            }
         }
 
         // --- SPLIT EXPENSES (v88) ---
@@ -12963,7 +13241,12 @@
             if (accounts.length === 0) { alert("Add an account first!"); return; }
 
             const now = new Date();
-            document.getElementById("salaryDate").value = now.toISOString().slice(0, 10);
+            // v350: was `now.toISOString().slice(0, 10)` — reads the date in UTC, so for the
+            // first ~8 hours after local midnight in a UTC+ timezone (e.g. Malaysia, UTC+8) this
+            // defaulted to YESTERDAY's date instead of today. Switched to todayLocalStr() (same
+            // local-calendar-date helper used everywhere else "today" means "today where the
+            // user is sitting" — see its comment near the top of this file).
+            document.getElementById("salaryDate").value = todayLocalStr();
             const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
             document.getElementById("salaryDesc").value = `${monthNames[now.getMonth()]} ${now.getFullYear()} Salary`;
 
@@ -18004,6 +18287,7 @@
             openReimbursementFromOptions: () => openReimbursementFromOptions(),
             openAccountPicker: (el) => openAccountPicker(el),
             selectDescSuggestion: (el) => selectDescSuggestion(el),
+            applyQuickAddCategory: (el) => applyQuickAddCategory(el),
             navigateToTagsPage: () => navigateToTagsPage(),
             openTagReminderRow: (el) => openTagReminderRow(el),
             openReimbursementFromTagBadge: (el) => openReimbursementFromTagBadge(el),
@@ -18127,6 +18411,7 @@
             recalcTplSplitTotal: () => recalcTplSplitTotal(),
             recalcSalaryPreview: () => recalcSalaryPreview(),
             filterDescSuggestions: (el) => filterDescSuggestions(el),
+            handleQuickAddInput: (el) => handleQuickAddInput(el),
             filterTxTagSuggestions: (el) => filterTxTagSuggestions(el),
             filterTxTagPickerList: (el) => filterTxTagPickerList(el),
             recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),
