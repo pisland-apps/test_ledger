@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v342";
+        const APP_VERSION = "v343";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7681,6 +7681,10 @@
         // list either way, nothing else reads it.
         const COMPANIONS = [
             { id: "none", name: "None" },
+            // v343: "custom" is special-cased throughout (applyCompanionPet, the swatch grid
+            // builder) rather than carrying a fixed `svg` — its artwork is whatever image the
+            // user uploads (see COMPANION_CUSTOM_IMAGE_KEY below), not baked-in line-art.
+            { id: "custom", name: "Custom", group: "Other" },
             {
                 id: "cat", name: "Cat", group: "Other",
                 svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -7838,16 +7842,66 @@
                 </svg>`
             },
         ];
+        // v343: custom-uploaded companion image. Stored as a compressed data URL in localStorage
+        // (device-only, like every other Companion/theme preference — not part of Backup &
+        // Restore's IndexedDB bundle) rather than IndexedDB, since it's a single small string and
+        // every other setting on this exact panel already uses localStorage. Reuses this app's
+        // existing readFileAsDataUrl()/compressImage() helpers (built for receipt attachments) —
+        // capped small (160px, 0.82 quality) since this only ever renders at 34px.
+        const COMPANION_CUSTOM_IMAGE_KEY = "ledgerCompanionCustomImageDataUrl";
+        function getCompanionCustomImage() {
+            try { return localStorage.getItem(COMPANION_CUSTOM_IMAGE_KEY); } catch (e) { return null; }
+        }
+        function triggerCompanionCustomImageUpload() {
+            const input = document.getElementById("companionCustomImageInput");
+            if (input) input.click();
+        }
+        async function handleCompanionCustomImageSelected(input) {
+            const file = input.files && input.files[0];
+            input.value = ""; // allow re-picking the same file later (e.g. after Remove)
+            if (!file) return;
+            try {
+                const rawDataUrl = await readFileAsDataUrl(file);
+                if (!rawDataUrl) return;
+                const compressed = await compressImage(rawDataUrl, 160, 0.82);
+                localStorage.setItem(COMPANION_CUSTOM_IMAGE_KEY, compressed);
+            } catch (e) {
+                alert("Couldn't read that image — please try a different file.");
+                return;
+            }
+            applyCompanionPet("custom");
+            buildCompanionSwatchGrid();
+        }
+        function removeCompanionCustomImage() {
+            try { localStorage.removeItem(COMPANION_CUSTOM_IMAGE_KEY); } catch (e) {}
+            // If Custom was the active companion, there's no image left to show it with — fall
+            // back to None rather than leaving the hero card's slot pointing at nothing.
+            if (getSavedCompanionId() === "custom") applyCompanionPet("none");
+            buildCompanionSwatchGrid();
+        }
         function getSavedCompanionId() {
             const id = localStorage.getItem(COMPANION_KEY);
+            if (id === "custom" && !getCompanionCustomImage()) return "none";
             return COMPANIONS.some(c => c.id === id) ? id : "none";
         }
         function applyCompanionPet(petId, { save = true } = {}) {
             const pet = COMPANIONS.find(c => c.id === petId) || COMPANIONS[0];
             const el = document.getElementById("netWorthCompanion");
             if (el) {
-                if (pet.svg) { el.innerHTML = pet.svg; el.style.display = "flex"; el.title = pet.name + " — tap to change in Settings"; }
-                else { el.innerHTML = ""; el.style.display = "none"; }
+                if (pet.id === "custom") {
+                    const img = getCompanionCustomImage();
+                    if (img) {
+                        el.innerHTML = `<img src="${img}" alt="Companion" style="width:34px; height:34px; object-fit:cover; border-radius:9px;">`;
+                        el.style.display = "flex";
+                        el.title = "Custom — tap to change in Settings";
+                    } else {
+                        el.innerHTML = ""; el.style.display = "none";
+                    }
+                } else if (pet.svg) {
+                    el.innerHTML = pet.svg; el.style.display = "flex"; el.title = pet.name + " — tap to change in Settings";
+                } else {
+                    el.innerHTML = ""; el.style.display = "none";
+                }
             }
             if (save) {
                 try { localStorage.setItem(COMPANION_KEY, pet.id); } catch (e) {}
@@ -7858,11 +7912,28 @@
             const grid = document.getElementById("companionSwatchGrid");
             if (!grid) return;
             const selectedId = getSavedCompanionId();
-            const swatchHTML = c => `
+            const customImg = getCompanionCustomImage();
+            const swatchHTML = c => {
+                // The "Custom" tile behaves differently depending on whether an image has been
+                // uploaded yet: no image → tapping it opens the file picker directly (nothing to
+                // "select" otherwise); an image → it's an ordinary swatch like any other pet.
+                if (c.id === "custom") {
+                    const inner = customImg
+                        ? `<img src="${customImg}" alt="Custom" style="width:100%; height:100%; object-fit:cover; border-radius:12px;">`
+                        : `<span style="color:#fff; font-size:1.3rem; line-height:1;">＋</span>`;
+                    const clickAction = customImg ? "selectCompanion" : "triggerCompanionCustomImageUpload";
+                    return `
+                        <span class="companion-swatch-wrap">
+                            <span class="companion-swatch${c.id === selectedId ? ' selected' : ''}" data-click="${clickAction}" data-pet-id="${c.id}" title="${customImg ? 'Custom' : 'Upload your own image'}">${inner}</span>
+                            <span class="companion-swatch-label">${customImg ? 'Custom' : 'Upload'}</span>
+                        </span>`;
+                }
+                return `
                 <span class="companion-swatch-wrap">
                     <span class="companion-swatch${c.id === selectedId ? ' selected' : ''}" data-click="selectCompanion" data-pet-id="${c.id}" title="${c.name}">${c.svg || '<span style="color:#fff; font-size:0.65rem; font-weight:700;">None</span>'}</span>
                     <span class="companion-swatch-label">${c.name}</span>
                 </span>`;
+            };
             // v342: group into sections (undefined `group` — just "None" — gets no heading and
             // sits on its own row above everything else) instead of one flat 15-item grid, so the
             // 12-strong Chinese Zodiac set doesn't read as one undifferentiated wall of icons.
@@ -7874,6 +7945,10 @@
                 html += `<div class="companion-swatch-grid">${COMPANIONS.filter(c => c.group === g).map(swatchHTML).join("")}</div>`;
             });
             grid.innerHTML = html;
+            // v343: "Change photo" / "Remove" links — only shown once an image actually exists,
+            // so a never-used install sees just the "＋ Upload" tile above with nothing extra.
+            const controls = document.getElementById("companionCustomImageControls");
+            if (controls) controls.style.display = customImg ? "flex" : "none";
         }
         function selectCompanion(el) {
             applyCompanionPet(el.dataset.petId);
@@ -17647,6 +17722,8 @@
             toggleCompanionSettings: () => toggleCompanionSettings(),
             toggleCompanionSettingsFromDashboard: () => toggleCompanionSettingsFromDashboard(),
             selectCompanion: (el) => selectCompanion(el),
+            triggerCompanionCustomImageUpload: () => triggerCompanionCustomImageUpload(),
+            removeCompanionCustomImage: () => removeCompanionCustomImage(),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
@@ -17824,6 +17901,7 @@
             recalcTplSplitTotal: () => recalcTplSplitTotal(),
             syncTransactionCurrency: () => syncTransactionCurrency(),
             handleTxAttachmentsSelected: (el, e) => handleTxAttachmentsSelected(e),
+            handleCompanionCustomImageSelected: (el) => handleCompanionCustomImageSelected(el),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             handleAutoLockChange: () => handleAutoLockChange(),

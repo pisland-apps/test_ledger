@@ -4098,8 +4098,17 @@
                 <span style="color:var(--text-muted);">›</span>
             </div>
             <div id="companionSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">A small mascot next to your Portfolio Net Worth figure. Each preview shows how it actually looks on the card.</p>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">A small mascot next to your Portfolio Net Worth figure. Each preview shows how it actually looks on the card. Tap "＋" to upload your own.</p>
                 <div id="companionSwatchGrid"></div>
+                <!-- v343: hidden file input behind the "＋ Upload" tile / "Change photo" link
+                     below — same accept="image/*" pattern the transaction-attachment inputs use.
+                     No `capture` attribute (unlike the receipt camera input) since a companion
+                     photo is just as likely to come from the gallery as the camera. -->
+                <input type="file" id="companionCustomImageInput" accept="image/*" style="display:none;" data-change="handleCompanionCustomImageSelected">
+                <div id="companionCustomImageControls" style="display:none; gap:14px; margin-top:2px;">
+                    <button type="button" class="text-btn" data-click="triggerCompanionCustomImageUpload">🔄 Change photo</button>
+                    <button type="button" class="text-btn" data-click="removeCompanionCustomImage">🗑 Remove</button>
+                </div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
                 <span>📊 <strong>Dashboard Widgets</strong></span>

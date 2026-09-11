@@ -2123,3 +2123,38 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v342.
+
+## v343: Companion — upload your own custom image
+
+- **Setting > 🐾 Companion** now has a "＋" tile at the front of the
+  "Other" group. Tap it (no image uploaded yet) to open the file
+  picker (camera or gallery — same `accept="image/*"` pattern the
+  transaction-attachment inputs already use, no `capture` attribute
+  since a companion photo is as likely to come from the gallery as
+  the camera). Once uploaded, that tile shows the photo itself and
+  behaves like any other swatch — tap to select/deselect it as the
+  active companion.
+- **"🔄 Change photo" / "🗑 Remove"** links appear below the grid once
+  an image has been uploaded (hidden entirely before that, so a
+  never-used install sees just the "＋" tile). Remove clears the
+  stored image and, if Custom was the active companion, falls back to
+  None automatically rather than leaving the hero card's slot pointing
+  at a deleted image.
+- **Reused this app's existing image pipeline** —
+  `readFileAsDataUrl()` + `compressImage()` (both already built for
+  receipt attachments) — resized to 160px / quality 0.82, small enough
+  to comfortably live in `localStorage`
+  (`ledgerCompanionCustomImageDataUrl`) alongside every other
+  Companion/theme preference on this panel. No CSP change needed —
+  `img-src 'self' data:` already covers a data-URL `<img>` (it's the
+  same policy that already lets receipt attachments render).
+- **Device-local, like the rest of Companion/theme settings** — not
+  bundled into the Backup & Restore JSON export (same category as Net
+  Worth Card Style, Background Theme, etc.), so a custom photo doesn't
+  travel with a backup restored onto a different device.
+- No IndexedDB schema/export-import changes. Verified with
+  `node --check` plus the data-click/data-change/`getElementById`
+  cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v343.
