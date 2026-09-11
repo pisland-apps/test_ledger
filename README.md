@@ -2177,3 +2177,37 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v344.
+
+## v345: Companion custom image — crop-to-square at upload time (not
+stretch at display time)
+
+- **New `cropImageToSquare()`** (`ledger.js`, next to the existing
+  `compressImage()`): center-crops the source photo to a square (crops
+  the longer axis, centered — a wide photo loses its left/right
+  edges, a tall one loses top/bottom) and resizes to 160×160, output
+  as PNG (not JPEG like `compressImage()`) so a source image with real
+  transparency stays transparent instead of being flattened to black.
+- **`handleCompanionCustomImageSelected()`** now calls this instead of
+  the aspect-preserving `compressImage()` — every upload is squared up
+  once, at upload time, rather than distorted every time it's
+  rendered.
+- **v344's `object-fit:fill` reverted back to `object-fit:cover`** on
+  both render sites (hero-card slot, Settings swatch preview) — the
+  stored image is already a perfect square now, so cover/fill produce
+  an identical result with zero distortion either way; cover is the
+  more correct choice going forward.
+- **Note on a reported screenshot**: a checkerboard pattern appearing
+  *behind* the uploaded icon (rather than the app's own card
+  background showing through) means that checkerboard is baked into
+  the source image's own pixels, not real alpha transparency — this
+  usually happens when a file was exported, or a screenshot taken,
+  from a design tool with its "show transparency grid" preview left
+  on. Cropping/PNG-output can't remove pixels that are already opaque
+  gray/white squares in the file; re-exporting that source image with
+  a genuinely transparent or solid background (then re-uploading)
+  is the fix on the content side.
+- No IndexedDB schema/export-import changes — still a `localStorage`-
+  only device preference. Verified with `node --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v345.
