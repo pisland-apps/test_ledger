@@ -2091,3 +2091,35 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v341.
+
+## v342: Companion — added the 12 Chinese zodiac animals
+
+- **Setting > 🐾 Companion** now lists 15 options total: None, then an
+  "Other" group (Cat, Hamster — carried over from v341), then a new
+  "Chinese Zodiac" (十二生肖) group — Rat, Ox, Tiger, Rabbit, Dragon,
+  Snake, Horse, Goat, Monkey, Rooster, Dog, Pig, in the traditional
+  cycle order. Dog and Rabbit moved out of the old flat list into this
+  zodiac group rather than being listed twice.
+- Same original hand-drawn line-art approach as v341 (`COMPANIONS` in
+  `ledger.js`, stroke=currentColor) — each animal gets a distinguishing
+  ear/horn/snout shape so they read apart at swatch size; Snake is the
+  one exception to the "circular head" template (a coiled body + small
+  head, since a zodiac snake with cat/dog-style ears wouldn't read as
+  a snake).
+- **Settings panel now groups the list** under small section labels
+  instead of one flat 15-icon grid — `buildCompanionSwatchGrid()`
+  reads each entry's new optional `group` field (`"Other"` /
+  `"Chinese Zodiac"`; ungrouped = just "None", shown on its own row
+  with no heading) and renders one `.companion-swatch-grid` row per
+  group under a `.companion-group-label` heading. `#companionSwatchGrid`
+  itself is now a plain block wrapper (was itself flex before) so the
+  group rows stack vertically instead of wrapping together.
+- No storage/behavior change to how a pick is saved or rendered on the
+  dashboard (`ledgerCompanionPetId` / `applyCompanionPet()` unchanged)
+  — this release only adds more options and a grouped picker UI.
+  Verified with `node --check`, the data-click/`getElementById`
+  cross-reference script (0 missing), and an XML well-formedness check
+  on all 14 new/carried-over SVGs (0 malformed).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v342.

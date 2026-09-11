@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v341";
-        const APP_VERSION_DATE = "2026-09-10";
+        const APP_VERSION = "v342";
+        const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -7676,10 +7676,13 @@
         const COMPANION_KEY = "ledgerCompanionPetId";
         // Each pet is one small hand-built SVG (viewBox 0 0 48 48, stroke=currentColor, round
         // caps/joins — same Feather-style outline language the header's Save/Lock icons use).
+        // v342: added the 12 Chinese zodiac animals as their own group, alongside the original 4.
+        // `group` just drives the section heading in buildCompanionSwatchGrid() — same option
+        // list either way, nothing else reads it.
         const COMPANIONS = [
             { id: "none", name: "None" },
             {
-                id: "cat", name: "Cat",
+                id: "cat", name: "Cat", group: "Other",
                 svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M14 16 L18 8 L22 16" /><path d="M34 16 L30 8 L26 16" />
                     <circle cx="24" cy="26" r="12" />
@@ -7690,7 +7693,129 @@
                 </svg>`
             },
             {
-                id: "dog", name: "Dog",
+                id: "hamster", name: "Hamster", group: "Other",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="15" cy="14" r="4.5" /><circle cx="33" cy="14" r="4.5" />
+                    <circle cx="24" cy="27" r="12" />
+                    <circle cx="18" cy="29" r="4" opacity="0.55" /><circle cx="30" cy="29" r="4" opacity="0.55" />
+                    <circle cx="20" cy="25" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28" cy="25" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="M22.5 29 q1.5 1.5 3 0" />
+                </svg>`
+            },
+            // --- 12 Chinese zodiac animals (十二生肖) — same one-head-icon language as above,
+            // each with a distinguishing ear/horn/snout so they read apart from each other at
+            // swatch size. Rat→Pig is the traditional cycle order.
+            {
+                id: "rat", name: "Rat", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="16" cy="16" r="3.5" /><circle cx="32" cy="16" r="3.5" />
+                    <circle cx="24" cy="28" r="11" />
+                    <path d="M24 33 L24 36" />
+                    <circle cx="20" cy="26" r="1.4" fill="currentColor" stroke="none" />
+                    <circle cx="28" cy="26" r="1.4" fill="currentColor" stroke="none" />
+                    <path d="M7 27 h7 M7 31 h7" opacity="0.7" /><path d="M34 27 h7 M34 31 h7" opacity="0.7" />
+                </svg>`
+            },
+            {
+                id: "ox", name: "Ox", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 18 C9 11 15 9 18 14" /><path d="M39 18 C39 11 33 9 30 14" />
+                    <ellipse cx="24" cy="27" rx="13" ry="11.5" />
+                    <circle cx="19.5" cy="25" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="25" r="1.5" fill="currentColor" stroke="none" />
+                    <ellipse cx="24" cy="33" rx="6" ry="4" />
+                    <circle cx="21.5" cy="33" r="0.9" fill="currentColor" stroke="none" />
+                    <circle cx="26.5" cy="33" r="0.9" fill="currentColor" stroke="none" />
+                </svg>`
+            },
+            {
+                id: "tiger", name: "Tiger", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 18 L16 8 L21 17" /><path d="M36 18 L32 8 L27 17" />
+                    <circle cx="24" cy="27" r="12" />
+                    <circle cx="19" cy="26" r="1.6" fill="currentColor" stroke="none" />
+                    <circle cx="29" cy="26" r="1.6" fill="currentColor" stroke="none" />
+                    <path d="M22 32 q2 2 4 0" />
+                    <path d="M14 22 l4 2 M34 22 l-4 2 M16 31 l4 1 M32 31 l-4 1" opacity="0.7" />
+                </svg>`
+            },
+            {
+                id: "rabbit", name: "Rabbit", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 22 C14 14 15 6 18.5 5 C21 4 21 12 21 19" />
+                    <path d="M31 22 C34 14 33 6 29.5 5 C27 4 27 12 27 19" />
+                    <circle cx="24" cy="29" r="11" />
+                    <circle cx="19.5" cy="28" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="28" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="M22.5 32 q1.5 1.5 3 0" />
+                </svg>`
+            },
+            {
+                id: "dragon", name: "Dragon", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M13 15 L16 6 L19 13 L22 5" /><path d="M35 15 L32 6 L29 13 L26 5" />
+                    <circle cx="24" cy="27" r="12" />
+                    <path d="M12 24 q-4 1 -5 5 M36 24 q4 1 5 5" />
+                    <circle cx="19.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="M22 33 q2 2 4 0" />
+                </svg>`
+            },
+            {
+                id: "snake", name: "Snake", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M12 38 C12 30 22 30 22 22 C22 14 12 14 12 8" />
+                    <circle cx="12" cy="8" r="5" />
+                    <circle cx="10" cy="6.5" r="1" fill="currentColor" stroke="none" />
+                    <path d="M8 11 l-3 3 M8 11 l1 4" opacity="0.8" />
+                </svg>`
+            },
+            {
+                id: "horse", name: "Horse", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M15 16 L13 7 L20 14" /><path d="M33 16 L35 7 L28 14" />
+                    <path d="M18 8 q6 -3 12 0" opacity="0.7" />
+                    <ellipse cx="24" cy="28" rx="11" ry="12" />
+                    <circle cx="19.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <ellipse cx="24" cy="35" rx="4" ry="2.6" />
+                </svg>`
+            },
+            {
+                id: "goat", name: "Goat", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 18 C8 16 8 10 13 8 C16 11 15 15 16 18" />
+                    <path d="M34 18 C40 16 40 10 35 8 C32 11 33 15 32 18" />
+                    <circle cx="24" cy="27" r="12" />
+                    <circle cx="19.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="M22 33 l0 3 M24 33.5 l0 3.5 M26 33 l0 3" opacity="0.8" />
+                </svg>`
+            },
+            {
+                id: "monkey", name: "Monkey", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="12" cy="24" r="5.5" /><circle cx="36" cy="24" r="5.5" />
+                    <circle cx="24" cy="27" r="11" />
+                    <path d="M18 22 q2 -2 4 0 M26 22 q2 -2 4 0" opacity="0.8" />
+                    <circle cx="19.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <ellipse cx="24" cy="33" rx="4" ry="2.6" />
+                </svg>`
+            },
+            {
+                id: "rooster", name: "Rooster", group: "Chinese Zodiac",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M16 14 q2 -6 4 0 q2 -7 4 0 q2 -6 4 0" />
+                    <circle cx="23" cy="28" r="11" />
+                    <path d="M12 30 q-4 1 -3 5" />
+                    <circle cx="19.5" cy="27" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="M34 28 L41 30 L34 32 Z" />
+                </svg>`
+            },
+            {
+                id: "dog", name: "Dog", group: "Chinese Zodiac",
                 svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M13 14 q-4 6 -1 14" /><path d="M35 14 q4 6 1 14" />
                     <circle cx="24" cy="27" r="12" />
@@ -7701,25 +7826,15 @@
                 </svg>`
             },
             {
-                id: "hamster", name: "Hamster",
+                id: "pig", name: "Pig", group: "Chinese Zodiac",
                 svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="15" cy="14" r="4.5" /><circle cx="33" cy="14" r="4.5" />
-                    <circle cx="24" cy="27" r="12" />
-                    <circle cx="18" cy="29" r="4" opacity="0.55" /><circle cx="30" cy="29" r="4" opacity="0.55" />
-                    <circle cx="20" cy="25" r="1.5" fill="currentColor" stroke="none" />
-                    <circle cx="28" cy="25" r="1.5" fill="currentColor" stroke="none" />
-                    <path d="M22.5 29 q1.5 1.5 3 0" />
-                </svg>`
-            },
-            {
-                id: "rabbit", name: "Rabbit",
-                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M17 22 C14 14 15 6 18.5 5 C21 4 21 12 21 19" />
-                    <path d="M31 22 C34 14 33 6 29.5 5 C27 4 27 12 27 19" />
-                    <circle cx="24" cy="29" r="11" />
-                    <circle cx="19.5" cy="28" r="1.5" fill="currentColor" stroke="none" />
-                    <circle cx="28.5" cy="28" r="1.5" fill="currentColor" stroke="none" />
-                    <path d="M22.5 32 q1.5 1.5 3 0" />
+                    <path d="M13 17 q-2 -5 3 -6 q2 4 0 7" /><path d="M35 17 q2 -5 -3 -6 q-2 4 0 7" />
+                    <circle cx="24" cy="28" r="12" />
+                    <circle cx="19.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="26" r="1.5" fill="currentColor" stroke="none" />
+                    <ellipse cx="24" cy="33" rx="5.5" ry="4" />
+                    <circle cx="21.5" cy="33" r="0.9" fill="currentColor" stroke="none" />
+                    <circle cx="26.5" cy="33" r="0.9" fill="currentColor" stroke="none" />
                 </svg>`
             },
         ];
@@ -7743,12 +7858,22 @@
             const grid = document.getElementById("companionSwatchGrid");
             if (!grid) return;
             const selectedId = getSavedCompanionId();
-            grid.innerHTML = COMPANIONS.map(c => `
+            const swatchHTML = c => `
                 <span class="companion-swatch-wrap">
                     <span class="companion-swatch${c.id === selectedId ? ' selected' : ''}" data-click="selectCompanion" data-pet-id="${c.id}" title="${c.name}">${c.svg || '<span style="color:#fff; font-size:0.65rem; font-weight:700;">None</span>'}</span>
                     <span class="companion-swatch-label">${c.name}</span>
-                </span>
-            `).join("");
+                </span>`;
+            // v342: group into sections (undefined `group` — just "None" — gets no heading and
+            // sits on its own row above everything else) instead of one flat 15-item grid, so the
+            // 12-strong Chinese Zodiac set doesn't read as one undifferentiated wall of icons.
+            const ungrouped = COMPANIONS.filter(c => !c.group);
+            const groups = [...new Set(COMPANIONS.filter(c => c.group).map(c => c.group))];
+            let html = `<div class="companion-swatch-grid">${ungrouped.map(swatchHTML).join("")}</div>`;
+            groups.forEach(g => {
+                html += `<p class="companion-group-label">${g}</p>`;
+                html += `<div class="companion-swatch-grid">${COMPANIONS.filter(c => c.group === g).map(swatchHTML).join("")}</div>`;
+            });
+            grid.innerHTML = html;
         }
         function selectCompanion(el) {
             applyCompanionPet(el.dataset.petId);

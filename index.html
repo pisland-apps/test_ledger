@@ -365,6 +365,10 @@
         .companion-swatch.selected { border-color: var(--text-main); box-shadow: none; }
         .companion-swatch svg { width: 30px; height: 30px; display: block; }
         .companion-swatch-label { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-align: center; line-height: 1.2; }
+        /* v342: section heading between groups (e.g. "Chinese Zodiac") inside #companionSwatchGrid
+           — that element is now a plain block wrapper; only each group's own nested
+           .companion-swatch-grid row is flex, so labels stack above their row correctly. */
+        .companion-group-label { font-size: 0.7rem; color: var(--text-muted); font-weight: 700; margin: 10px 0 2px; }
 
         /* v162: single flex cluster for Base/Save/Lock — sibling of .top-bar under
            .dashboard-header-row (see comment there). margin-left:auto is what actually pins it
@@ -4095,7 +4099,7 @@
             </div>
             <div id="companionSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">A small mascot next to your Portfolio Net Worth figure. Each preview shows how it actually looks on the card.</p>
-                <div class="companion-swatch-grid" id="companionSwatchGrid"></div>
+                <div id="companionSwatchGrid"></div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
                 <span>📊 <strong>Dashboard Widgets</strong></span>
