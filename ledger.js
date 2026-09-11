@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v348";
+        const APP_VERSION = "v349";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7685,28 +7685,8 @@
             // below), not a fixed slot in this array. A saved photo's pet id is "custom:<photoId>"
             // — see applyCompanionPet()/getSavedCompanionId(), which special-case that prefix the
             // same way this array's `svg`-less entries are special-cased.
-            {
-                id: "cat", name: "Cat", group: "Other",
-                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M14 16 L18 8 L22 16" /><path d="M34 16 L30 8 L26 16" />
-                    <circle cx="24" cy="26" r="12" />
-                    <circle cx="19" cy="25" r="1.6" fill="currentColor" stroke="none" />
-                    <circle cx="29" cy="25" r="1.6" fill="currentColor" stroke="none" />
-                    <path d="M22 31 q2 2 4 0" />
-                    <path d="M9 24 h6 M9 29 h6" opacity="0.7" /><path d="M33 24 h6 M33 29 h6" opacity="0.7" />
-                </svg>`
-            },
-            {
-                id: "hamster", name: "Hamster", group: "Other",
-                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <circle cx="15" cy="14" r="4.5" /><circle cx="33" cy="14" r="4.5" />
-                    <circle cx="24" cy="27" r="12" />
-                    <circle cx="18" cy="29" r="4" opacity="0.55" /><circle cx="30" cy="29" r="4" opacity="0.55" />
-                    <circle cx="20" cy="25" r="1.5" fill="currentColor" stroke="none" />
-                    <circle cx="28" cy="25" r="1.5" fill="currentColor" stroke="none" />
-                    <path d="M22.5 29 q1.5 1.5 3 0" />
-                </svg>`
-            },
+            // v349: the "Other" group (Cat, Hamster) was dropped per request, leaving Chinese
+            // Zodiac as the only built-in icon group.
             // --- 12 Chinese zodiac animals (十二生肖) — same one-head-icon language as above,
             // each with a distinguishing ear/horn/snout so they read apart from each other at
             // swatch size. Rat→Pig is the traditional cycle order.
@@ -7768,11 +7748,18 @@
             },
             {
                 id: "snake", name: "Snake", group: "Chinese Zodiac",
-                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M12 38 C12 30 22 30 22 22 C22 14 12 14 12 8" />
-                    <circle cx="12" cy="8" r="5" />
-                    <circle cx="10" cy="6.5" r="1" fill="currentColor" stroke="none" />
-                    <path d="M8 11 l-3 3 M8 11 l1 4" opacity="0.8" />
+                // v349: redesigned — the old thin single-stroke S-curve + plain circle read as a
+                // squiggle with a blob, not a snake (reported via screenshot). Now a thick coiled
+                // body (stroke-width 4.5, vs. the thin 2px outline every other icon uses for its
+                // body) so it reads as a snake's girth rather than a wire, feeding into a
+                // distinct wider head with an eye and a forked tongue — still the one exception
+                // to the shared "circular head" template (see the v342 note above), just a
+                // clearer version of that same exception.
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 40 C9 33 21 33 21 26 C21 19 9 19 9 12 C9 7 16 5 23 8" />
+                    <ellipse cx="30" cy="9" rx="6.5" ry="5" stroke-width="2.4" />
+                    <circle cx="27.5" cy="7.5" r="1.1" fill="currentColor" stroke="none" />
+                    <path d="M36 8 L40.5 6 M36 10 L40.5 12" stroke-width="1.8" opacity="0.85" />
                 </svg>`
             },
             {

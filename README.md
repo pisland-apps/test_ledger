@@ -2327,3 +2327,26 @@ switch between them later, and remove one at a time.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v348.
+
+## v349: dropped the "Other" icon group, redrew Snake
+
+- **Removed Cat and Hamster** (the "Other" group) from `COMPANIONS` —
+  requested directly. Chinese Zodiac is now the only built-in icon
+  group; "My Photos" is unaffected. Anyone who had Cat or Hamster
+  selected falls back to None automatically (`getSavedCompanionId()`'s
+  existing "unknown id → none" guard, unchanged) — no crash, no
+  special-case needed for the removal itself.
+- **Redrew the Snake icon** — reported as reading like a squiggly
+  string with a blob rather than a snake. Was a single 2px-stroke
+  S-curve + a plain circle "head"; now a thick coiled body
+  (stroke-width 4.5, vs. the thin 2px outline every other icon's body
+  uses) feeding into a distinctly wider head with a visible eye and a
+  forked tongue. Still the one exception to the shared "circular head"
+  template the other 11 zodiac icons use (noted since v342) — just a
+  clearer version of that same exception.
+- Verified with `node --check`, the data-click/`getElementById`
+  cross-reference script (0 missing), and an XML well-formedness check
+  on all 12 remaining zodiac SVGs (0 malformed).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v349.
