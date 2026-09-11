@@ -2233,3 +2233,97 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v346.
+
+## v347: Companion (pet pick + custom image) now travels with Backup &
+Restore
+
+Previously Companion was deliberately device-local, like Background
+Theme and Net Worth Card Style — stored in `localStorage`
+(`ledgerCompanionPetId` / `ledgerCompanionCustomImageDataUrl`), excluded
+from the export bundle. Requested: make it carry over to a new device.
+
+- **Moved into the IndexedDB `settings` store** — the same store
+  `defaultPaymentAccount`/`recentTxTypeFilter`/etc. already live in —
+  under new keys `companionPetId` / `companionCustomImage`.
+  `exportBackup()` already dumps this entire store
+  (`settings: await readAllDB(STORES.SETTINGS)`, since v65), so both
+  values are now included in every export automatically — no bundle
+  format change needed.
+- **`importBackup()`** writes every `bundle.settings` row back via the
+  existing generic `writeDB(STORES.SETTINGS, rec)` call (unchanged),
+  then — after every row has been written — calls
+  `applyCompanionPet(await getSavedCompanionId(), { save: false })`
+  once to repaint the dashboard's mascot slot immediately, instead of
+  only taking effect on the next launch. This is a single reapply
+  after the whole settings loop, not a per-key `switch` case like most
+  other settings here, specifically so it's order-independent: if
+  `companionCustomImage` happens to appear after `companionPetId` in
+  the bundle array, a per-key case could try to paint "custom" before
+  its image was actually in the store yet.
+- **One-time migration** (`migrateCompanionPrefsFromLocalStorage()`,
+  called from `bootstrap()`): copies a v341-v346 install's existing
+  `localStorage` pick/custom image into the new IndexedDB keys once,
+  then clears the old `localStorage` entries. No-op on a fresh v347+
+  install or once already migrated.
+- **Every Companion getter/setter is now `async`** (`getSavedCompanionId()`,
+  `getCompanionCustomImage()`, `applyCompanionPet()`,
+  `buildCompanionSwatchGrid()`, `selectCompanion()`,
+  `toggleCompanionSettings()`, `removeCompanionCustomImage()`,
+  `handleCompanionCustomImageSelected()`) — IndexedDB, unlike
+  `localStorage`, has no synchronous read. The one-time "apply the
+  saved pick" call also moved out of the top-level script-parse code
+  (where it ran synchronously before v347, alongside Background Theme/
+  Net Worth Card Style) into `bootstrap()`, since it now needs
+  `initDB()` to have already run — timing-safe here because the
+  mascot slot only ever appears after unlock anyway, never on the lock
+  screen itself.
+- Background Theme and Net Worth Card Style remain `localStorage`-only
+  and still do **not** travel with a backup — that's an intentional,
+  unchanged distinction: those are built-in presets already available
+  on any install, whereas a custom photo has nowhere else to come
+  from.
+- Verified with `node --check` plus the data-click/data-change/
+  `getElementById` cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v347.
+
+## v348: Companion custom photo — save up to 20, pick between them,
+remove individually
+
+Previously "Custom" was one fixed slot — uploading a new photo
+silently replaced whatever was there before. Requested: save several,
+switch between them later, and remove one at a time.
+
+- **New "My Photos" group** in Setting > 🐾 Companion, below the
+  built-in Chinese Zodiac/Other icons — shows every photo you've
+  saved (up to 20), each as its own selectable swatch, with an
+  "＋ Add" tile at the end for as long as there's room. The group
+  heading shows a running count, e.g. "My Photos (3/20)".
+- **Tap a saved photo** to make it the active companion — switching
+  back and forth between saved photos no longer means re-uploading.
+- **Each photo has its own "×" badge** (top-right corner of its
+  thumbnail) to remove just that one, with a confirmation prompt
+  first. If the one you remove was the active companion, it falls
+  back to None.
+- **At 20 saved photos**, the "＋ Add" tile disappears and tapping an
+  already-full library's upload path (shouldn't be reachable, but
+  guarded anyway) shows an alert asking you to remove one first.
+- **Storage**: replaced the single `companionCustomImage` settings row
+  with `companionCustomImages` — one settings row holding an array of
+  `{id, dataUrl}`, still in the same IndexedDB `settings` store as
+  before, so the whole library continues to travel with Backup &
+  Restore (v347) with no further changes needed there. A saved photo's
+  Companion pick is now the string `"custom:<photoId>"` instead of the
+  old flat `"custom"`.
+- **Migration** (`migrateCompanionSingleImageToLibrary()`, called from
+  `bootstrap()` right after v347's localStorage migration): anyone
+  upgrading from v343-v347 has their one existing custom photo carried
+  over automatically as the first "My Photos" entry, with their pick
+  remapped from `"custom"` to `"custom:<newId>"` to match. No-op on a
+  fresh v348+ install.
+- Verified with `node --check` plus the data-click/data-change/
+  `getElementById` cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v348.

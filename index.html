@@ -369,6 +369,16 @@
            — that element is now a plain block wrapper; only each group's own nested
            .companion-swatch-grid row is flex, so labels stack above their row correctly. */
         .companion-group-label { font-size: 0.7rem; color: var(--text-muted); font-weight: 700; margin: 10px 0 2px; }
+        /* v348: "×" remove badge on each saved photo's swatch (My Photos group) — the holder is
+           just a positioning wrapper so the badge can sit half-off the swatch's corner without
+           affecting the swatch's own 48x48 box or its neighbors' layout in the wrapping grid. */
+        .companion-swatch-photo-holder { position: relative; width: 48px; height: 48px; }
+        .companion-swatch-remove {
+            position: absolute; top: -6px; right: -6px; width: 18px; height: 18px;
+            border-radius: 50%; background: var(--card-bg); border: 1px solid var(--border-color);
+            color: var(--text-main); font-size: 0.75rem; line-height: 1; font-weight: 700;
+            display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0;
+        }
 
         /* v162: single flex cluster for Base/Save/Lock — sibling of .top-bar under
            .dashboard-header-row (see comment there). margin-left:auto is what actually pins it
@@ -4098,17 +4108,13 @@
                 <span style="color:var(--text-muted);">›</span>
             </div>
             <div id="companionSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">A small mascot next to your Portfolio Net Worth figure. Each preview shows how it actually looks on the card. Tap "＋" to upload your own.</p>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">A small mascot next to your Portfolio Net Worth figure. Each preview shows how it actually looks on the card. Save up to 20 of your own photos below and switch between them any time — tap the "×" on a photo to remove it.</p>
                 <div id="companionSwatchGrid"></div>
-                <!-- v343: hidden file input behind the "＋ Upload" tile / "Change photo" link
-                     below — same accept="image/*" pattern the transaction-attachment inputs use.
-                     No `capture` attribute (unlike the receipt camera input) since a companion
-                     photo is just as likely to come from the gallery as the camera. -->
+                <!-- v343: hidden file input behind the "My Photos" group's "＋ Add" tile — same
+                     accept="image/*" pattern the transaction-attachment inputs use. No `capture`
+                     attribute (unlike the receipt camera input) since a companion photo is just
+                     as likely to come from the gallery as the camera. -->
                 <input type="file" id="companionCustomImageInput" accept="image/*" style="display:none;" data-change="handleCompanionCustomImageSelected">
-                <div id="companionCustomImageControls" style="display:none; gap:14px; margin-top:2px;">
-                    <button type="button" class="text-btn" data-click="triggerCompanionCustomImageUpload">🔄 Change photo</button>
-                    <button type="button" class="text-btn" data-click="removeCompanionCustomImage">🗑 Remove</button>
-                </div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
                 <span>📊 <strong>Dashboard Widgets</strong></span>
