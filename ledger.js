@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v345";
+        const APP_VERSION = "v346";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7895,13 +7895,14 @@
                 if (pet.id === "custom") {
                     const img = getCompanionCustomImage();
                     if (img) {
-                        // v345: object-fit:cover again (v344's object-fit:fill stretch is no
-                        // longer needed) — the stored image is already center-cropped to a
-                        // perfect square by cropImageToSquare() at upload time, so cover and fill
-                        // now produce an identical result with no distortion either way; cover is
-                        // the more correct choice going forward (e.g. if a future non-square
-                        // container ever reuses this image).
-                        el.innerHTML = `<img src="${img}" alt="Companion" style="width:34px; height:34px; object-fit:cover; border-radius:9px;">`;
+                        // v346: fills the full 52x52 chip now (was fixed at 34x34, like the SVG
+                        // icons, leaving a visible ring of the chip's translucent background
+                        // around the photo — reported via screenshot). A real photo reads better
+                        // filling its box edge-to-edge than sitting inset like a small glyph; the
+                        // SVG mascots keep their 34px inset look via the .net-worth-companion svg
+                        // rule, untouched. border-radius matches the chip's own 14px minus its
+                        // 1px border so the photo's corners sit flush with the chip's.
+                        el.innerHTML = `<img src="${img}" alt="Companion" style="width:100%; height:100%; object-fit:cover; border-radius:13px;">`;
                         el.style.display = "flex";
                         el.title = "Custom — tap to change in Settings";
                     } else {

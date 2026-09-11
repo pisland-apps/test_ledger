@@ -2211,3 +2211,25 @@ stretch at display time)
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v345.
+
+## v346: Companion custom photo now fills its dashboard chip completely
+
+- **Reported via screenshot**: the uploaded photo rendered at a fixed
+  34x34 inside the 52x52 chip — same inset sizing as the SVG mascot
+  icons — leaving a visible ring of the chip's translucent background
+  around it instead of filling the box.
+- **Fix**: the custom-image branch of `applyCompanionPet()` now
+  renders the `<img>` at `width:100%; height:100%` (border-radius 13px,
+  matching the chip's own 14px minus its 1px border) instead of a
+  fixed 34px — so a photo now fills the chip edge-to-edge. The SVG
+  zodiac/pet icons are untouched (still 34px inset via the existing
+  `.net-worth-companion svg` rule) — this only changes how an uploaded
+  photo renders, not the built-in icon set.
+- The Settings swatch preview already filled its box this way since
+  v341 — this brings the dashboard's own chip in line with it.
+- Purely a display fix — no change to upload/crop/storage
+  (`cropImageToSquare()`, `ledgerCompanionCustomImageDataUrl`).
+  Verified with `node --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v346.
