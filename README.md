@@ -2063,3 +2063,31 @@ keeps a dropdown entry to display against).
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v114.
+
+## v341: new "Companion" mascot on the Portfolio Net Worth card
+
+- **New Setting (Setting > 🐾 Companion)**: pick a small optional mascot
+  — None (default), Cat, Dog, Hamster, or Rabbit — shown in the Portfolio
+  Net Worth card's own right-hand gutter (`.net-worth-container` is
+  already `display:flex; justify-content:space-between`, so the new
+  `#netWorthCompanion` slot lands there for free, no layout change
+  needed). Tapping the mascot on the dashboard jumps straight into
+  Setting > Companion, expanded.
+- Every pet is original hand-built line-art (`COMPANIONS` in
+  `ledger.js`, viewBox 0 0 48 48, stroke=currentColor) drawn in the
+  same translucent-white treatment the card's Financial Assets/Real
+  Estate chips already use — one asset per pet reads correctly against
+  every Net Worth Card Style gradient (Classic/Sunset/Ocean/etc.),
+  with no separate light/dark artwork to maintain. Each Settings
+  swatch previews the mascot exactly as it renders on the card.
+- Persisted to `localStorage` (`ledgerCompanionPetId`), same pattern as
+  Net Worth Card Style — applied once on script parse via
+  `applyCompanionPet()`, no `renderApp()` involvement needed since the
+  slot is static markup like `#netWorthDisplay`.
+- No IndexedDB schema/export-import changes (this is a device-local
+  display preference, same category as Net Worth Card Style — not
+  bundled into Backup & Restore). Verified with `node --check` plus
+  the data-click/`getElementById` cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v341.

@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v342";
+        const APP_VERSION = "v341";
         const APP_VERSION_DATE = "2026-09-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -7665,6 +7665,113 @@
             panel.style.display = isHidden ? "flex" : "none";
         }
 
+        // --- v341: Companion (Setting page) --------------------------------------------------
+        // A small optional mascot in the Portfolio Net Worth card's own right-hand gutter (see
+        // .net-worth-companion — .net-worth-container is already display:flex +
+        // justify-content:space-between, so this second child lands there for free). Original
+        // line-art (not a copy of any reference art), drawn in currentColor so a single asset per
+        // pet works against every Net Worth Card Style gradient (Classic/Sunset/Ocean/etc.) —
+        // same translucent-white chip treatment the card's Financial Assets/Real Estate rows
+        // already use, so there's no separate "light theme" / "dark theme" asset to maintain.
+        const COMPANION_KEY = "ledgerCompanionPetId";
+        // Each pet is one small hand-built SVG (viewBox 0 0 48 48, stroke=currentColor, round
+        // caps/joins — same Feather-style outline language the header's Save/Lock icons use).
+        const COMPANIONS = [
+            { id: "none", name: "None" },
+            {
+                id: "cat", name: "Cat",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 16 L18 8 L22 16" /><path d="M34 16 L30 8 L26 16" />
+                    <circle cx="24" cy="26" r="12" />
+                    <circle cx="19" cy="25" r="1.6" fill="currentColor" stroke="none" />
+                    <circle cx="29" cy="25" r="1.6" fill="currentColor" stroke="none" />
+                    <path d="M22 31 q2 2 4 0" />
+                    <path d="M9 24 h6 M9 29 h6" opacity="0.7" /><path d="M33 24 h6 M33 29 h6" opacity="0.7" />
+                </svg>`
+            },
+            {
+                id: "dog", name: "Dog",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M13 14 q-4 6 -1 14" /><path d="M35 14 q4 6 1 14" />
+                    <circle cx="24" cy="27" r="12" />
+                    <circle cx="19.5" cy="26" r="1.6" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="26" r="1.6" fill="currentColor" stroke="none" />
+                    <ellipse cx="24" cy="30" rx="2.4" ry="1.8" fill="currentColor" stroke="none" />
+                    <path d="M24 32 v2 q0 2 3 2" />
+                </svg>`
+            },
+            {
+                id: "hamster", name: "Hamster",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="15" cy="14" r="4.5" /><circle cx="33" cy="14" r="4.5" />
+                    <circle cx="24" cy="27" r="12" />
+                    <circle cx="18" cy="29" r="4" opacity="0.55" /><circle cx="30" cy="29" r="4" opacity="0.55" />
+                    <circle cx="20" cy="25" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28" cy="25" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="M22.5 29 q1.5 1.5 3 0" />
+                </svg>`
+            },
+            {
+                id: "rabbit", name: "Rabbit",
+                svg: `<svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M17 22 C14 14 15 6 18.5 5 C21 4 21 12 21 19" />
+                    <path d="M31 22 C34 14 33 6 29.5 5 C27 4 27 12 27 19" />
+                    <circle cx="24" cy="29" r="11" />
+                    <circle cx="19.5" cy="28" r="1.5" fill="currentColor" stroke="none" />
+                    <circle cx="28.5" cy="28" r="1.5" fill="currentColor" stroke="none" />
+                    <path d="M22.5 32 q1.5 1.5 3 0" />
+                </svg>`
+            },
+        ];
+        function getSavedCompanionId() {
+            const id = localStorage.getItem(COMPANION_KEY);
+            return COMPANIONS.some(c => c.id === id) ? id : "none";
+        }
+        function applyCompanionPet(petId, { save = true } = {}) {
+            const pet = COMPANIONS.find(c => c.id === petId) || COMPANIONS[0];
+            const el = document.getElementById("netWorthCompanion");
+            if (el) {
+                if (pet.svg) { el.innerHTML = pet.svg; el.style.display = "flex"; el.title = pet.name + " — tap to change in Settings"; }
+                else { el.innerHTML = ""; el.style.display = "none"; }
+            }
+            if (save) {
+                try { localStorage.setItem(COMPANION_KEY, pet.id); } catch (e) {}
+            }
+            return pet;
+        }
+        function buildCompanionSwatchGrid() {
+            const grid = document.getElementById("companionSwatchGrid");
+            if (!grid) return;
+            const selectedId = getSavedCompanionId();
+            grid.innerHTML = COMPANIONS.map(c => `
+                <span class="companion-swatch-wrap">
+                    <span class="companion-swatch${c.id === selectedId ? ' selected' : ''}" data-click="selectCompanion" data-pet-id="${c.id}" title="${c.name}">${c.svg || '<span style="color:#fff; font-size:0.65rem; font-weight:700;">None</span>'}</span>
+                    <span class="companion-swatch-label">${c.name}</span>
+                </span>
+            `).join("");
+        }
+        function selectCompanion(el) {
+            applyCompanionPet(el.dataset.petId);
+            document.querySelectorAll("#companionSwatchGrid .companion-swatch").forEach(s => s.classList.toggle("selected", s.dataset.petId === el.dataset.petId));
+        }
+        function toggleCompanionSettings() {
+            const panel = document.getElementById("companionSettingsPanel");
+            const isHidden = panel.style.display === "none";
+            if (isHidden) buildCompanionSwatchGrid();
+            panel.style.display = isHidden ? "flex" : "none";
+        }
+        // Tapping the mascot itself on the dashboard jumps straight to Setting > Companion
+        // (expanded) rather than just being decorative — mirrors how other dashboard chips
+        // (e.g. the header currency pill) already double as shortcuts into Settings.
+        function toggleCompanionSettingsFromDashboard() {
+            navigateToDataSecurityPage();
+            setTimeout(() => {
+                const panel = document.getElementById("companionSettingsPanel");
+                if (panel && panel.style.display === "none") toggleCompanionSettings();
+                panel && panel.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 50);
+        }
+
         // v247: manual toggle (Settings > Background Theme > "Handwritten font (Kalam)") for
         // whether the 蠟筆小新 preset uses the self-hosted Kalam font or the app's normal
         // sans-serif — independent of the preset's colors/borders/radius, which stay Kalam-
@@ -7771,6 +7878,11 @@
         // Background Theme re-apply just above (no <head> no-flash snippet for this one since
         // the hero card only ever appears after unlock, not before first paint).
         applyNetWorthCardStyle(getSavedNetWorthCardStyleId(), { save: false });
+        // v341: same "apply the saved pick immediately on script parse" treatment — the mascot
+        // slot (#netWorthCompanion) is static markup in index.html (like #netWorthDisplay), so
+        // it only ever needs to be (re)painted here and whenever the user picks a new one in
+        // Settings, not on every renderApp() dashboard rebuild.
+        applyCompanionPet(getSavedCompanionId(), { save: false });
 
         // v249: syncs the header button's icon/title with the persisted Privacy Mode choice —
         // the <head> no-flash script already set the CSS-facing attribute before first paint,
@@ -17407,6 +17519,9 @@
             selectBgTheme: (el) => selectBgTheme(el),
             toggleNetWorthCardStyleSettings: () => toggleNetWorthCardStyleSettings(),
             selectNetWorthCardStyle: (el) => selectNetWorthCardStyle(el),
+            toggleCompanionSettings: () => toggleCompanionSettings(),
+            toggleCompanionSettingsFromDashboard: () => toggleCompanionSettingsFromDashboard(),
+            selectCompanion: (el) => selectCompanion(el),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),

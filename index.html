@@ -329,6 +329,43 @@
         .net-worth-hero-card .net-worth-split-label { color: rgba(255,255,255,0.8); }
         .net-worth-hero-card .net-worth-split-value { color: #fff; }
 
+        /* v341: Companion — an optional small mascot that sits in the net-worth-hero-card's own
+           right-hand gutter (.net-worth-container is display:flex + justify-content:space-between,
+           so a second child here is pushed to that spot for free, no layout change needed). Drawn
+           in translucent white/line-art (matching .net-worth-split-card's existing treatment just
+           above) rather than fixed colors, so it reads correctly against every Net Worth Card Style
+           gradient (Classic/Sunset/Ocean/etc. — see NET_WORTH_CARD_STYLES) without needing a
+           separate light/dark asset per style. Hidden entirely (display:none, set in
+           applyCompanionPet()) when the user picks "None". */
+        .net-worth-companion {
+            width: 52px;
+            height: 52px;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(255,255,255,0.14);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 14px;
+            cursor: pointer;
+        }
+        .net-worth-companion svg { width: 34px; height: 34px; display: block; }
+
+        /* Companion picker (Setting page) — each swatch previews the mascot the way it actually
+           renders on the hero card (translucent-white chip), so there's nothing left to imagine. */
+        .companion-swatch-grid { display: flex; flex-wrap: wrap; gap: 12px; margin: 8px 0 4px; }
+        .companion-swatch-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; width: 60px; }
+        .companion-swatch {
+            width: 48px; height: 48px; border-radius: 14px; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            background: linear-gradient(135deg, var(--primary), color-mix(in srgb, var(--primary) 100%, #000 28%));
+            border: 2px solid transparent;
+            box-shadow: 0 0 0 1.5px var(--border-color) inset;
+        }
+        .companion-swatch.selected { border-color: var(--text-main); box-shadow: none; }
+        .companion-swatch svg { width: 30px; height: 30px; display: block; }
+        .companion-swatch-label { font-size: 0.65rem; color: var(--text-muted); font-weight: 600; text-align: center; line-height: 1.2; }
+
         /* v162: single flex cluster for Base/Save/Lock — sibling of .top-bar under
            .dashboard-header-row (see comment there). margin-left:auto is what actually pins it
            to the right, independent of whether .top-bar is visible (mobile) or hidden (desktop,
@@ -2762,6 +2799,10 @@
                         <span id="netWorthSecondaryBadge" class="net-worth-secondary-badge privacy-amount-value hidden">≈ --</span>
                         <p class="net-worth-hero-label">Portfolio Net Worth</p>
                     </div>
+                    <!-- v341: Companion mascot — see .net-worth-companion / applyCompanionPet() /
+                         Setting > 🐾 Companion. Hidden (display:none) when the saved pick is
+                         "none" (the default), so a never-touched install shows nothing new here. -->
+                    <div class="net-worth-companion" id="netWorthCompanion" data-click="toggleCompanionSettingsFromDashboard" title="Companion — tap to change in Settings" style="display:none;"></div>
                 </div>
 
                 <!-- v157: Financial Assets / Real Estate split — only shown when at least one Real
@@ -4042,6 +4083,19 @@
             <div id="netWorthCardStyleSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
                 <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Changes only the background of the Dashboard's Portfolio Net Worth card. "Classic" adapts to whichever Background Theme is active; the others are fixed gradients.</p>
                 <div class="color-swatch-grid" id="netWorthCardStyleSwatchGrid"></div>
+            </div>
+            <!-- v341: Companion — a small optional mascot shown in the Portfolio Net Worth card's
+                 right-hand gutter (see .net-worth-companion / COMPANIONS in ledger.js). Original
+                 line-art, not tied to any Background Theme — same translucent-white treatment as
+                 the card's Financial Assets/Real Estate chips, so it reads correctly against every
+                 Net Worth Card Style gradient without needing separate light/dark artwork. -->
+            <div class="config-item" style="cursor:pointer;" data-click="toggleCompanionSettings">
+                <span>🐾 <strong>Companion</strong></span>
+                <span style="color:var(--text-muted);">›</span>
+            </div>
+            <div id="companionSettingsPanel" style="display:none; flex-direction:column; gap:10px; background:var(--card-bg); border:1.5px solid var(--border-color); border-radius:12px; padding:12px; margin-bottom:10px;">
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">A small mascot next to your Portfolio Net Worth figure. Each preview shows how it actually looks on the card.</p>
+                <div class="companion-swatch-grid" id="companionSwatchGrid"></div>
             </div>
             <div class="config-item" style="cursor:pointer;" data-click="toggleDashboardWidgetsSettings">
                 <span>📊 <strong>Dashboard Widgets</strong></span>
