@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v353";
+        const APP_VERSION = "v354";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -10386,25 +10386,54 @@
             let text = raw;
             const result = { amount: null, date: null };
 
-            // Amount: currency-prefixed (RM25, S$25, $25 ...) takes priority over a bare number,
-            // so "RM25" isn't misread as amount=25 with a stray "RM" left dangling in the
-            // description. Chinese amount-suffix (25块/25元) checked next, bare number last.
-            let m = text.match(/(RM|MYR|S\$|SGD|USD|US\$|¥|CNY|RMB|\$)\s*(\d+(?:[.,]\d{1,2})?)/i);
-            if (m) {
-                result.amount = parseFloat(m[2].replace(",", ""));
-                text = text.slice(0, m.index) + text.slice(m.index + m[0].length);
-            } else {
-                m = text.match(/(\d+(?:\.\d{1,2})?)\s*(?:块钱|块|元|圆)/);
-                if (m) {
-                    result.amount = parseFloat(m[1]);
-                    text = text.slice(0, m.index) + text.slice(m.index + m[0].length);
-                } else {
-                    m = text.match(/\d+(?:\.\d{1,2})?/);
-                    if (m) {
-                        result.amount = parseFloat(m[0]);
-                        text = text.slice(0, m.index) + text.slice(m.index + m[0].length);
-                    }
-                }
+            // Amount: two-layer defense against a headcount/quantity number being mistaken for
+            // the amount (see the "3人午餐 AA 45" vs "午餐 AA 45 3人" bug report — the previous
+            // version just took the first bare number it found, which was only right when the
+            // real amount HAPPENED to come first in the text; word order isn't a valid signal).
+            //
+            // Layer 1 — mask out quantity phrases (headcount words "3人/个/份/杯/碗/盘/次/只/件/张/
+            // 盒/瓶/箱/包/套/斤", "3pax/3pcs", and "for 2"/"x2"/"×2" multipliers) on a throwaway
+            // copy BEFORE running the amount regexes at all, so those digits are never even
+            // candidates. Each match is replaced with same-length spaces (not removed), so
+            // positions still line up with the real `text` — only the eventually CHOSEN amount
+            // span gets spliced out of the real text below, so a legitimate "3人" survives
+            // untouched into the Description. (Chinese quantifier chars are deliberately matched
+            // without a trailing \b: JS's \b is ASCII-\w-based, so "人" followed directly by
+            // another Chinese character — the ordinary case, e.g. "3人午餐" — has no word
+            // boundary there at all and \b would silently fail to match.)
+            //
+            // Layer 2 — if more than one amount-shaped candidate is STILL left after masking
+            // (e.g. "RM25 找零5块"), pick the LARGEST value within the highest-confidence tier
+            // rather than whichever appears first: currency-prefixed ("RM25"/"S$25"/"$25") or
+            // Chinese-suffixed ("25块/元/圆") candidates always outrank a bare number, and only
+            // within the surviving tier does "biggest wins" apply.
+            const qtyMasked = text
+                .replace(/\d+\s*(?:人|个|份|杯|碗|盘|次|只|件|张|盒|瓶|箱|包|套|斤)/g, (s) => " ".repeat(s.length))
+                .replace(/\d+\s*(?:pax|pcs?)\b/gi, (s) => " ".repeat(s.length))
+                .replace(/\bfor\s+\d+\b/gi, (s) => " ".repeat(s.length))
+                .replace(/×\s*\d+\b/g, (s) => " ".repeat(s.length))
+                // "x2"/"X2" (multiplier glued to its digit, no space) — no lookbehind (this file
+                // avoids that regex feature entirely: it's a hard SyntaxError, not a soft
+                // fallback, on pre-2023 Safari/iOS, which would break the WHOLE script on load,
+                // not just this one feature). Instead the char before "x" is captured as a plain
+                // group and put back untouched in the replacement, so only the "x2" itself gets
+                // blanked. Requires the "x" to be preceded by start-of-string or a non-alphanumeric
+                // char, so it can't fire in the middle of an ordinary word like "next" or "box2".
+                .replace(/(^|[^A-Za-z0-9])x\s*(\d+)\b/gi, (full, prefix) => prefix + " ".repeat(full.length - prefix.length));
+
+            const currencyCandidates = [...qtyMasked.matchAll(/(RM|MYR|S\$|SGD|USD|US\$|¥|CNY|RMB|\$)\s*(\d+(?:[.,]\d{1,2})?)/gi)]
+                .map(mm => ({ index: mm.index, length: mm[0].length, value: parseFloat(mm[2].replace(",", "")) }));
+            const cnySuffixCandidates = [...qtyMasked.matchAll(/(\d+(?:\.\d{1,2})?)\s*(?:块钱|块|元|圆)/g)]
+                .map(mm => ({ index: mm.index, length: mm[0].length, value: parseFloat(mm[1]) }));
+            const bareCandidates = [...qtyMasked.matchAll(/\d+(?:\.\d{1,2})?/g)]
+                .map(mm => ({ index: mm.index, length: mm[0].length, value: parseFloat(mm[0]) }));
+
+            const topTier = currencyCandidates.concat(cnySuffixCandidates);
+            const pool = topTier.length ? topTier : bareCandidates;
+            if (pool.length) {
+                const chosen = pool.reduce((best, c) => (!best || c.value > best.value) ? c : best, null);
+                result.amount = chosen.value;
+                text = text.slice(0, chosen.index) + text.slice(chosen.index + chosen.length);
             }
 
             // Relative date (see parseRelativeDate's own comment for why absolute dates like
