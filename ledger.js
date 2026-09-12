@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v360";
+        const APP_VERSION = "v366";
         const APP_VERSION_DATE = "2026-09-12";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1875,6 +1875,7 @@
             const fundActivityPage = document.getElementById("page-fundactivity");
             const currencyActivityPage = document.getElementById("page-currencyactivity");
             const inventoryPage = document.getElementById("page-inventory");
+            const plannedPaymentsPage = document.getElementById("page-plannedpayments");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
@@ -1915,7 +1916,8 @@
                 !currencyReportPage.classList.contains("hidden") ||
                 !navUpdatePage.classList.contains("hidden") ||
                 !dataSecurityPage.classList.contains("hidden") ||
-                !inventoryPage.classList.contains("hidden")
+                !inventoryPage.classList.contains("hidden") ||
+                !plannedPaymentsPage.classList.contains("hidden")
             ) {
                 navigateToWorkspace();
             }
@@ -2841,7 +2843,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-attachment-review", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity", "page-inventory"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-backup", "page-autolock", "page-database", "page-attachment-review", "page-total-summary", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-members", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity", "page-inventory", "page-plannedpayments"];
         function showPage(id) {
             APP_PAGE_IDS.forEach(p => {
                 const el = document.getElementById(p);
@@ -2886,6 +2888,7 @@
                 case "page-members": return "Manage Members";
                 case "page-member": return document.getElementById("memberPageTitle")?.textContent || "Member";
                 case "page-inventory": return "Inventory";
+                case "page-plannedpayments": return "Planned Payments";
                 default: return "Ledger";
             }
         }
@@ -4822,9 +4825,11 @@
             const currencyReportHidden = document.getElementById("page-currency-report").classList.contains("hidden");
             const navUpdateHidden = document.getElementById("page-navupdate").classList.contains("hidden");
             const inventoryHidden = document.getElementById("page-inventory").classList.contains("hidden");
+            const plannedPaymentsHidden = document.getElementById("page-plannedpayments").classList.contains("hidden");
             let target = null;
             if (!savingsHidden) target = "savings";
             else if (!inventoryHidden) target = "inventory";
+            else if (!plannedPaymentsHidden) target = "plannedpayments";
             else if (!accountsHidden) target = "accounts";
             else if (!categoriesHidden) target = "categories";
             else if (!backupHidden) target = "backup";
@@ -4875,6 +4880,7 @@
             else if (target === "tag-report") navigateToTagReportPage();
             else if (target === "budget") navigateToBudgetPage();
             else if (target === "inventory") navigateToInventoryPage();
+            else if (target === "plannedpayments") navigateToPlannedPaymentsPage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -13632,42 +13638,87 @@
                 return;
             }
             closeModal("txModal");
-            await renderPlannedPaymentsWidget();
+            await refreshPlannedPaymentsViews();
             showToast("Saved as a planned payment");
         }
 
+        // Shared row markup — used by both the Dashboard widget (filtered, see
+        // renderPlannedPaymentsWidget()) and the full list page (unfiltered, see
+        // renderPlannedPaymentsPage()), so the two only ever differ in which payments they pass
+        // in, never in how a row looks or behaves. `today` is passed in rather than recomputed
+        // per row for the (admittedly minor) cost of calling todayLocalStr() once per render
+        // instead of once per row.
+        function renderPlannedPaymentRowHtml(p, today) {
+            const daysDiff = Math.round((new Date(p.dueDate + "T00:00:00") - new Date(today + "T00:00:00")) / (1000 * 60 * 60 * 24));
+            const overdue = daysDiff < 0;
+            const dueLabel = p.paused ? "⏸ Paused" : (overdue ? `Overdue ${Math.abs(daysDiff)}d` : (daysDiff === 0 ? "Due today" : `${daysDiff}d left`));
+            const sign = p.type === "income" ? "+" : "-";
+            const color = p.type === "income" ? "var(--income-color)" : "var(--expense-color)";
+            const rowOpacity = p.paused ? "opacity:0.6;" : "";
+            return `
+                <div class="config-item" data-click="plannedPaymentRowTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; ${rowOpacity}">
+                    <span class="category-display-badge">${p.paused ? "⏸" : (p.recur ? "🔁" : "🕒")} <strong>${escapeHtml(p.desc)}</strong>${p.cat ? " — " + escapeHtml(p.cat) : ""}${(p.recur && !p.paused) ? ` <span style="font-weight:400; color:var(--text-muted);">(${escapeHtml(recurLabel(p.recur))})</span>` : ""}</span>
+                    <span style="text-align:right;">
+                        <span style="display:block; font-size:0.85rem; font-weight:700; color:${color};">${sign}${formatCurrency(p.amount, p.currency)}</span>
+                        <span style="font-size:0.75rem; font-weight:700; color:${(overdue && !p.paused) ? "var(--expense-color)" : "var(--text-muted)"};">${dueLabel}</span>
+                    </span>
+                </div>
+            `;
+        }
+
         // Dashboard "Planned Payments" widget — same visual language as renderWarrantyReminderWidget()
-        // just above (a .config-item row per entry, hidden entirely when the list is empty). Rows
-        // ARE clickable, like Warranty Reminders — tapping one opens the small Mark as Paid/Delete
-        // action sheet (see plannedPaymentRowTap() below) rather than navigating anywhere, since
-        // there's no dedicated Planned Payments page (this widget doubles as the only "list view").
+        // just above (a .config-item row per entry, hidden entirely when nothing qualifies).
+        // v361: narrowed to only what's actually due within 3 days or overdue (a paused entry
+        // never qualifies, regardless of date) — everything else (further out, or paused) lives
+        // on the full list page instead (navigateToPlannedPaymentsPage(), linked from this
+        // widget's own title, same as Warranty Reminders links to Inventory).
         async function renderPlannedPaymentsWidget() {
             const wrap = document.getElementById("dashboardPlannedPaymentsWidget");
             const list = document.getElementById("plannedPaymentsList");
             if (!wrap || !list) return;
 
-            const payments = await getAllPlannedPayments();
+            const today = todayLocalStr();
+            const payments = (await getAllPlannedPayments()).filter(p => {
+                if (p.paused) return false;
+                const daysDiff = Math.round((new Date(p.dueDate + "T00:00:00") - new Date(today + "T00:00:00")) / (1000 * 60 * 60 * 24));
+                return daysDiff <= 3; // includes overdue (negative) and "due today" (0)
+            });
             wrap.style.display = payments.length ? "" : "none";
             if (!payments.length) return;
 
+            list.innerHTML = payments.map(p => renderPlannedPaymentRowHtml(p, today)).join("");
+        }
+
+        // Full list page (Sidebar > Planned Payments) — everything saved, no 3-day/paused filter,
+        // so anything further out or on hold stays reachable/manageable (Edit Series, Pause,
+        // Delete) even though it's deliberately absent from the Dashboard. getAllPlannedPayments()
+        // already sorts paused entries to the bottom, same ordering as the widget uses.
+        async function renderPlannedPaymentsPage() {
+            const list = document.getElementById("plannedPaymentsPageList");
+            const empty = document.getElementById("plannedPaymentsPageEmpty");
+            if (!list || !empty) return;
             const today = todayLocalStr();
-            list.innerHTML = payments.map(p => {
-                const daysDiff = Math.round((new Date(p.dueDate + "T00:00:00") - new Date(today + "T00:00:00")) / (1000 * 60 * 60 * 24));
-                const overdue = daysDiff < 0;
-                const dueLabel = p.paused ? "⏸ Paused" : (overdue ? `Overdue ${Math.abs(daysDiff)}d` : (daysDiff === 0 ? "Due today" : `${daysDiff}d left`));
-                const sign = p.type === "income" ? "+" : "-";
-                const color = p.type === "income" ? "var(--income-color)" : "var(--expense-color)";
-                const rowOpacity = p.paused ? "opacity:0.6;" : "";
-                return `
-                    <div class="config-item" data-click="plannedPaymentRowTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; ${rowOpacity}">
-                        <span class="category-display-badge">${p.paused ? "⏸" : (p.recur ? "🔁" : "🕒")} <strong>${escapeHtml(p.desc)}</strong>${p.cat ? " — " + escapeHtml(p.cat) : ""}${(p.recur && !p.paused) ? ` <span style="font-weight:400; color:var(--text-muted);">(${escapeHtml(recurLabel(p.recur))})</span>` : ""}</span>
-                        <span style="text-align:right;">
-                            <span style="display:block; font-size:0.85rem; font-weight:700; color:${color};">${sign}${formatCurrency(p.amount, p.currency)}</span>
-                            <span style="font-size:0.75rem; font-weight:700; color:${(overdue && !p.paused) ? "var(--expense-color)" : "var(--text-muted)"};">${dueLabel}</span>
-                        </span>
-                    </div>
-                `;
-            }).join("");
+            const payments = await getAllPlannedPayments();
+            empty.style.display = payments.length ? "none" : "block";
+            list.innerHTML = payments.map(p => renderPlannedPaymentRowHtml(p, today)).join("");
+        }
+
+        function navigateToPlannedPaymentsPage() {
+            showPage("page-plannedpayments");
+            pushVirtualState("plannedpayments");
+            renderPlannedPaymentsPage();
+        }
+
+        // Every action that changes a Planned Payment (save, pause, resume, edit series, delete,
+        // mark as paid) calls this instead of renderPlannedPaymentsWidget() directly — so if the
+        // full list page (navigateToPlannedPaymentsPage()) happens to be the one currently on
+        // screen when the change happens, it stays in sync too, not just the Dashboard widget.
+        async function refreshPlannedPaymentsViews() {
+            await renderPlannedPaymentsWidget();
+            const pageEl = document.getElementById("page-plannedpayments");
+            if (pageEl && !pageEl.classList.contains("hidden")) {
+                await renderPlannedPaymentsPage();
+            }
         }
 
         // Which Planned Payment id the action sheet (plannedPaymentActionsModal) is currently
@@ -13703,7 +13754,7 @@
             if (!payment) return;
             payment.paused = true;
             await writeDB(STORES.PLANNED_PAYMENTS, payment);
-            await renderPlannedPaymentsWidget();
+            await refreshPlannedPaymentsViews();
         }
 
         // Resuming fast-forwards a dueDate that's fallen into the past (e.g. paused for a
@@ -13726,25 +13777,28 @@
             }
             payment.paused = false;
             await writeDB(STORES.PLANNED_PAYMENTS, payment);
-            await renderPlannedPaymentsWidget();
+            await refreshPlannedPaymentsViews();
         }
 
         // "✏️ Edit Series" — the recurrence RULE itself (frequency/interval/next due date), not
         // any one occurrence's amount/category/account (that's what Mark as Paid is for). See the
         // #editPlannedSeriesModal comment in index.html for why "Next Due Date" living here (and
         // re-anchoring on save) is the intended way to fix a wrong or auto-guessed anchorDay.
+        // v363: closeModalAndThen() — same "opened underneath a still-active actions modal" bug
+        // as confirmPlannedPaymentFromActionsModal() above; see that function's comment.
         async function openEditPlannedSeriesModal() {
             const paymentId = activePlannedPaymentId;
-            closeModal("plannedPaymentActionsModal");
-            if (!paymentId) return;
-            const payments = await getAllPlannedPayments();
-            const payment = payments.find(p => p.id === paymentId);
-            if (!payment || !payment.recur) return;
-            document.getElementById("editSeriesFreq").value = payment.recur.freq || "monthly";
-            document.getElementById("editSeriesInterval").value = payment.recur.interval || 1;
-            document.getElementById("editSeriesDueDate").value = payment.dueDate;
-            document.getElementById("editSeriesAnchorWarning").style.display = payment.recur.anchorDayBackfilled ? "block" : "none";
-            openModal("editPlannedSeriesModal");
+            if (!paymentId) { closeModal("plannedPaymentActionsModal"); return; }
+            closeModalAndThen("plannedPaymentActionsModal", async () => {
+                const payments = await getAllPlannedPayments();
+                const payment = payments.find(p => p.id === paymentId);
+                if (!payment || !payment.recur) return;
+                document.getElementById("editSeriesFreq").value = payment.recur.freq || "monthly";
+                document.getElementById("editSeriesInterval").value = payment.recur.interval || 1;
+                document.getElementById("editSeriesDueDate").value = payment.dueDate;
+                document.getElementById("editSeriesAnchorWarning").style.display = payment.recur.anchorDayBackfilled ? "block" : "none";
+                openModal("editPlannedSeriesModal");
+            });
         }
         function closeEditPlannedSeriesModal() {
             closeModal("editPlannedSeriesModal");
@@ -13767,7 +13821,7 @@
             payment.recur = { freq, interval, anchorDay: parseInt(dueDateVal.split("-")[2], 10) };
             await writeDB(STORES.PLANNED_PAYMENTS, payment);
             closeModal("editPlannedSeriesModal");
-            await renderPlannedPaymentsWidget();
+            await refreshPlannedPaymentsViews();
         }
 
         // "Mark as Paid" — opens the ordinary Income/Expense entry form pre-filled with
@@ -13776,66 +13830,81 @@
         // (set last, after openTransactionForm() has already reset it to null — see that
         // function's own comment) is what tells handleTransactionSubmitMobile() to delete this
         // Planned Payment once that Commit Entry actually succeeds.
+        // v363: uses closeModalAndThen() (not a plain closeModal() + open sequence) — this hands
+        // off into a freshly-opened txModal, and closeModal()'s history.back() doesn't actually
+        // remove plannedPaymentActionsModal's "active" class until its popstate event fires on a
+        // later tick (see closeModalAndThen()'s own comment). Without waiting for that, txModal
+        // opened immediately underneath a still-visually-active actions modal — exactly the "new
+        // screen looks like it opened behind the old one" bug that helper exists to prevent
+        // (reported via screenshot: tapping Mark as Paid left the action sheet stuck on top of
+        // the transaction form it had just opened).
         async function confirmPlannedPaymentFromActionsModal() {
             const paymentId = activePlannedPaymentId;
-            closeModal("plannedPaymentActionsModal");
-            if (!paymentId) return;
-            const payments = await getAllPlannedPayments();
-            const payment = payments.find(p => p.id === paymentId);
-            if (!payment || payment.paused) return; // defensive — the button is hidden while paused too
+            if (!paymentId) { closeModal("plannedPaymentActionsModal"); return; }
+            closeModalAndThen("plannedPaymentActionsModal", async () => {
+                const payments = await getAllPlannedPayments();
+                const payment = payments.find(p => p.id === paymentId);
+                if (!payment || payment.paused) return; // defensive — the button is hidden while paused too
 
-            await openTransactionForm(payment.type, null, payment.accountId || null);
+                await openTransactionForm(payment.type, null, payment.accountId || null);
 
-            document.getElementById("txDesc").value = payment.desc;
-            document.getElementById("txAmount").value = payment.amount;
-            if (payment.currency && [...document.getElementById("txCurrency").options].some(o => o.value === payment.currency)) {
-                document.getElementById("txCurrency").value = payment.currency;
-            }
-            if (payment.accountId && [...document.getElementById("srcAccount").options].some(o => o.value === payment.accountId)) {
-                document.getElementById("srcAccount").value = payment.accountId;
-                syncAccountPickerButtonText("srcAccount");
-            }
-            if (payment.cat && [...document.getElementById("txCategory").options].some(o => o.value === payment.cat)) {
-                document.getElementById("txCategory").value = payment.cat;
-                syncAccountPickerButtonText("txCategory");
-            }
-            document.getElementById("txNotes").value = payment.notes || "";
-            // Defaults to today (when it's actually being paid) rather than the original due
-            // date — adjustable, like every other field here, before Commit Entry.
-            document.getElementById("txDate").value = todayLocalStr();
-            if (Array.isArray(payment.attachments) && payment.attachments.length) {
-                existingTxAttachments = payment.attachments.map(a => ({ ...a }));
-                renderTxAttachmentPreview();
-            }
-            // This is a confirm, not a fresh entry — re-saving it as (another) Planned Payment
-            // from here would just leave a duplicate behind once this one gets advanced/deleted
-            // below. Same reasoning for the Repeat block — this record's own recur (if any)
-            // already carries forward automatically in advanceOrDeletePlannedPaymentAfterConfirm(),
-            // it's not something to re-decide at confirm time.
-            const savePlannedBtn = document.getElementById("txSavePlannedBtn");
-            if (savePlannedBtn) savePlannedBtn.style.display = "none";
-            const repeatWrap = document.getElementById("txPlannedRepeatWrap");
-            if (repeatWrap) repeatWrap.style.display = "none";
+                document.getElementById("txDesc").value = payment.desc;
+                document.getElementById("txAmount").value = payment.amount;
+                if (payment.currency && [...document.getElementById("txCurrency").options].some(o => o.value === payment.currency)) {
+                    document.getElementById("txCurrency").value = payment.currency;
+                }
+                if (payment.accountId && [...document.getElementById("srcAccount").options].some(o => o.value === payment.accountId)) {
+                    document.getElementById("srcAccount").value = payment.accountId;
+                    syncAccountPickerButtonText("srcAccount");
+                }
+                if (payment.cat && [...document.getElementById("txCategory").options].some(o => o.value === payment.cat)) {
+                    document.getElementById("txCategory").value = payment.cat;
+                    syncAccountPickerButtonText("txCategory");
+                }
+                document.getElementById("txNotes").value = payment.notes || "";
+                // Defaults to today (when it's actually being paid) rather than the original due
+                // date — adjustable, like every other field here, before Commit Entry.
+                document.getElementById("txDate").value = todayLocalStr();
+                if (Array.isArray(payment.attachments) && payment.attachments.length) {
+                    existingTxAttachments = payment.attachments.map(a => ({ ...a }));
+                    renderTxAttachmentPreview();
+                }
+                // This is a confirm, not a fresh entry — re-saving it as (another) Planned Payment
+                // from here would just leave a duplicate behind once this one gets advanced/deleted
+                // below. Same reasoning for the Repeat block — this record's own recur (if any)
+                // already carries forward automatically in advanceOrDeletePlannedPaymentAfterConfirm(),
+                // it's not something to re-decide at confirm time.
+                const savePlannedBtn = document.getElementById("txSavePlannedBtn");
+                if (savePlannedBtn) savePlannedBtn.style.display = "none";
+                const repeatWrap = document.getElementById("txPlannedRepeatWrap");
+                if (repeatWrap) repeatWrap.style.display = "none";
 
-            currentPlannedPaymentIdBeingConfirmed = paymentId;
+                currentPlannedPaymentIdBeingConfirmed = paymentId;
+            });
         }
 
+        // v363: same closeModalAndThen() fix as confirmPlannedPaymentFromActionsModal() above —
+        // customConfirm() is a plain classList-toggle overlay (not part of the modalStack/history
+        // system openModal()/closeModal() use), but it renders immediately, with no wait for
+        // anything — so without this, it could appear stacked behind/alongside the still-"active"
+        // actions modal for the same reason.
         async function deletePlannedPaymentFromActionsModal() {
             const paymentId = activePlannedPaymentId;
-            closeModal("plannedPaymentActionsModal");
-            if (!paymentId) return;
-            const payments = await getAllPlannedPayments();
-            const payment = payments.find(p => p.id === paymentId);
-            // v357: since there's only ever one record per recurring series (see this section's
-            // top comment), Delete always means "stop the whole series" for a recurring one —
-            // said explicitly here so that's never a surprise.
-            const message = (payment && payment.recur)
-                ? "Delete this recurring planned payment? This stops the whole series — it can't be undone."
-                : "Delete this planned payment? This can't be undone.";
-            const confirmed = await customConfirm(message);
-            if (!confirmed) return;
-            try { await deleteDB(STORES.PLANNED_PAYMENTS, paymentId); } catch (err) {}
-            await renderPlannedPaymentsWidget();
+            if (!paymentId) { closeModal("plannedPaymentActionsModal"); return; }
+            closeModalAndThen("plannedPaymentActionsModal", async () => {
+                const payments = await getAllPlannedPayments();
+                const payment = payments.find(p => p.id === paymentId);
+                // v357: since there's only ever one record per recurring series (see this section's
+                // top comment), Delete always means "stop the whole series" for a recurring one —
+                // said explicitly here so that's never a surprise.
+                const message = (payment && payment.recur)
+                    ? "Delete this recurring planned payment? This stops the whole series — it can't be undone."
+                    : "Delete this planned payment? This can't be undone.";
+                const confirmed = await customConfirm(message);
+                if (!confirmed) return;
+                try { await deleteDB(STORES.PLANNED_PAYMENTS, paymentId); } catch (err) {}
+                await refreshPlannedPaymentsViews();
+            });
         }
 
         // --- SALARY ENTRY (Gross Salary → Net Bank + EPF(Malaysia)/CPF(Singapore) split) ---
@@ -15471,7 +15540,7 @@
             renderRecentTransactionsWidget(accounts, txs);
             renderTagReminderWidget(txs, accounts);
             await renderWarrantyReminderWidget();
-            await renderPlannedPaymentsWidget();
+            await refreshPlannedPaymentsViews();
             applyDashboardWidgetOrder();
             renderDesktopInsightsRail(accounts, txs);
 
@@ -18960,6 +19029,7 @@
             toggleDonutSlice: (el) => toggleDonutSlice(el),
             // v318: INVENTORY
             navigateToInventoryPage: () => navigateToInventoryPage(),
+            navigateToPlannedPaymentsPage: () => navigateToPlannedPaymentsPage(),
             inventorySetStatusFilter: (el) => inventorySetStatusFilter(el),
             inventoryWarrantyStripTap: () => inventoryWarrantyStripTap(),
             inventoryItemCardTap: (el) => openInventoryItemModal(el.dataset.id),

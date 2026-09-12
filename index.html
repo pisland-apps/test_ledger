@@ -1545,8 +1545,32 @@
             overflow-y: auto;
         }
         @media (min-width: 1400px) {
-            .desktop-insights-rail { display: block; }
+            .desktop-insights-rail {
+                display: block;
+                position: sticky;
+                top: 24px;
+                right: auto;
+                bottom: auto;
+                align-self: flex-start;
+                flex-shrink: 0;
+                max-height: calc(100vh - 48px);
+            }
         }
+        /* v364/v365 (superseded): first tried centering "content + gap + rail" as one 1052px
+           block by giving the content column's margin-left and this (position:fixed) rail's
+           right offset the same calc(50vw - Npx) / calc(50% - Npx) formula, so the leftover space
+           at 1400px+ split evenly on both sides instead of piling up as a single gap. Dropped
+           after a real screenshot showed the two sides still off by ~50px even with %, which a
+           pure %-basis mismatch doesn't fully explain (the measured gap and rail width had also
+           drifted from their expected 32px/300px) — rather than keep patching two independently-
+           computed values that only work if they happen to agree, v366 removes the dependency
+           entirely: the rail is no longer position:fixed at 1400px+ at all. It's now a normal
+           flex item inside #contentRow (see that div's CSS + the body 1400px+ rule below),
+           sitting beside #pagesWrapper in one ordinary flex row — its horizontal position comes
+           from the SAME box as the content column's, by construction, so there's no separate
+           formula left to drift out of sync. position:sticky (rather than static) keeps its old
+           "stays put while the page scrolls" behavior, just resolved within #contentRow's normal
+           flow instead of against the viewport. */
         /* v182: on phones (<768px, same breakpoint the sidebar drawer uses) the insights rail
            doubles as a right-edge slide-in drawer — same element/ids/render function as the
            1400px+ rail above, just off-canvas by default and toggled via .open instead of always
@@ -1653,6 +1677,16 @@
                underneath the sidebar, completely covered and unclickable. Shift it past the
                sidebar's own width (336px, matching body's margin-left right above) instead. */
             .print-fab-btn { left: 356px; }
+        }
+        /* v366: see the .desktop-insights-rail CSS comment (min-width:1400px block) for why this
+           replaced the v364/v365 calc(50% - Npx) formula. At 1400px+, body just docks against the
+           sidebar with no width cap of its own — #contentRow (a plain unstyled div at <1400px)
+           becomes the flex row that does the actual centering, with #pagesWrapper (not body)
+           carrying the 720px cap that used to live on body. */
+        @media (min-width: 1400px) {
+            body { margin-left: 336px; margin-right: 0; max-width: none; }
+            #contentRow { display: flex; justify-content: center; gap: 32px; align-items: flex-start; }
+            #pagesWrapper { width: 100%; max-width: 720px; }
         }
 
         /* v256: #insightsRailOverlay (id, not just .sidebar-overlay's class) reasserts itself over
@@ -2389,6 +2423,12 @@
                 margin: 0 !important;
                 padding: 0 !important;
             }
+            /* v366: the 720px cap that used to live on body (killed above) now lives on
+               #pagesWrapper instead (see the min-width:1400px CSS + the .desktop-insights-rail
+               comment) — strip it here too, and flatten #contentRow's flex row back to a plain
+               block, so a "Save as PDF" triggered from a 1400px+ window doesn't inherit either. */
+            #contentRow { display: block !important; }
+            #pagesWrapper { max-width: 100% !important; width: 100% !important; }
             /* Only the currently active page prints — every other .page is already display:none
                via .page.hidden; this just reaffirms it and strips the fixed/mobile-app framing
                (max-width column, bottom padding reserved for a FAB, etc.) from the one that's
@@ -2586,29 +2626,11 @@
          .sidebar-overlay's dim+blur styling as-is. -->
     <div class="sidebar-overlay" id="insightsRailOverlay" data-click="closeInsightsDrawer"></div>
 
-    <!-- v181: Desktop "Insights" right rail — see the matching CSS comment above for why this
-         only shows permanently-docked at 1400px+. Lives outside every .page div (same reasoning
-         as the back-to-top button above) and is refreshed by renderDesktopInsightsRail(), called
-         from renderApp(). v182/v256: same element also serves as the <1400px slide-in drawer —
-         see the CSS comment. -->
-    <div class="desktop-insights-rail" id="desktopInsightsRail">
-        <div class="insights-rail-header">
-            <span class="insights-rail-title">Insights</span>
-            <button type="button" class="insights-rail-close-btn" data-click="closeInsightsDrawer" aria-label="Close insights panel">&times;</button>
-        </div>
-        <div class="insights-card">
-            <h4>Spending Breakdown (This Month)</h4>
-            <div id="insightsSpendingDonutWrap"></div>
-        </div>
-        <div class="insights-card">
-            <h4>Top Categories This Month</h4>
-            <div id="insightsTopCategoriesList"></div>
-        </div>
-        <div class="insights-card">
-            <h4>Recent Large Transactions</h4>
-            <div id="insightsLargeTxList"></div>
-        </div>
-    </div>
+    <!-- v366: the .desktop-insights-rail element itself moved further down (now just before
+         SYSTEM MODALS, as a sibling of #pagesWrapper inside #contentRow) — see the CSS comment
+         on .desktop-insights-rail for why. This overlay stays here since it's independent of that
+         move (it's the dimmed backdrop for the <1400px drawer mode, unrelated to the 1400px+
+         dock's horizontal position). -->
 
     <!-- ================= SIDEBAR NAVIGATION DRAWER ================= -->
     <div class="sidebar-overlay" id="sidebarOverlay" data-click="closeSidebar"></div>
@@ -2656,6 +2678,15 @@
                  renderInventoryPage()/openInventoryItemModal() in ledger.js. -->
             <button class="sidebar-item" data-click="sidebarGo" data-target="inventory">
                 <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><line x1="10" y1="12" x2="14" y2="12"/></svg></span> Inventory
+            </button>
+
+            <!-- v361: Planned Payments — full list of everything saved (including anything more
+                 than 3 days out, and anything paused), since the Dashboard widget itself only
+                 shows what's due within 3 days or overdue (see renderPlannedPaymentsWidget()'s
+                 own comment) — this page is where the rest stays reachable/manageable. See
+                 renderPlannedPaymentsPage() in ledger.js. -->
+            <button class="sidebar-item" data-click="sidebarGo" data-target="plannedpayments">
+                <span class="sidebar-item-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg></span> Planned Payments
             </button>
 
             <div class="sidebar-divider"></div>
@@ -2747,6 +2778,14 @@
     </div>
 
     <!-- ================= PAGE 1: PORTFOLIO MAIN WORKSPACE ================= -->
+    <!-- v366: #contentRow / #pagesWrapper — see the .desktop-insights-rail CSS comment for why
+         these exist. At <1400px both are plain unstyled divs (no visual effect, single-column
+         layout untouched); at 1400px+ #contentRow becomes the flex row that centers
+         #pagesWrapper (capped at 720px, same as before) alongside the insights rail, so the two
+         share one real layout parent instead of two independently-computed CSS formulas that
+         have to agree by coincidence. -->
+    <div id="contentRow">
+    <div id="pagesWrapper">
     <div id="page-workspace" class="page">
         <header>
             <!-- v162: header-controls-group pulled back OUT of .top-bar to be its sibling under
@@ -2953,14 +2992,17 @@
         <div class="ledger-container" id="warrantyReminderList"></div>
         </div>
 
-        <!-- v354: Planned Payments — one-off bills keyed in ahead of being paid (see the "🕒 Save
-             as Planned" button on the Income/Expense entry form). Hidden entirely when empty.
-             Rows ARE clickable — tapping one opens the Mark as Paid / Delete action sheet
-             (plannedPaymentActionsModal below); there's no separate list page, this widget IS
-             the list. -->
+        <!-- v354: Planned Payments — bills keyed in ahead of being paid (see the "🕒 Save as
+             Planned" button on the Income/Expense entry form).
+             v361: this widget now only shows entries due within 3 days or overdue (and never a
+             paused one, regardless of date) — hidden entirely when nothing meets that bar. The
+             full list (everything, however far off, including paused) lives on its own page now
+             — tap the title, same as Warranty Reminders links to Inventory — since Planned
+             Payments has more to manage (Edit Series, Pause) than a glance-only reminder does.
+             See renderPlannedPaymentsWidget()/renderPlannedPaymentsPage() in ledger.js. -->
         <div id="dashboardPlannedPaymentsWidget" style="display:none;">
         <div class="section-header">
-            <span class="section-title">🕒 Planned Payments</span>
+            <span class="section-title" style="cursor:pointer;" data-click="navigateToPlannedPaymentsPage">🕒 Planned Payments</span>
         </div>
         <div class="ledger-container" id="plannedPaymentsList"></div>
         </div>
@@ -3381,6 +3423,24 @@
         <div id="inventoryPageFooter" style="display:none; justify-content:space-between; align-items:center; padding:14px 4px 88px; margin-top:6px; border-top:2px dashed var(--border-color);"></div>
 
         <button class="fab-btn" data-click="openInventoryItemModalNew" aria-label="Add inventory item" title="Add inventory item">+</button>
+    </div>
+
+    <!-- v361: Planned Payments full list — everything saved, including anything more than 3
+         days out and anything paused (the Dashboard widget deliberately hides both). No "+" FAB
+         here — a Planned Payment is only ever created from the Income/Expense entry form's "🕒
+         Save as Planned" button, never directly on this page. Rows reuse the exact same
+         plannedPaymentRowTap()/action-sheet flow as the Dashboard widget — see
+         renderPlannedPaymentRowHtml() in ledger.js, shared by both. -->
+    <div id="page-plannedpayments" class="page hidden">
+        <div class="nav-header">
+            <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
+            <div style="flex:1;">
+                <h3 style="font-weight:800; font-size:1.2rem;">Planned Payments</h3>
+                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Everything saved, however far off. The Dashboard only shows what's due within 3 days or overdue.</p>
+            </div>
+        </div>
+        <div id="plannedPaymentsPageList"></div>
+        <p id="plannedPaymentsPageEmpty" style="display:none; text-align:center; color:var(--text-muted); font-size:0.85rem; padding:40px 20px;">No planned payments yet — save one from an Income or Expense entry's "🕒 Save as Planned" button.</p>
     </div>
 
     <!-- Inventory item detail/edit modal -->
@@ -4348,6 +4408,33 @@
         </div>
         <div class="config-list" id="memberPageAccountsList" style="padding-bottom:24px;"></div>
     </div>
+    </div> <!-- /pagesWrapper -->
+
+    <!-- v181/v366: Desktop "Insights" right rail — see the .desktop-insights-rail CSS comment for
+         why this now lives here (as #pagesWrapper's flex sibling inside #contentRow) instead of
+         up near the sidebar. Outside every .page div still, same as before, so it persists across
+         page navigation; refreshed by renderDesktopInsightsRail(), called from renderApp().
+         v182/v256: same element also serves as the <1400px slide-in drawer — see the CSS
+         comment. -->
+    <div class="desktop-insights-rail" id="desktopInsightsRail">
+        <div class="insights-rail-header">
+            <span class="insights-rail-title">Insights</span>
+            <button type="button" class="insights-rail-close-btn" data-click="closeInsightsDrawer" aria-label="Close insights panel">&times;</button>
+        </div>
+        <div class="insights-card">
+            <h4>Spending Breakdown (This Month)</h4>
+            <div id="insightsSpendingDonutWrap"></div>
+        </div>
+        <div class="insights-card">
+            <h4>Top Categories This Month</h4>
+            <div id="insightsTopCategoriesList"></div>
+        </div>
+        <div class="insights-card">
+            <h4>Recent Large Transactions</h4>
+            <div id="insightsLargeTxList"></div>
+        </div>
+    </div>
+    </div> <!-- /contentRow -->
 
     <!-- ================= SYSTEM MODALS ================= -->
     <!-- MODAL: Advanced Multi-Currency Core Configuration -->

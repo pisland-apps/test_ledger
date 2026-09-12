@@ -2592,3 +2592,98 @@ series without deleting it outright.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v360.
+
+## v361: Planned Payments — moved to its own sidebar page; Dashboard
+now only shows what's due within 3 days
+
+Requested directly: narrow the Dashboard widget to near-term items
+only, and give everything else (further out, or paused) a proper home
+instead of just disappearing.
+
+- **New sidebar entry "🕒 Planned Payments"** — a full list page
+  showing every saved payment, however far off, including paused ones
+  (`getAllPlannedPayments()` already sorts paused to the bottom; this
+  page just doesn't filter by date at all). No "+" button on this
+  page — a Planned Payment is still only ever created from the
+  Income/Expense entry form's "🕒 Save as Planned" button. Rows reuse
+  the exact same tap → action-sheet flow as the Dashboard widget
+  (`renderPlannedPaymentRowHtml()`, now shared by both instead of
+  duplicated).
+- **Dashboard widget narrowed**: only shows an entry that's due within
+  3 days or already overdue — anything further out, and anything
+  paused (regardless of date), no longer appears there at all. The
+  widget's title is now a link to the new full page (same pattern as
+  Warranty Reminders → Inventory).
+- **New `refreshPlannedPaymentsViews()`** — every action that changes
+  a Planned Payment (save, pause, resume, edit series, delete, mark
+  as paid) now calls this instead of refreshing the Dashboard widget
+  directly, so the full list page stays in sync too on the occasions
+  it's the one actually on screen when the change happens.
+- Verified with `node --check` plus the data-click/data-change/
+  `getElementById` cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v361.
+
+## v362: fixed blank Planned Payments page
+
+- **Fixed**: opening Planned Payments from the sidebar showed a
+  completely blank screen (reported via screenshot). Cause:
+  `showPage(id)` only toggles visibility for pages listed in a
+  hardcoded `APP_PAGE_IDS` array — v361 added the new
+  `page-plannedpayments` container and its sidebar entry, but never
+  added it to this array. The practical effect was worse than "does
+  nothing": `showPage()` still hid every *other* known page (since
+  none of them equal `"page-plannedpayments"`), while never revealing
+  the new one (since it isn't in the array `forEach` iterates), so
+  the result was every page hidden and nothing shown at all.
+- **Also fixed**: the hardware/browser Back button handler has its
+  own separate hardcoded "which page is currently open" check (a
+  second, independent list from `APP_PAGE_IDS`) — same gap, same fix.
+  Pressing Back from Planned Payments would previously have matched
+  no branch and done nothing.
+- Also added the missing case to `getActivePageTitle()` (used for the
+  printed-document header and PDF filename while printing) —
+  cosmetic, not the cause of the blank screen, but the same category
+  of "forgot to add the new page id to an existing hardcoded list."
+- Takeaway for future new pages in this codebase: adding a page needs
+  updating at least 3 separate hardcoded lists (`APP_PAGE_IDS`, the
+  popstate Back handler's page-detection block, `getActivePageTitle()`)
+  — not just the sidebar button + page container + navigate function.
+  Verified this time by grepping every existing reference to a sibling
+  page id (`"page-inventory"`) and confirming each one now has a
+  matching Planned Payments entry.
+- Verified with `node --check` plus the data-click/`getElementById`
+  cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v362.
+
+## v363: fixed Mark as Paid / Edit Series / Delete opening behind the
+Planned Payment action sheet
+
+- **Fixed** (reported via screenshot): tapping "✅ Mark as Paid" opened
+  the transaction entry form, but the action sheet (Mark as Paid /
+  Pause / Edit Series / Delete / Cancel) stayed stuck on top of it
+  instead of closing. Root cause: `closeModal()` doesn't actually
+  remove a modal's "active" class immediately — it triggers
+  `history.back()` and waits for that `popstate` event to do the
+  actual removal, one tick later (this is documented on `closeModal()`
+  itself, and there's an existing helper — `closeModalAndThen()` —
+  built specifically for this: "closing a modal, then handing off to
+  a freshly-opened one"). `confirmPlannedPaymentFromActionsModal()`
+  used a plain `closeModal()` immediately followed by
+  `openTransactionForm()` instead of that helper, so the new form
+  opened underneath a still-visually-active action sheet.
+- Same fix applied to **"✏️ Edit Series"** (`openEditPlannedSeriesModal()`)
+  and **"🗑 Delete"**'s confirmation prompt
+  (`deletePlannedPaymentFromActionsModal()`) — both had the identical
+  pattern and the identical latent bug, just not yet reported.
+  Pause/Resume were already safe — neither opens another modal
+  right after closing this one, so there was nothing for them to race
+  against.
+- Verified with `node --check` plus the data-click/`getElementById`
+  cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v363.
