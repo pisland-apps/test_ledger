@@ -2424,3 +2424,42 @@ Planned Payments
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v356.
+
+## v357: Planned Payments — added recurring
+
+Requested directly, after v355 shipped one-off only. Added on top
+without changing anything about how a plain one-off entry behaves.
+
+- **New "🔁 Repeat" toggle** next to "Save as Planned" on the
+  Income/Expense entry form — unchecked by default (so nothing about
+  a plain one-off entry changes). Checking it reveals "Every [N]
+  [Week(s)/Month(s)/Year(s)]" (defaults to 1 month).
+- **Storage**: each Planned Payment record gained a `recur` field —
+  `null` for one-off (unchanged from v355/v356), or
+  `{ freq: "weekly"|"monthly"|"yearly", interval: N }` for recurring.
+- **What happens when a recurring one is paid**: same "Mark as Paid"
+  flow as before — reopens the entry form prefilled, you review and
+  tap Commit Entry. Once that save actually succeeds, instead of
+  being deleted (like a one-off), the Planned Payment's `dueDate` is
+  advanced by one cycle (`computeNextDueDate()`, via
+  `advanceOrDeletePlannedPaymentAfterConfirm()`) and the same record
+  is kept — so it reappears in the dashboard widget as the next
+  occurrence, rather than needing to be re-entered every time.
+- **Deliberately only one record per recurring series** (the next
+  occurrence due), not a whole future schedule pre-generated. This
+  keeps Delete unambiguous — for a recurring pick, it always means
+  "stop the whole series" (the confirmation prompt says so
+  explicitly), never "which occurrence?".
+- **Dashboard widget**: a recurring entry shows a 🔁 icon (instead of
+  🕒) and its cadence, e.g. "(Repeats every month)".
+- **Known quirk, not fixed**: monthly/yearly recurrence advances the
+  calendar date via JavaScript's own `Date` month/year math, not
+  manual day-counting — so e.g. 31 Jan + 1 month lands on 2 or 3 Mar
+  in a non-leap year (there's no single "correct" answer for "the
+  month you're adding to doesn't have that day"; every calendar-math
+  library has some version of this same quirk).
+- Verified with `node --check` plus the data-click/data-change/
+  `getElementById` cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v357.

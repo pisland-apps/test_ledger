@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v356";
+        const APP_VERSION = "v357";
         const APP_VERSION_DATE = "2026-09-12";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -10819,6 +10819,8 @@
                 // see the comment on this same button in the brand-new-entry branch below.
                 const savePlannedBtnForEdit = document.getElementById("txSavePlannedBtn");
                 if (savePlannedBtnForEdit) savePlannedBtnForEdit.style.display = "none";
+                const repeatWrapForEdit = document.getElementById("txPlannedRepeatWrap");
+                if (repeatWrapForEdit) repeatWrapForEdit.style.display = "none";
                 document.getElementById("txDesc").value = tx.desc;
                 document.getElementById("txAmount").value = tx.amount;
                 document.getElementById("txCurrency").value = tx.currency;
@@ -10945,6 +10947,15 @@
                 // entered, before it's either posted for real or saved as planned.
                 const savePlannedBtn = document.getElementById("txSavePlannedBtn");
                 if (savePlannedBtn) savePlannedBtn.style.display = (type === "income" || type === "expense") ? "block" : "none";
+                // v357: Repeat — same visibility rule as the button above, plus reset to its
+                // unchecked/default state every fresh open so a previous entry's "Repeat" pick
+                // (e.g. weekly, every 2) never silently carries into an unrelated new one.
+                const repeatWrap = document.getElementById("txPlannedRepeatWrap");
+                if (repeatWrap) repeatWrap.style.display = (type === "income" || type === "expense") ? "block" : "none";
+                document.getElementById("txPlannedRepeatToggle").checked = false;
+                document.getElementById("txPlannedRepeatFields").style.display = "none";
+                document.getElementById("txPlannedRepeatInterval").value = "1";
+                document.getElementById("txPlannedRepeatFreq").value = "monthly";
                 // Split Expenses only makes sense for a brand-new Income/Expense entry.
                 document.getElementById("txSplitWrap").style.display = (type === "transfer") ? "none" : "block";
                 // v318: "Add to Inventory" only makes sense for a brand-new Expense entry — reset
@@ -12828,12 +12839,15 @@
             }
             pendingRemoveTagName = null;
             pendingRefundOf = null;
-            // v354: this Save came from the "Mark as Paid" flow (confirmPlannedPayment()) — the
-            // transaction itself just saved successfully above, so the source Planned Payment
-            // record is now redundant. Deliberately AFTER every possible early `return` above,
-            // so a validation failure never deletes it out from under an unsaved entry.
+            // v357: this Save came from the "Mark as Paid" flow (confirmPlannedPayment()) — the
+            // transaction itself just saved successfully above. A one-off Planned Payment is now
+            // redundant and gets deleted, same as before. A recurring one instead has its
+            // dueDate advanced to the next occurrence and is kept — see
+            // advancePlannedPaymentToNextOccurrence(). Deliberately AFTER every possible early
+            // `return` above, so a validation failure never touches it out from under an unsaved
+            // entry.
             if (currentPlannedPaymentIdBeingConfirmed) {
-                try { await deleteDB(STORES.PLANNED_PAYMENTS, currentPlannedPaymentIdBeingConfirmed); } catch (err) { /* non-fatal — the transaction itself already saved fine */ }
+                try { await advanceOrDeletePlannedPaymentAfterConfirm(currentPlannedPaymentIdBeingConfirmed); } catch (err) { /* non-fatal — the transaction itself already saved fine */ }
                 currentPlannedPaymentIdBeingConfirmed = null;
             }
             closeModal("txModal");
@@ -13384,16 +13398,74 @@
             renderInvAttachmentPreview();
         }
 
-        // --- PLANNED PAYMENTS (v354) --- one-off bills keyed in ahead of being paid. A Planned
-        // Payment is deliberately NOT a transaction — it lives in its own store
+        // --- PLANNED PAYMENTS (v354, recurring added v357) --- bills keyed in ahead of being
+        // paid. A Planned Payment is deliberately NOT a transaction — it lives in its own store
         // (STORES.PLANNED_PAYMENTS) and never touches an account's balance or net worth. It's
         // created from the ordinary Income/Expense entry form (see the "🕒 Save as Planned"
         // button next to Commit Entry, and savePlannedPaymentFromTxForm() below) and only
         // becomes a real transaction — through the exact same, already-tested save pipeline in
         // handleTransactionSubmitMobile() — once "Mark as Paid" is used (confirmPlannedPayment()
-        // below). No recurrence support (requested as one-off only, for now).
+        // below). A one-off payment is deleted once paid; a recurring one instead has its dueDate
+        // advanced to the next occurrence and is kept — see advanceOrDeletePlannedPaymentAfterConfirm().
+        // There's deliberately only ever ONE record per recurring series (the next occurrence
+        // due) rather than a whole future schedule pre-generated — simpler, and it means Delete
+        // has one unambiguous meaning (stop the series), never "which occurrence?".
+        function toggleTxPlannedRepeatFields() {
+            document.getElementById("txPlannedRepeatFields").style.display = document.getElementById("txPlannedRepeatToggle").checked ? "flex" : "none";
+        }
+
         function makePlannedPaymentId() {
             return "pp_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+        }
+
+        // recur is either null (one-off) or { freq: "weekly"|"monthly"|"yearly", interval: N }
+        // (every N weeks/months/years). Adding calendar months/years via the Date constructor
+        // (not manual day-math) means it inherits JS's own month/year-overflow normalization —
+        // e.g. 31 Jan + 1 month lands on 2/3 Mar in a non-leap year, the same well-known quirk
+        // every calendar-math library has for "the month you're adding to doesn't have that
+        // day" (there's no universally "correct" answer — Ledger doesn't try to invent one).
+        function computeNextDueDate(dateStr, recur) {
+            const d = new Date(dateStr + "T00:00:00");
+            const n = Math.max(1, parseInt(recur.interval, 10) || 1);
+            if (recur.freq === "weekly") d.setDate(d.getDate() + 7 * n);
+            else if (recur.freq === "yearly") d.setFullYear(d.getFullYear() + n);
+            else d.setMonth(d.getMonth() + n); // "monthly" (and any unrecognized value) falls back here
+            return todayLocalStrFromDate(d);
+        }
+
+        // Small formatter shared with computeNextDueDate() above — todayLocalStr() only ever
+        // formats *today's actual date*, not an arbitrary computed Date object, so this is its
+        // own tiny counterpart rather than a misuse of that function.
+        function todayLocalStrFromDate(d) {
+            const y = d.getFullYear();
+            const m = String(d.getMonth() + 1).padStart(2, "0");
+            const day = String(d.getDate()).padStart(2, "0");
+            return `${y}-${m}-${day}`;
+        }
+
+        function recurLabel(recur) {
+            if (!recur) return "";
+            const n = Math.max(1, parseInt(recur.interval, 10) || 1);
+            const unit = { weekly: "week", monthly: "month", yearly: "year" }[recur.freq] || "month";
+            return n === 1 ? `Repeats every ${unit}` : `Repeats every ${n} ${unit}s`;
+        }
+
+        // Called once handleTransactionSubmitMobile()'s Save has actually succeeded for a "Mark
+        // as Paid" confirm (see currentPlannedPaymentIdBeingConfirmed). A one-off payment
+        // (recur === null/undefined) is deleted, same as before v357. A recurring one keeps its
+        // id/type/desc/amount/etc. exactly as-is and just gets its dueDate pushed forward by one
+        // cycle — so it reappears in the dashboard widget as the next occurrence due, rather than
+        // needing to be re-entered from scratch every time.
+        async function advanceOrDeletePlannedPaymentAfterConfirm(paymentId) {
+            const payments = await readAllDB(STORES.PLANNED_PAYMENTS);
+            const payment = payments.find(p => p.id === paymentId);
+            if (!payment) return; // already gone (e.g. deleted from another tab) — nothing to do
+            if (payment.recur) {
+                payment.dueDate = computeNextDueDate(payment.dueDate, payment.recur);
+                await writeDB(STORES.PLANNED_PAYMENTS, payment);
+            } else {
+                await deleteDB(STORES.PLANNED_PAYMENTS, paymentId);
+            }
         }
 
         async function getAllPlannedPayments() {
@@ -13430,6 +13502,13 @@
             if (isNaN(parsedAmount) || parsedAmount <= 0) { alert("Please enter a valid amount greater than zero."); return; }
             if (!dateVal) { alert("Please select a due date."); return; }
 
+            // v357: Repeat — see the txPlannedRepeatWrap block next to this same button.
+            const repeatChecked = document.getElementById("txPlannedRepeatToggle").checked;
+            const recur = repeatChecked ? {
+                freq: document.getElementById("txPlannedRepeatFreq").value,
+                interval: Math.max(1, parseInt(document.getElementById("txPlannedRepeatInterval").value, 10) || 1)
+            } : null;
+
             let finalAttachments = [];
             try {
                 for (const att of existingTxAttachments) {
@@ -13465,6 +13544,7 @@
                 dueDate: dateVal,
                 notes: document.getElementById("txNotes").value.trim(),
                 attachments: finalAttachments,
+                recur,
                 createdAt: todayLocalStr()
             };
             try {
@@ -13504,7 +13584,7 @@
                 const color = p.type === "income" ? "var(--income-color)" : "var(--expense-color)";
                 return `
                     <div class="config-item" data-click="plannedPaymentRowTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">
-                        <span class="category-display-badge">🕒 <strong>${escapeHtml(p.desc)}</strong>${p.cat ? " — " + escapeHtml(p.cat) : ""}</span>
+                        <span class="category-display-badge">${p.recur ? "🔁" : "🕒"} <strong>${escapeHtml(p.desc)}</strong>${p.cat ? " — " + escapeHtml(p.cat) : ""}${p.recur ? ` <span style="font-weight:400; color:var(--text-muted);">(${escapeHtml(recurLabel(p.recur))})</span>` : ""}</span>
                         <span style="text-align:right;">
                             <span style="display:block; font-size:0.85rem; font-weight:700; color:${color};">${sign}${formatCurrency(p.amount, p.currency)}</span>
                             <span style="font-size:0.75rem; font-weight:700; color:${overdue ? "var(--expense-color)" : "var(--text-muted)"};">${dueLabel}</span>
@@ -13564,9 +13644,14 @@
                 renderTxAttachmentPreview();
             }
             // This is a confirm, not a fresh entry — re-saving it as (another) Planned Payment
-            // from here would just leave a duplicate behind once this one gets deleted below.
+            // from here would just leave a duplicate behind once this one gets advanced/deleted
+            // below. Same reasoning for the Repeat block — this record's own recur (if any)
+            // already carries forward automatically in advanceOrDeletePlannedPaymentAfterConfirm(),
+            // it's not something to re-decide at confirm time.
             const savePlannedBtn = document.getElementById("txSavePlannedBtn");
             if (savePlannedBtn) savePlannedBtn.style.display = "none";
+            const repeatWrap = document.getElementById("txPlannedRepeatWrap");
+            if (repeatWrap) repeatWrap.style.display = "none";
 
             currentPlannedPaymentIdBeingConfirmed = paymentId;
         }
@@ -13575,7 +13660,15 @@
             const paymentId = activePlannedPaymentId;
             closeModal("plannedPaymentActionsModal");
             if (!paymentId) return;
-            const confirmed = await customConfirm("Delete this planned payment? This can't be undone.");
+            const payments = await getAllPlannedPayments();
+            const payment = payments.find(p => p.id === paymentId);
+            // v357: since there's only ever one record per recurring series (see this section's
+            // top comment), Delete always means "stop the whole series" for a recurring one —
+            // said explicitly here so that's never a surprise.
+            const message = (payment && payment.recur)
+                ? "Delete this recurring planned payment? This stops the whole series — it can't be undone."
+                : "Delete this planned payment? This can't be undone.";
+            const confirmed = await customConfirm(message);
             if (!confirmed) return;
             try { await deleteDB(STORES.PLANNED_PAYMENTS, paymentId); } catch (err) {}
             await renderPlannedPaymentsWidget();
@@ -18727,6 +18820,7 @@
             syncTransactionCurrency: () => syncTransactionCurrency(),
             handleTxAttachmentsSelected: (el, e) => handleTxAttachmentsSelected(e),
             handleCompanionCustomImageSelected: (el) => handleCompanionCustomImageSelected(el),
+            toggleTxPlannedRepeatFields: () => toggleTxPlannedRepeatFields(),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             handleAutoLockChange: () => handleAutoLockChange(),

@@ -5294,6 +5294,26 @@
                      assignment in openTransactionForm(). Saves everything on this form into a
                      separate Planned Payment record instead of posting a real transaction — see
                      savePlannedPaymentFromTxForm(). -->
+                <!-- v357: Repeat — same visibility toggle as txSavePlannedBtn just below (shown/
+                     hidden together everywhere: openTransactionForm()'s two branches, and hidden
+                     again during the "Mark as Paid" confirm prefill in
+                     confirmPlannedPaymentFromActionsModal(), since a recurring pick's own recur
+                     already carries forward on its own from there — nothing to re-decide). -->
+                <div id="txPlannedRepeatWrap" style="display:none; margin-top:10px;">
+                    <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; font-weight:700;">
+                        <input type="checkbox" id="txPlannedRepeatToggle" data-change="toggleTxPlannedRepeatFields" style="width:auto;">
+                        🔁 Repeat
+                    </label>
+                    <div id="txPlannedRepeatFields" style="display:none; align-items:center; gap:8px; margin-top:8px;">
+                        <span style="font-size:0.85rem;">Every</span>
+                        <input type="number" id="txPlannedRepeatInterval" class="form-input" value="1" min="1" style="width:56px; flex:0 0 auto;">
+                        <select id="txPlannedRepeatFreq" class="form-input" style="flex:0 0 auto; width:auto;">
+                            <option value="weekly">Week(s)</option>
+                            <option value="monthly" selected>Month(s)</option>
+                            <option value="yearly">Year(s)</option>
+                        </select>
+                    </div>
+                </div>
                 <button type="button" data-click="savePlannedPaymentFromTxForm" id="txSavePlannedBtn" class="submit-btn" style="display:none; margin-top:10px; background:var(--chip-bg); color:var(--text-main);">🕒 Save as Planned</button>
                 <button type="button" data-click="deleteTxFromEditModal" id="txDeleteBtn" class="submit-btn" style="display:none; margin-top:10px; background:#fee2e2; color:var(--expense-color);">🗑 Delete Entry</button>
             </div>
