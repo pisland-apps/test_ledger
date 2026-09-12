@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v357";
+        const APP_VERSION = "v358";
         const APP_VERSION_DATE = "2026-09-12";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -13419,17 +13419,42 @@
         }
 
         // recur is either null (one-off) or { freq: "weekly"|"monthly"|"yearly", interval: N }
-        // (every N weeks/months/years). Adding calendar months/years via the Date constructor
-        // (not manual day-math) means it inherits JS's own month/year-overflow normalization —
-        // e.g. 31 Jan + 1 month lands on 2/3 Mar in a non-leap year, the same well-known quirk
-        // every calendar-math library has for "the month you're adding to doesn't have that
-        // day" (there's no universally "correct" answer — Ledger doesn't try to invent one).
+        // (every N weeks/months/years).
+        // v358: switched monthly/yearly from raw Date-overflow rollover (31 Jan + 1 month → 2/3
+        // Mar) to CLAMP-to-end-of-month (31 Jan + 1 month → 28/29 Feb) — a Planned Payment is a
+        // bill reminder, and bills are overwhelmingly month-end-anchored (rent, card statements,
+        // subscriptions): the mental model is "the last day of next month," not "31 days from
+        // now, whatever that lands on." The two approaches only disagree on days 29-31 — every
+        // due date from the 1st-28th advances identically either way, so this only changes
+        // behavior for the exact cases it was reported as wrong for. It also matches what Google
+        // Calendar and Apple Reminders both do for a recurring monthly/yearly event, which is
+        // the expectation anyone coming from those (or from another budgeting app) already has.
+        // Weekly is exact day-arithmetic regardless (7×N days), so there's nothing to clamp there.
         function computeNextDueDate(dateStr, recur) {
-            const d = new Date(dateStr + "T00:00:00");
+            const [y, m, day] = dateStr.split("-").map(Number); // m is 1-indexed
             const n = Math.max(1, parseInt(recur.interval, 10) || 1);
-            if (recur.freq === "weekly") d.setDate(d.getDate() + 7 * n);
-            else if (recur.freq === "yearly") d.setFullYear(d.getFullYear() + n);
-            else d.setMonth(d.getMonth() + n); // "monthly" (and any unrecognized value) falls back here
+
+            if (recur.freq === "weekly") {
+                const d = new Date(y, m - 1, day);
+                d.setDate(d.getDate() + 7 * n);
+                return todayLocalStrFromDate(d);
+            }
+
+            let targetYear, targetMonth; // targetMonth stays 1-indexed throughout
+            if (recur.freq === "yearly") {
+                targetYear = y + n;
+                targetMonth = m;
+            } else { // "monthly" (and any unrecognized value) falls back here
+                const totalMonths = (m - 1) + n;
+                targetYear = y + Math.floor(totalMonths / 12);
+                targetMonth = (totalMonths % 12) + 1;
+            }
+            // Day 0 of "next month" is the last day of targetMonth — the standard trick for
+            // "how many days does this month have" without a lookup table (handles leap Februaries
+            // for free, since it's just asking the Date object what day 0 of March is).
+            const lastDayOfTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
+            const clampedDay = Math.min(day, lastDayOfTargetMonth);
+            const d = new Date(targetYear, targetMonth - 1, clampedDay);
             return todayLocalStrFromDate(d);
         }
 
@@ -13452,15 +13477,34 @@
 
         // Called once handleTransactionSubmitMobile()'s Save has actually succeeded for a "Mark
         // as Paid" confirm (see currentPlannedPaymentIdBeingConfirmed). A one-off payment
-        // (recur === null/undefined) is deleted, same as before v357. A recurring one keeps its
-        // id/type/desc/amount/etc. exactly as-is and just gets its dueDate pushed forward by one
-        // cycle — so it reappears in the dashboard widget as the next occurrence due, rather than
-        // needing to be re-entered from scratch every time.
+        // (recur === null/undefined) is deleted, same as before v357.
+        // v358: a recurring one no longer just gets its dueDate pushed forward with every other
+        // field frozen at whatever they were when it was first created — every field is now
+        // re-synced from what was actually just reviewed/edited and posted on the form (rent
+        // went up, account changed, etc.), since that's the freshest information available and
+        // the person literally just confirmed it. There's no separate "edit this series" action
+        // (raised as a possible gap) — Mark as Paid IS that action, every time, since the person
+        // sees and can adjust every field right before confirming anyway. Attachments are
+        // deliberately NOT carried forward — this month's receipt is already attached to the
+        // transaction that was just posted; next month's occurrence starts with none, the same
+        // as any other future Planned Payment, rather than showing a stale photo.
         async function advanceOrDeletePlannedPaymentAfterConfirm(paymentId) {
             const payments = await readAllDB(STORES.PLANNED_PAYMENTS);
             const payment = payments.find(p => p.id === paymentId);
             if (!payment) return; // already gone (e.g. deleted from another tab) — nothing to do
             if (payment.recur) {
+                const newDesc = document.getElementById("txDesc").value.trim();
+                if (newDesc) payment.desc = newDesc;
+                const newAmount = parseFloat(document.getElementById("txAmount").value);
+                if (!isNaN(newAmount) && newAmount > 0) payment.amount = newAmount;
+                const newCurrency = document.getElementById("txCurrency").value;
+                if (newCurrency) payment.currency = newCurrency;
+                const newAccountId = document.getElementById("srcAccount").value;
+                if (newAccountId) payment.accountId = newAccountId;
+                const newCat = document.getElementById("txCategory").value;
+                if (newCat) payment.cat = newCat;
+                payment.notes = document.getElementById("txNotes").value.trim();
+                payment.attachments = [];
                 payment.dueDate = computeNextDueDate(payment.dueDate, payment.recur);
                 await writeDB(STORES.PLANNED_PAYMENTS, payment);
             } else {

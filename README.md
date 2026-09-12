@@ -2463,3 +2463,42 @@ without changing anything about how a plain one-off entry behaves.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v357.
+
+## v358: recurrence now clamps to month-end (not overflow), and syncs
+edited amounts forward
+
+Two changes requested together, both to how a recurring Planned
+Payment advances after "Mark as Paid" — no change to one-off behavior.
+
+- **Clamp instead of overflow**: 31 Jan + 1 month now lands on 28/29
+  Feb, not 2/3 Mar. `computeNextDueDate()` rewritten — for
+  monthly/yearly, it now finds the target month's actual last day
+  (`new Date(year, month, 0).getDate()`, the standard "day 0 of next
+  month" trick, which handles leap Februaries for free) and clamps the
+  day to it, rather than letting the `Date` object roll the overflow
+  into the following month. Only days 29-31 are affected — every due
+  date on the 1st-28th advances identically either way, so this is a
+  pure fix for the month-end case, not a behavior change for most
+  bills. Weekly is untouched (exact day-arithmetic, nothing to clamp).
+  Matches how Google Calendar and Apple Reminders both handle a
+  recurring monthly/yearly event.
+- **Edited fields now carry forward, not just the date**: previously,
+  advancing a recurring payment only touched `dueDate` — every other
+  field stayed frozen at whatever it was when first created, even if
+  you'd just edited the amount (rent went up) on the Mark as Paid
+  form before confirming. `advanceOrDeletePlannedPaymentAfterConfirm()`
+  now re-syncs desc/amount/currency/accountId/cat/notes from what was
+  actually just posted, since Mark as Paid already shows every field
+  for review right before confirming — that review *is* the "edit this
+  series" action, rather than needing a separate one. Attachments are
+  deliberately NOT carried forward (this occurrence's receipt is
+  already on the transaction that just posted; the next one starts
+  with none, like any other future Planned Payment).
+- Verified with `node --check`, the data-click/data-change/
+  `getElementById` cross-reference script (0 missing), and a standalone
+  unit test of `computeNextDueDate()` against 8 cases (leap years,
+  year-boundary rollover, month-end clamping, plain mid-month dates,
+  weekly) — all passing.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v358.
