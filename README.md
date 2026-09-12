@@ -2350,3 +2350,50 @@ Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v349.
+
+## v355: Planned Payments (one-off) — key in a bill now, confirm it as
+paid later
+
+New feature, requested directly: a way to enter a bill's details the
+moment it's in hand, without it posting as a real transaction (and
+touching your balance) until you actually pay it.
+
+- **New "🕒 Save as Planned" button** on the ordinary Income/Expense
+  entry form, next to Commit Entry — only shown for a brand-new
+  Income/Expense entry (hidden for Transfers, Fixed Deposits, Fund
+  transactions, and when editing an existing record; one-off only, no
+  recurrence for now). Saves everything you typed — amount, category,
+  account, due date, notes, attachments — into a new, separate
+  `plannedPayments` store instead of posting a transaction, so it has
+  zero effect on any account balance or your net worth.
+- **New "Planned Payments" dashboard widget** (same visual style as
+  Warranty Reminders), listing every saved one sorted by due date,
+  with "Xd left" or "Overdue Xd" shown in red. Hidden entirely when
+  there's nothing planned. Tapping a row opens a small action sheet:
+  **"✅ Mark as Paid"** or **"🗑 Delete"**.
+- **Mark as Paid** reopens the *exact same* Income/Expense entry form,
+  pre-filled with everything already saved (description, amount,
+  currency, account, category, notes, attachments) and the date reset
+  to today (adjustable) — review/adjust, then tap the normal Commit
+  Entry. It goes through the exact same, already-tested transaction
+  save pipeline (`handleTransactionSubmitMobile()`) as any other
+  entry; only once that save actually succeeds does the source
+  Planned Payment record get deleted
+  (`currentPlannedPaymentIdBeingConfirmed`, reset at the top of every
+  `openTransactionForm()` call so a cancelled confirm can never
+  bleed into some later, unrelated Save).
+- **New IndexedDB store** `plannedPayments` (`STORES.PLANNED_PAYMENTS`,
+  keyPath `id`, app-generated via `makePlannedPaymentId()`) —
+  `DB_VERSION` bumped 10 → 11. Shape: `{ id, type ("income"|"expense"),
+  desc, amount, currency, accountId, cat, dueDate, notes, attachments:
+  [{id,name,mime,thumb,size}] (same shape/store as transaction
+  attachments), createdAt }`.
+- **Travels with Backup & Restore** — added to both `exportBackup()`'s
+  bundle and `importBackup()`'s restore/clear-before-restore logic,
+  same "absent on older backups → skip" pattern every other store
+  here already follows.
+- Verified with `node --check` plus the data-click/data-change/
+  `getElementById` cross-reference script (0 missing).
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v355.

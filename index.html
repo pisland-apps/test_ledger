@@ -2953,6 +2953,18 @@
         <div class="ledger-container" id="warrantyReminderList"></div>
         </div>
 
+        <!-- v354: Planned Payments — one-off bills keyed in ahead of being paid (see the "🕒 Save
+             as Planned" button on the Income/Expense entry form). Hidden entirely when empty.
+             Rows ARE clickable — tapping one opens the Mark as Paid / Delete action sheet
+             (plannedPaymentActionsModal below); there's no separate list page, this widget IS
+             the list. -->
+        <div id="dashboardPlannedPaymentsWidget" style="display:none;">
+        <div class="section-header">
+            <span class="section-title">🕒 Planned Payments</span>
+        </div>
+        <div class="ledger-container" id="plannedPaymentsList"></div>
+        </div>
+
         <div id="dashboardAccountsWidget">
         <div class="section-header">
             <span class="section-title" style="cursor:pointer;" data-click="navigateToAccountsPage">Accounts</span>
@@ -5277,6 +5289,12 @@
             </div>
             <div style="flex-shrink:0; padding:14px 20px; border-top:1px solid var(--border-color);">
                 <button type="button" data-click="handleTransactionSubmitMobile" id="txSubmitBtn" class="submit-btn">Commit Entry</button>
+                <!-- v354: only shown for a brand-new Income/Expense entry — see the display-toggle
+                     next to every `document.getElementById("txId").value = ...`/`.value = type`
+                     assignment in openTransactionForm(). Saves everything on this form into a
+                     separate Planned Payment record instead of posting a real transaction — see
+                     savePlannedPaymentFromTxForm(). -->
+                <button type="button" data-click="savePlannedPaymentFromTxForm" id="txSavePlannedBtn" class="submit-btn" style="display:none; margin-top:10px; background:var(--chip-bg); color:var(--text-main);">🕒 Save as Planned</button>
                 <button type="button" data-click="deleteTxFromEditModal" id="txDeleteBtn" class="submit-btn" style="display:none; margin-top:10px; background:#fee2e2; color:var(--expense-color);">🗑 Delete Entry</button>
             </div>
         </div>
@@ -5819,6 +5837,17 @@
                 <button type="button" id="confirmModalCancelBtn" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin-top:0;">Cancel</button>
                 <button type="button" id="confirmModalOkBtn" class="submit-btn" style="background:var(--expense-color); margin-top:0;">Confirm</button>
             </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Planned Payment action sheet — shown when a row in the dashboard's Planned
+         Payments widget is tapped (see plannedPaymentRowTap()). Just two actions; no dedicated
+         list/detail page exists for this feature — the dashboard widget doubles as the list. -->
+    <div class="modal" id="plannedPaymentActionsModal" style="z-index:10000;">
+        <div class="modal-sheet" style="max-width: 340px;">
+            <button type="button" class="submit-btn" data-click="confirmPlannedPaymentFromActionsModal" style="margin-top:0;">✅ Mark as Paid</button>
+            <button type="button" class="submit-btn" data-click="deletePlannedPaymentFromActionsModal" style="margin-top:10px; background:#fee2e2; color:var(--expense-color);">🗑 Delete</button>
+            <button type="button" class="submit-btn" data-click="closePlannedPaymentActionsModal" style="margin-top:10px; background:var(--chip-bg); color:var(--text-main);">Cancel</button>
         </div>
     </div>
 

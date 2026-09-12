@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v354";
-        const APP_VERSION_DATE = "2026-09-11";
+        const APP_VERSION = "v355";
+        const APP_VERSION_DATE = "2026-09-12";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -63,8 +63,8 @@
         // active/disposed/lost status). Created either inline from an Expense entry (see the
         // "📦 Add to Inventory" block on the transaction form) or manually from the Inventory
         // page's own + button. See the "--- INVENTORY ---" section below.
-        const DB_VERSION = 10;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags", BUDGETS: "budgets", INVENTORY: "inventory" };
+        const DB_VERSION = 11;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags", BUDGETS: "budgets", INVENTORY: "inventory", PLANNED_PAYMENTS: "plannedPayments" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
@@ -1330,6 +1330,14 @@
         let tempTxAttachments = [];
         let existingTxAttachments = [];
 
+        // v354: set only by confirmPlannedPayment() (the "Mark as Paid" flow), right after it
+        // calls openTransactionForm() — cleared to null at the top of every openTransactionForm()
+        // call, so it can never linger from a cancelled/abandoned confirm into some later,
+        // unrelated Save. handleTransactionSubmitMobile() checks this once the transaction it's
+        // saving has actually succeeded, and if set, deletes that one Planned Payment record —
+        // see the "--- PLANNED PAYMENTS ---" section.
+        let currentPlannedPaymentIdBeingConfirmed = null;
+
         // v88: Transaction Quick View / Options / Refund / Split state.
         // Which transaction id the Quick View modal is currently showing — set by openTxQuickView(),
         // read by the toggle-checked/options/duplicate/refund/delete actions reached from it.
@@ -1980,6 +1988,17 @@
                         // transaction attachments), createdAt, updated }. See the
                         // "--- INVENTORY ---" section for the full model.
                         database.createObjectStore(STORES.INVENTORY, { keyPath: "id" });
+                    }
+                    if (!database.objectStoreNames.contains(STORES.PLANNED_PAYMENTS)) {
+                        // v354: one record per one-off bill keyed in ahead of being paid —
+                        // keyPath "id" (app-generated, see makePlannedPaymentId()). Shape: { id,
+                        // type ("income"|"expense"), desc, amount, currency, accountId, cat,
+                        // dueDate, notes, attachments: [{id,name,mime,thumb,size}] (same
+                        // shape/store as transaction attachments), createdAt }. Deleted the moment
+                        // "Mark as Paid" successfully posts it as a real transaction — see
+                        // savePlannedPaymentFromTxForm()/confirmPlannedPayment() in the
+                        // "--- PLANNED PAYMENTS ---" section.
+                        database.createObjectStore(STORES.PLANNED_PAYMENTS, { keyPath: "id" });
                     }
                 };
                 request.onerror = (e) => reject(e.target.error);
@@ -10705,6 +10724,10 @@
         }
 
         async function openTransactionForm(type, existingTxId = null, presetSrcAccountId = null) {
+            // v354: reset here (not just when a Planned Payment confirm actually completes) so a
+            // cancelled/abandoned "Mark as Paid" can never bleed into some later, unrelated Save —
+            // confirmPlannedPayment() re-sets this immediately after calling this same function.
+            currentPlannedPaymentIdBeingConfirmed = null;
             // v252: fresh Description-suggestion cache + a clean dropdown state every time this
             // form opens, whether that's a brand-new entry, editing an existing one, or via
             // Refund/Duplicate/Template (all of which route through this same function) — so
@@ -10792,6 +10815,10 @@
 
                 document.getElementById("txId").value = tx.id;
                 document.getElementById("txType").value = tx.type;
+                // v354: editing an existing record is never eligible for "Save as Planned" —
+                // see the comment on this same button in the brand-new-entry branch below.
+                const savePlannedBtnForEdit = document.getElementById("txSavePlannedBtn");
+                if (savePlannedBtnForEdit) savePlannedBtnForEdit.style.display = "none";
                 document.getElementById("txDesc").value = tx.desc;
                 document.getElementById("txAmount").value = tx.amount;
                 document.getElementById("txCurrency").value = tx.currency;
@@ -10911,6 +10938,13 @@
                 document.getElementById("txAmount").value = "";
                 document.getElementById("txNotes").value = "";
                 document.getElementById("txChecked").checked = false;
+                // v354: "🕒 Save as Planned" — only offered for a brand-new Income/Expense entry
+                // (Planned Payments has no Transfer/Fixed-Deposit/Fund-transaction support; see
+                // savePlannedPaymentFromTxForm()'s own comment for why). Editing an existing
+                // record hides it too — "planned" only makes sense the first time something is
+                // entered, before it's either posted for real or saved as planned.
+                const savePlannedBtn = document.getElementById("txSavePlannedBtn");
+                if (savePlannedBtn) savePlannedBtn.style.display = (type === "income" || type === "expense") ? "block" : "none";
                 // Split Expenses only makes sense for a brand-new Income/Expense entry.
                 document.getElementById("txSplitWrap").style.display = (type === "transfer") ? "none" : "block";
                 // v318: "Add to Inventory" only makes sense for a brand-new Expense entry — reset
@@ -12794,6 +12828,14 @@
             }
             pendingRemoveTagName = null;
             pendingRefundOf = null;
+            // v354: this Save came from the "Mark as Paid" flow (confirmPlannedPayment()) — the
+            // transaction itself just saved successfully above, so the source Planned Payment
+            // record is now redundant. Deliberately AFTER every possible early `return` above,
+            // so a validation failure never deletes it out from under an unsaved entry.
+            if (currentPlannedPaymentIdBeingConfirmed) {
+                try { await deleteDB(STORES.PLANNED_PAYMENTS, currentPlannedPaymentIdBeingConfirmed); } catch (err) { /* non-fatal — the transaction itself already saved fine */ }
+                currentPlannedPaymentIdBeingConfirmed = null;
+            }
             closeModal("txModal");
             await refreshAfterTransactionChange();
         }
@@ -13340,6 +13382,193 @@
         function removeTempInvAttachment(el) {
             invTempAttachments.splice(parseInt(el.dataset.idx, 10), 1);
             renderInvAttachmentPreview();
+        }
+
+        // --- PLANNED PAYMENTS (v354) --- one-off bills keyed in ahead of being paid. A Planned
+        // Payment is deliberately NOT a transaction — it lives in its own store
+        // (STORES.PLANNED_PAYMENTS) and never touches an account's balance or net worth. It's
+        // created from the ordinary Income/Expense entry form (see the "🕒 Save as Planned"
+        // button next to Commit Entry, and savePlannedPaymentFromTxForm() below) and only
+        // becomes a real transaction — through the exact same, already-tested save pipeline in
+        // handleTransactionSubmitMobile() — once "Mark as Paid" is used (confirmPlannedPayment()
+        // below). No recurrence support (requested as one-off only, for now).
+        function makePlannedPaymentId() {
+            return "pp_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+        }
+
+        async function getAllPlannedPayments() {
+            const list = await readAllDB(STORES.PLANNED_PAYMENTS);
+            return list.sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+        }
+
+        // Called by the "🕒 Save as Planned" button on the Income/Expense entry form — reads the
+        // exact same fields handleTransactionSubmitMobile() itself would read (same validation
+        // too, minus everything Transfer/Fixed-Deposit/Fund/Split/Inventory-only, since this
+        // button is only ever shown for a brand-new Income/Expense entry in the first place — see
+        // its display-toggle in openTransactionForm()). Attachments follow the identical
+        // persist-then-reference pattern handleTransactionSubmitMobile() uses, just written onto
+        // this record instead of a transaction one.
+        async function savePlannedPaymentFromTxForm() {
+            const type = document.getElementById("txType").value;
+            if (type !== "income" && type !== "expense") return; // guarded by the button's own visibility too
+
+            const desc = document.getElementById("txDesc").value.trim();
+            const amountVal = document.getElementById("txAmount").value;
+            const dateVal = document.getElementById("txDate").value;
+            if (!desc || !amountVal) { alert("Please fill out both description and amount fields."); return; }
+            const parsedAmount = parseFloat(amountVal);
+            if (isNaN(parsedAmount) || parsedAmount <= 0) { alert("Please enter a valid amount greater than zero."); return; }
+            if (!dateVal) { alert("Please select a due date."); return; }
+
+            let finalAttachments = [];
+            try {
+                for (const att of existingTxAttachments) {
+                    if (att.legacyData) {
+                        const id = makeAttId();
+                        await writeDB(STORES.ATTACHMENTS, { id, name: att.name, mime: att.mime, data: att.legacyData });
+                        finalAttachments.push({ id, name: att.name, mime: att.mime, thumb: att.thumb, size: att.size });
+                    } else {
+                        finalAttachments.push({ id: att.id, name: att.name, mime: att.mime, thumb: att.thumb, size: att.size });
+                    }
+                }
+                for (const att of tempTxAttachments) {
+                    const id = makeAttId();
+                    await writeDB(STORES.ATTACHMENTS, { id, name: att.name, mime: att.mime, data: att.data });
+                    finalAttachments.push({ id, name: att.name, mime: att.mime, thumb: att.thumb, size: att.size });
+                }
+            } catch (err) {
+                const msg = (err && err.name === "QuotaExceededError")
+                    ? "Not enough storage space to save these attachments. Try removing one or freeing up space."
+                    : "Could not save attachments: " + (err && err.message ? err.message : err);
+                alert(msg);
+                return;
+            }
+
+            const record = {
+                id: makePlannedPaymentId(),
+                type,
+                desc,
+                amount: parsedAmount,
+                currency: document.getElementById("txCurrency").value,
+                accountId: document.getElementById("srcAccount").value || null,
+                cat: document.getElementById("txCategory").value || null,
+                dueDate: dateVal,
+                notes: document.getElementById("txNotes").value.trim(),
+                attachments: finalAttachments,
+                createdAt: todayLocalStr()
+            };
+            try {
+                await writeDB(STORES.PLANNED_PAYMENTS, record);
+            } catch (err) {
+                const msg = (err && err.name === "QuotaExceededError")
+                    ? "Not enough storage space to save this planned payment. Try removing an attachment or freeing up space."
+                    : "Could not save planned payment: " + (err && err.message ? err.message : err);
+                alert(msg);
+                return;
+            }
+            closeModal("txModal");
+            await renderPlannedPaymentsWidget();
+            showToast("Saved as a planned payment");
+        }
+
+        // Dashboard "Planned Payments" widget — same visual language as renderWarrantyReminderWidget()
+        // just above (a .config-item row per entry, hidden entirely when the list is empty). Rows
+        // ARE clickable, like Warranty Reminders — tapping one opens the small Mark as Paid/Delete
+        // action sheet (see plannedPaymentRowTap() below) rather than navigating anywhere, since
+        // there's no dedicated Planned Payments page (this widget doubles as the only "list view").
+        async function renderPlannedPaymentsWidget() {
+            const wrap = document.getElementById("dashboardPlannedPaymentsWidget");
+            const list = document.getElementById("plannedPaymentsList");
+            if (!wrap || !list) return;
+
+            const payments = await getAllPlannedPayments();
+            wrap.style.display = payments.length ? "" : "none";
+            if (!payments.length) return;
+
+            const today = todayLocalStr();
+            list.innerHTML = payments.map(p => {
+                const daysDiff = Math.round((new Date(p.dueDate + "T00:00:00") - new Date(today + "T00:00:00")) / (1000 * 60 * 60 * 24));
+                const overdue = daysDiff < 0;
+                const dueLabel = overdue ? `Overdue ${Math.abs(daysDiff)}d` : (daysDiff === 0 ? "Due today" : `${daysDiff}d left`);
+                const sign = p.type === "income" ? "+" : "-";
+                const color = p.type === "income" ? "var(--income-color)" : "var(--expense-color)";
+                return `
+                    <div class="config-item" data-click="plannedPaymentRowTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">
+                        <span class="category-display-badge">🕒 <strong>${escapeHtml(p.desc)}</strong>${p.cat ? " — " + escapeHtml(p.cat) : ""}</span>
+                        <span style="text-align:right;">
+                            <span style="display:block; font-size:0.85rem; font-weight:700; color:${color};">${sign}${formatCurrency(p.amount, p.currency)}</span>
+                            <span style="font-size:0.75rem; font-weight:700; color:${overdue ? "var(--expense-color)" : "var(--text-muted)"};">${dueLabel}</span>
+                        </span>
+                    </div>
+                `;
+            }).join("");
+        }
+
+        // Which Planned Payment id the action sheet (plannedPaymentActionsModal) is currently
+        // showing — set by plannedPaymentRowTap(), read by the two action handlers below it.
+        let activePlannedPaymentId = null;
+
+        function plannedPaymentRowTap(el) {
+            activePlannedPaymentId = el.dataset.id;
+            openModal("plannedPaymentActionsModal");
+        }
+        function closePlannedPaymentActionsModal() {
+            closeModal("plannedPaymentActionsModal");
+        }
+
+        // "Mark as Paid" — opens the ordinary Income/Expense entry form pre-filled with
+        // everything saved on this Planned Payment, so the person just reviews/adjusts and taps
+        // the normal Commit Entry button to post it for real. currentPlannedPaymentIdBeingConfirmed
+        // (set last, after openTransactionForm() has already reset it to null — see that
+        // function's own comment) is what tells handleTransactionSubmitMobile() to delete this
+        // Planned Payment once that Commit Entry actually succeeds.
+        async function confirmPlannedPaymentFromActionsModal() {
+            const paymentId = activePlannedPaymentId;
+            closeModal("plannedPaymentActionsModal");
+            if (!paymentId) return;
+            const payments = await getAllPlannedPayments();
+            const payment = payments.find(p => p.id === paymentId);
+            if (!payment) return;
+
+            await openTransactionForm(payment.type, null, payment.accountId || null);
+
+            document.getElementById("txDesc").value = payment.desc;
+            document.getElementById("txAmount").value = payment.amount;
+            if (payment.currency && [...document.getElementById("txCurrency").options].some(o => o.value === payment.currency)) {
+                document.getElementById("txCurrency").value = payment.currency;
+            }
+            if (payment.accountId && [...document.getElementById("srcAccount").options].some(o => o.value === payment.accountId)) {
+                document.getElementById("srcAccount").value = payment.accountId;
+                syncAccountPickerButtonText("srcAccount");
+            }
+            if (payment.cat && [...document.getElementById("txCategory").options].some(o => o.value === payment.cat)) {
+                document.getElementById("txCategory").value = payment.cat;
+                syncAccountPickerButtonText("txCategory");
+            }
+            document.getElementById("txNotes").value = payment.notes || "";
+            // Defaults to today (when it's actually being paid) rather than the original due
+            // date — adjustable, like every other field here, before Commit Entry.
+            document.getElementById("txDate").value = todayLocalStr();
+            if (Array.isArray(payment.attachments) && payment.attachments.length) {
+                existingTxAttachments = payment.attachments.map(a => ({ ...a }));
+                renderTxAttachmentPreview();
+            }
+            // This is a confirm, not a fresh entry — re-saving it as (another) Planned Payment
+            // from here would just leave a duplicate behind once this one gets deleted below.
+            const savePlannedBtn = document.getElementById("txSavePlannedBtn");
+            if (savePlannedBtn) savePlannedBtn.style.display = "none";
+
+            currentPlannedPaymentIdBeingConfirmed = paymentId;
+        }
+
+        async function deletePlannedPaymentFromActionsModal() {
+            const paymentId = activePlannedPaymentId;
+            closeModal("plannedPaymentActionsModal");
+            if (!paymentId) return;
+            const confirmed = await customConfirm("Delete this planned payment? This can't be undone.");
+            if (!confirmed) return;
+            try { await deleteDB(STORES.PLANNED_PAYMENTS, paymentId); } catch (err) {}
+            await renderPlannedPaymentsWidget();
         }
 
         // --- SALARY ENTRY (Gross Salary → Net Bank + EPF(Malaysia)/CPF(Singapore) split) ---
@@ -14975,6 +15204,7 @@
             renderRecentTransactionsWidget(accounts, txs);
             renderTagReminderWidget(txs, accounts);
             await renderWarrantyReminderWidget();
+            await renderPlannedPaymentsWidget();
             applyDashboardWidgetOrder();
             renderDesktopInsightsRail(accounts, txs);
 
@@ -17870,6 +18100,11 @@
                 // v318: owned items logged via the Inventory page / "📦 Add to Inventory" toggle
                 // on the Expense form (see the "--- INVENTORY ---" section).
                 inventory: await readAllDB(STORES.INVENTORY),
+                // v354: one-off Planned Payments — bills keyed in ahead of time but not yet paid
+                // (see the "--- PLANNED PAYMENTS ---" section). Each becomes a real transaction
+                // (and is deleted from here) only once "Mark as Paid" is used, so this is
+                // deliberately separate from `transactions` above.
+                plannedPayments: await readAllDB(STORES.PLANNED_PAYMENTS),
                 // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
                 // defaultReceiveAccount, defaultIncomeCategory, defaultExpenseCategory, recentTx*
                 // widget filters, expandedAccountSubrows, plus baseCurrency/fxRates which are
@@ -18032,6 +18267,9 @@
                     if (db.objectStoreNames.contains(STORES.INVENTORY)) {
                         await clearStoreDB(STORES.INVENTORY);
                     }
+                    if (db.objectStoreNames.contains(STORES.PLANNED_PAYMENTS)) {
+                        await clearStoreDB(STORES.PLANNED_PAYMENTS);
+                    }
 
                     if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
                     if (bundle.fxRates) fxRates = bundle.fxRates;
@@ -18090,6 +18328,10 @@
                     // v318: Inventory items — same "absent on older backups → skip" pattern.
                     if (bundle.inventory) {
                         for (const inv of bundle.inventory) await writeDB(STORES.INVENTORY, inv);
+                    }
+                    // v354: Planned Payments — same "absent on older backups → skip" pattern.
+                    if (bundle.plannedPayments) {
+                        for (const pp of bundle.plannedPayments) await writeDB(STORES.PLANNED_PAYMENTS, pp);
                     }
 
                     // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
@@ -18291,6 +18533,11 @@
             selectCompanion: (el) => selectCompanion(el),
             triggerCompanionCustomImageUpload: () => triggerCompanionCustomImageUpload(),
             removeCompanionCustomPhoto: (el) => removeCompanionCustomPhoto(el),
+            savePlannedPaymentFromTxForm: () => savePlannedPaymentFromTxForm(),
+            plannedPaymentRowTap: (el) => plannedPaymentRowTap(el),
+            closePlannedPaymentActionsModal: () => closePlannedPaymentActionsModal(),
+            confirmPlannedPaymentFromActionsModal: () => confirmPlannedPaymentFromActionsModal(),
+            deletePlannedPaymentFromActionsModal: () => deletePlannedPaymentFromActionsModal(),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),
