@@ -5861,13 +5861,48 @@
     </div>
 
     <!-- MODAL: Planned Payment action sheet — shown when a row in the dashboard's Planned
-         Payments widget is tapped (see plannedPaymentRowTap()). Just two actions; no dedicated
-         list/detail page exists for this feature — the dashboard widget doubles as the list. -->
+         Payments widget is tapped (see plannedPaymentRowTap()). No dedicated list/detail page
+         exists for this feature — the dashboard widget doubles as the list.
+         v360: "Mark as Paid" hides and "▶️ Resume" shows instead while paused (nothing is
+         actually due to pay right now); "⏸ Pause" / "✏️ Edit Series" only ever show for a
+         recurring payment — a one-off has no series to pause or reschedule. Visibility for all
+         of these is set fresh each time by plannedPaymentRowTap(), right before this modal opens. -->
     <div class="modal" id="plannedPaymentActionsModal" style="z-index:10000;">
         <div class="modal-sheet" style="max-width: 340px;">
-            <button type="button" class="submit-btn" data-click="confirmPlannedPaymentFromActionsModal" style="margin-top:0;">✅ Mark as Paid</button>
+            <button type="button" class="submit-btn" id="plannedActionMarkPaidBtn" data-click="confirmPlannedPaymentFromActionsModal" style="margin-top:0;">✅ Mark as Paid</button>
+            <button type="button" class="submit-btn" id="plannedActionResumeBtn" data-click="resumePlannedPaymentFromActionsModal" style="display:none; margin-top:0;">▶️ Resume</button>
+            <button type="button" class="submit-btn" id="plannedActionPauseBtn" data-click="pausePlannedPaymentFromActionsModal" style="display:none; margin-top:10px; background:var(--chip-bg); color:var(--text-main);">⏸ Pause</button>
+            <button type="button" class="submit-btn" id="plannedActionEditSeriesBtn" data-click="openEditPlannedSeriesModal" style="display:none; margin-top:10px; background:var(--chip-bg); color:var(--text-main);">✏️ Edit Series</button>
             <button type="button" class="submit-btn" data-click="deletePlannedPaymentFromActionsModal" style="margin-top:10px; background:#fee2e2; color:var(--expense-color);">🗑 Delete</button>
             <button type="button" class="submit-btn" data-click="closePlannedPaymentActionsModal" style="margin-top:10px; background:var(--chip-bg); color:var(--text-main);">Cancel</button>
+        </div>
+    </div>
+
+    <!-- MODAL: Edit Series — the recurrence RULE itself (frequency/interval/next due date),
+         opened via "✏️ Edit Series" above. Deliberately separate from the full Income/Expense
+         entry form used by Mark as Paid: this is about rescheduling the series, not about the
+         amount/category/account of any one occurrence. Editing "Next Due Date" here re-anchors
+         the series (see saveEditedPlannedSeries()) — a genuine manual reschedule, unlike the
+         automatic clamping in computeNextDueDate(), is exactly when the anchor SHOULD move. -->
+    <div class="modal" id="editPlannedSeriesModal" style="z-index:10000;">
+        <div class="modal-sheet" style="max-width: 360px;">
+            <h3 style="margin-bottom:14px;">Edit Series</h3>
+            <p id="editSeriesAnchorWarning" style="display:none; font-size:0.8rem; color:var(--expense-color); background:#fee2e2; border-radius:8px; padding:8px 10px; margin-bottom:12px;">
+                ⚠️ This series' repeat day was estimated automatically (from an older version of this app) rather than set directly — double check "Next Due Date" below is correct.
+            </p>
+            <label style="font-size:0.8rem; font-weight:700; display:block; margin-bottom:4px;">Repeat every</label>
+            <div style="display:flex; gap:8px; margin-bottom:14px;">
+                <input type="number" id="editSeriesInterval" class="form-input" min="1" style="width:70px; flex:0 0 auto;">
+                <select id="editSeriesFreq" class="form-input" style="flex:1;">
+                    <option value="weekly">Week(s)</option>
+                    <option value="monthly">Month(s)</option>
+                    <option value="yearly">Year(s)</option>
+                </select>
+            </div>
+            <label style="font-size:0.8rem; font-weight:700; display:block; margin-bottom:4px;">Next Due Date</label>
+            <input type="date" id="editSeriesDueDate" class="form-input" style="margin-bottom:16px;">
+            <button type="button" class="submit-btn" data-click="saveEditedPlannedSeries" style="margin-top:0;">Save</button>
+            <button type="button" class="submit-btn" data-click="closeEditPlannedSeriesModal" style="margin-top:10px; background:var(--chip-bg); color:var(--text-main);">Cancel</button>
         </div>
     </div>
 

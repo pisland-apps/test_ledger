@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v359";
+        const APP_VERSION = "v360";
         const APP_VERSION_DATE = "2026-09-12";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -13519,8 +13519,12 @@
                 // of "what day was this originally meant to land on" (we have no better source of
                 // truth for a payment that predates this field). Every subsequent advance for this
                 // record then anchors correctly from here on.
+                // v360: also flagged as `anchorDayBackfilled` — a guessed anchor, unlike one the
+                // person actually set, so "✏️ Edit Series" can warn it might be wrong and is worth
+                // double-checking/re-entering directly, rather than staying a silent guess forever.
                 if (!payment.recur.anchorDay) {
                     payment.recur.anchorDay = parseInt(payment.dueDate.split("-")[2], 10);
+                    payment.recur.anchorDayBackfilled = true;
                 }
                 payment.dueDate = computeNextDueDate(payment.dueDate, payment.recur);
                 await writeDB(STORES.PLANNED_PAYMENTS, payment);
@@ -13531,7 +13535,13 @@
 
         async function getAllPlannedPayments() {
             const list = await readAllDB(STORES.PLANNED_PAYMENTS);
-            return list.sort((a, b) => (a.dueDate || "").localeCompare(b.dueDate || ""));
+            // v360: paused entries sort to the bottom (still visible — deliberately not hidden
+            // entirely, so a long pause doesn't turn into "forgot this existed" — just out of the
+            // way of what's actually due soon).
+            return list.sort((a, b) => {
+                if (!!a.paused !== !!b.paused) return a.paused ? 1 : -1;
+                return (a.dueDate || "").localeCompare(b.dueDate || "");
+            });
         }
 
         // Called by the "🕒 Save as Planned" button on the Income/Expense entry form — reads the
@@ -13644,15 +13654,16 @@
             list.innerHTML = payments.map(p => {
                 const daysDiff = Math.round((new Date(p.dueDate + "T00:00:00") - new Date(today + "T00:00:00")) / (1000 * 60 * 60 * 24));
                 const overdue = daysDiff < 0;
-                const dueLabel = overdue ? `Overdue ${Math.abs(daysDiff)}d` : (daysDiff === 0 ? "Due today" : `${daysDiff}d left`);
+                const dueLabel = p.paused ? "⏸ Paused" : (overdue ? `Overdue ${Math.abs(daysDiff)}d` : (daysDiff === 0 ? "Due today" : `${daysDiff}d left`));
                 const sign = p.type === "income" ? "+" : "-";
                 const color = p.type === "income" ? "var(--income-color)" : "var(--expense-color)";
+                const rowOpacity = p.paused ? "opacity:0.6;" : "";
                 return `
-                    <div class="config-item" data-click="plannedPaymentRowTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent;">
-                        <span class="category-display-badge">${p.recur ? "🔁" : "🕒"} <strong>${escapeHtml(p.desc)}</strong>${p.cat ? " — " + escapeHtml(p.cat) : ""}${p.recur ? ` <span style="font-weight:400; color:var(--text-muted);">(${escapeHtml(recurLabel(p.recur))})</span>` : ""}</span>
+                    <div class="config-item" data-click="plannedPaymentRowTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; ${rowOpacity}">
+                        <span class="category-display-badge">${p.paused ? "⏸" : (p.recur ? "🔁" : "🕒")} <strong>${escapeHtml(p.desc)}</strong>${p.cat ? " — " + escapeHtml(p.cat) : ""}${(p.recur && !p.paused) ? ` <span style="font-weight:400; color:var(--text-muted);">(${escapeHtml(recurLabel(p.recur))})</span>` : ""}</span>
                         <span style="text-align:right;">
                             <span style="display:block; font-size:0.85rem; font-weight:700; color:${color};">${sign}${formatCurrency(p.amount, p.currency)}</span>
-                            <span style="font-size:0.75rem; font-weight:700; color:${overdue ? "var(--expense-color)" : "var(--text-muted)"};">${dueLabel}</span>
+                            <span style="font-size:0.75rem; font-weight:700; color:${(overdue && !p.paused) ? "var(--expense-color)" : "var(--text-muted)"};">${dueLabel}</span>
                         </span>
                     </div>
                 `;
@@ -13660,15 +13671,103 @@
         }
 
         // Which Planned Payment id the action sheet (plannedPaymentActionsModal) is currently
-        // showing — set by plannedPaymentRowTap(), read by the two action handlers below it.
+        // showing — set by plannedPaymentRowTap(), read by every action handler below it.
         let activePlannedPaymentId = null;
 
-        function plannedPaymentRowTap(el) {
+        async function plannedPaymentRowTap(el) {
             activePlannedPaymentId = el.dataset.id;
+            const payments = await getAllPlannedPayments();
+            const payment = payments.find(p => p.id === activePlannedPaymentId);
+            if (!payment) return;
+            // v360: which buttons make sense depends on this specific payment — paused hides
+            // "Mark as Paid" (nothing's actually due right now) in favor of "Resume"; Pause and
+            // Edit Series only apply to a recurring payment at all (a one-off has no series to
+            // pause or reschedule). Reset fresh on every tap rather than trusting whatever was
+            // left over from the last row opened.
+            document.getElementById("plannedActionMarkPaidBtn").style.display = payment.paused ? "none" : "block";
+            document.getElementById("plannedActionResumeBtn").style.display = payment.paused ? "block" : "none";
+            document.getElementById("plannedActionPauseBtn").style.display = (payment.recur && !payment.paused) ? "block" : "none";
+            document.getElementById("plannedActionEditSeriesBtn").style.display = payment.recur ? "block" : "none";
             openModal("plannedPaymentActionsModal");
         }
         function closePlannedPaymentActionsModal() {
             closeModal("plannedPaymentActionsModal");
+        }
+
+        async function pausePlannedPaymentFromActionsModal() {
+            const paymentId = activePlannedPaymentId;
+            closeModal("plannedPaymentActionsModal");
+            if (!paymentId) return;
+            const payments = await getAllPlannedPayments();
+            const payment = payments.find(p => p.id === paymentId);
+            if (!payment) return;
+            payment.paused = true;
+            await writeDB(STORES.PLANNED_PAYMENTS, payment);
+            await renderPlannedPaymentsWidget();
+        }
+
+        // Resuming fast-forwards a dueDate that's fallen into the past (e.g. paused for a
+        // 6-month trip) up to the next occurrence from today, rather than surfacing it as
+        // "Overdue 180d" the moment it's unpaused — nothing was actually missed, the series was
+        // deliberately on hold. Capped at 1000 steps purely as a runaway-loop safety net; a
+        // real-world pause would never come close.
+        async function resumePlannedPaymentFromActionsModal() {
+            const paymentId = activePlannedPaymentId;
+            closeModal("plannedPaymentActionsModal");
+            if (!paymentId) return;
+            const payments = await getAllPlannedPayments();
+            const payment = payments.find(p => p.id === paymentId);
+            if (!payment) return;
+            const today = todayLocalStr();
+            let guard = 0;
+            while (payment.dueDate < today && guard < 1000) {
+                payment.dueDate = computeNextDueDate(payment.dueDate, payment.recur);
+                guard++;
+            }
+            payment.paused = false;
+            await writeDB(STORES.PLANNED_PAYMENTS, payment);
+            await renderPlannedPaymentsWidget();
+        }
+
+        // "✏️ Edit Series" — the recurrence RULE itself (frequency/interval/next due date), not
+        // any one occurrence's amount/category/account (that's what Mark as Paid is for). See the
+        // #editPlannedSeriesModal comment in index.html for why "Next Due Date" living here (and
+        // re-anchoring on save) is the intended way to fix a wrong or auto-guessed anchorDay.
+        async function openEditPlannedSeriesModal() {
+            const paymentId = activePlannedPaymentId;
+            closeModal("plannedPaymentActionsModal");
+            if (!paymentId) return;
+            const payments = await getAllPlannedPayments();
+            const payment = payments.find(p => p.id === paymentId);
+            if (!payment || !payment.recur) return;
+            document.getElementById("editSeriesFreq").value = payment.recur.freq || "monthly";
+            document.getElementById("editSeriesInterval").value = payment.recur.interval || 1;
+            document.getElementById("editSeriesDueDate").value = payment.dueDate;
+            document.getElementById("editSeriesAnchorWarning").style.display = payment.recur.anchorDayBackfilled ? "block" : "none";
+            openModal("editPlannedSeriesModal");
+        }
+        function closeEditPlannedSeriesModal() {
+            closeModal("editPlannedSeriesModal");
+        }
+        async function saveEditedPlannedSeries() {
+            const paymentId = activePlannedPaymentId;
+            if (!paymentId) return;
+            const dueDateVal = document.getElementById("editSeriesDueDate").value;
+            if (!dueDateVal) { alert("Please select a due date."); return; }
+            const interval = Math.max(1, parseInt(document.getElementById("editSeriesInterval").value, 10) || 1);
+            const freq = document.getElementById("editSeriesFreq").value;
+
+            const payments = await getAllPlannedPayments();
+            const payment = payments.find(p => p.id === paymentId);
+            if (!payment) return;
+            payment.dueDate = dueDateVal;
+            // Editing the due date here IS a genuine manual reschedule (unlike the automatic
+            // clamping computeNextDueDate() does), so per this feature's own anchoring rule, the
+            // anchor moves to match — and any earlier auto-guess is no longer a guess.
+            payment.recur = { freq, interval, anchorDay: parseInt(dueDateVal.split("-")[2], 10) };
+            await writeDB(STORES.PLANNED_PAYMENTS, payment);
+            closeModal("editPlannedSeriesModal");
+            await renderPlannedPaymentsWidget();
         }
 
         // "Mark as Paid" — opens the ordinary Income/Expense entry form pre-filled with
@@ -13683,7 +13782,7 @@
             if (!paymentId) return;
             const payments = await getAllPlannedPayments();
             const payment = payments.find(p => p.id === paymentId);
-            if (!payment) return;
+            if (!payment || payment.paused) return; // defensive — the button is hidden while paused too
 
             await openTransactionForm(payment.type, null, payment.accountId || null);
 
@@ -18706,6 +18805,11 @@
             closePlannedPaymentActionsModal: () => closePlannedPaymentActionsModal(),
             confirmPlannedPaymentFromActionsModal: () => confirmPlannedPaymentFromActionsModal(),
             deletePlannedPaymentFromActionsModal: () => deletePlannedPaymentFromActionsModal(),
+            pausePlannedPaymentFromActionsModal: () => pausePlannedPaymentFromActionsModal(),
+            resumePlannedPaymentFromActionsModal: () => resumePlannedPaymentFromActionsModal(),
+            openEditPlannedSeriesModal: () => openEditPlannedSeriesModal(),
+            closeEditPlannedSeriesModal: () => closeEditPlannedSeriesModal(),
+            saveEditedPlannedSeries: () => saveEditedPlannedSeries(),
             toggleMemberPageCurrencyBreakdown: () => toggleMemberPageCurrencyBreakdown(),
             ledgerYearPrev: () => ledgerYearPrev(),
             ledgerYearNext: () => ledgerYearNext(),

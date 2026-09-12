@@ -2548,3 +2548,47 @@ as the original overflow issue, just relocated.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v359.
+
+## v360: Planned Payments — Edit Series, Pause/Resume (closes the
+feature's lifecycle)
+
+Requested directly, to close a gap in v359: a recurring payment's rule
+(frequency/interval/anchor day) was fixed at creation with no way to
+change it afterward, and there was no way to temporarily suspend a
+series without deleting it outright.
+
+- **New "✏️ Edit Series"** action (recurring payments only) — a
+  dedicated small modal for the recurrence RULE itself: frequency,
+  interval, and Next Due Date. Deliberately separate from the full
+  Income/Expense form Mark as Paid uses — this is about rescheduling
+  the series, not any one occurrence's amount/category/account.
+  Editing "Next Due Date" here is a genuine manual reschedule, so
+  (per this feature's own anchoring rule — clamping never moves the
+  anchor, only a real manual edit should) it re-anchors the series to
+  that new day, and clears any earlier auto-guessed `anchorDayBackfilled`
+  flag since it's now a value the person actually set.
+- **`anchorDayBackfilled` flag** — v359's one-time backfill for a
+  pre-v359 record now sets this alongside the guessed `anchorDay`.
+  Edit Series shows a warning banner when it's set ("this was
+  estimated automatically — double-check Next Due Date"), since a
+  guessed anchor had no correction path before this version except
+  deleting and re-creating the whole payment.
+- **New "⏸ Pause" / "▶️ Resume"** (recurring payments only) — for a
+  temporary hold (a trip, a paused subscription) without losing the
+  series. A paused entry sorts to the bottom of the widget, dimmed,
+  labeled "⏸ Paused" instead of a due-date countdown, and "Mark as
+  Paid" is hidden for it (nothing's actually due right now). Resuming
+  fast-forwards a dueDate that fell into the past while paused up to
+  the next occurrence from today (capped at 1000 steps as a pure
+  runaway-loop safety net), rather than surfacing a false "Overdue
+  180d" the moment it's unpaused.
+- One-off payments are unaffected — Edit Series and Pause both only
+  ever apply to a recurring payment; a one-off simply doesn't show
+  those buttons in the action sheet (`plannedPaymentRowTap()` now
+  computes each button's visibility per-payment, every time it opens).
+- Verified with `node --check`, the data-click/data-change/
+  `getElementById` cross-reference script (0 missing), and a
+  standalone test of the resume fast-forward loop.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v360.
