@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v352";
+        const APP_VERSION = "v353";
         const APP_VERSION_DATE = "2026-09-11";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1451,12 +1451,14 @@
         // whole Transactions store on every keypress would be slow. filterDescSuggestions() below
         // does a plain in-memory substring filter against this array.
         let dynamicDescSuggestions = [];
-        // v351: desc.toLowerCase() -> {cat, type, src, desc} of the most recent transaction with
-        // that description (`desc` here is the ORIGINAL casing, e.g. "Rest Mee Ngar" — used to
-        // replace Quick Add's raw typed fragment with the full canonical name on a history match,
-        // see parseQuickAddText()) — built alongside dynamicDescSuggestions in
-        // loadDescSuggestionsCache() below, used by Quick Add's history-match step.
-        let dynamicDescHistoryMap = {};
+        // v353: array of {desc, cat, type, src} — one entry per unique past description
+        // (original casing), newest-first — built alongside dynamicDescSuggestions in
+        // loadDescSuggestionsCache() below. Replaces v351/v352's dynamicDescHistoryMap (a
+        // single-best-match lookup keyed by exact lowercase desc): that shape couldn't represent
+        // "same typed text, several genuinely different historical matches" (e.g. "PETRONAS
+        // Nosob" paid via TNG on one visit, "PETRONAS Nosob (R)" via Visa on another) — an array
+        // that findHistoryCandidates() can filter/dedupe/rank supports that; a plain map can't.
+        let dynamicDescHistoryEntries = [];
 
         // v257: in-memory registry of saved Tags (trip/claim labels — id + name only), refreshed
         // by syncAndLoadTags() at bootstrap and after every add/rename/delete — same pattern as
@@ -10372,14 +10374,17 @@
             return null;
         }
 
-        // Parses free text typed into #txQuickAdd. Returns { amount, date, category, type,
-        // account, categorySource, desc } — any field the parser couldn't determine is left
-        // null/undefined. Matched tokens (amount, date expression) are spliced out of the text as
-        // they're found, so `desc` ends up as whatever's left — the part of what the user typed
-        // that isn't already captured by a structured field.
+        // Parses free text typed into #txQuickAdd. Returns { amount, date, desc, historyCandidates,
+        // keywordGuess } — amount/date/desc are the direct-fill fields (null/the leftover text if
+        // not found); historyCandidates (array, see findHistoryCandidates()) and keywordGuess
+        // (single {cat,type,src:null,desc:null} or null) are candidate category+account guesses
+        // for the caller to type-filter and render as confirm chips — see handleQuickAddInput().
+        // Matched tokens (amount, date expression) are spliced out of the text as they're found,
+        // so `desc` ends up as whatever's left — the part of what the user typed that isn't
+        // already captured by a structured field.
         function parseQuickAddText(raw) {
             let text = raw;
-            const result = { amount: null, date: null, category: null, type: null, account: null, categorySource: null };
+            const result = { amount: null, date: null };
 
             // Amount: currency-prefixed (RM25, S$25, $25 ...) takes priority over a bare number,
             // so "RM25" isn't misread as amount=25 with a stray "RM" left dangling in the
@@ -10412,115 +10417,178 @@
 
             const cleaned = text.replace(/\s{2,}/g, " ").trim();
 
-            // Category, priority 1: the user's OWN transaction history (dynamicDescHistoryMap,
-            // built alongside dynamicDescSuggestions in loadDescSuggestionsCache()) — a real past
-            // entry is a stronger signal than a guessed keyword. Exact match first, then a loose
-            // substring match (either string contains the other, min 2 chars) as a fallback for
-            // near-identical re-typing ("mcd" vs "McD Drive Thru").
-            let histDesc = null;
-            if (cleaned.length >= 2) {
-                const key = cleaned.toLowerCase();
-                let hist = dynamicDescHistoryMap[key];
-                if (!hist) {
-                    const altKey = Object.keys(dynamicDescHistoryMap).find(k => k.length >= 2 && (k.includes(key) || key.includes(k)));
-                    if (altKey) hist = dynamicDescHistoryMap[altKey];
-                }
-                if (hist) {
-                    result.category = hist.cat;
-                    result.type = hist.type;
-                    result.account = hist.src;
-                    result.categorySource = "history";
-                    // v351 fix: previously left `result.desc` as whatever fragment the user
-                    // actually typed ("mee ngar"), forcing an extra tap on the pre-existing v252
-                    // desc-suggest dropdown to pick up the real saved name ("Rest Mee Ngar") —
-                    // defeats the point of a history match if it doesn't also fill in the name it
-                    // matched against. Now carries the matched record's own original-cased
-                    // description through as the fill value (see result.desc below).
-                    histDesc = hist.desc;
-                }
-            }
-
-            // Category, priority 2: keyword map, only if history found nothing.
-            if (!result.category) {
-                const lowerCleaned = cleaned.toLowerCase();
-                outer:
-                for (const type of ["expense", "income"]) {
-                    for (const kw of Object.keys(DEFAULT_KEYWORD_MAP[type])) {
-                        if (lowerCleaned.includes(kw.toLowerCase())) {
-                            result.category = DEFAULT_KEYWORD_MAP[type][kw];
-                            result.type = type;
-                            result.categorySource = "keyword";
-                            break outer;
-                        }
+            // Category/account candidates, priority 1: the user's OWN transaction history
+            // (findHistoryCandidates() below) — a real past entry is a stronger signal than a
+            // guessed keyword. Priority 2 (keywordGuess): DEFAULT_KEYWORD_MAP, only used by the
+            // caller when history found nothing. Both are left as-is here (not filtered by the
+            // form's current income/expense type, not deduped for rendering) — that's
+            // handleQuickAddInput()'s job, since it's the one that knows which type is open and
+            // owns the DOM chip row.
+            result.historyCandidates = findHistoryCandidates(cleaned);
+            result.keywordGuess = null;
+            const lowerCleaned = cleaned.toLowerCase();
+            outer:
+            for (const type of ["expense", "income"]) {
+                for (const kw of Object.keys(DEFAULT_KEYWORD_MAP[type])) {
+                    if (lowerCleaned.includes(kw.toLowerCase())) {
+                        result.keywordGuess = { cat: DEFAULT_KEYWORD_MAP[type][kw], type, src: null, desc: null };
+                        break outer;
                     }
                 }
             }
 
-            // A history match's own saved description wins over the raw typed fragment (see the
-            // comment above) — a keyword-map guess or no match at all still just uses whatever's
-            // left of what the user actually typed.
-            result.desc = histDesc || cleaned;
+            result.desc = cleaned;
             return result;
         }
 
-        // Wired as data-input on #txQuickAdd (index.html). Live-fills Amount/Date/Description as
-        // soon as they're recognized (all unambiguous once matched), and renders the guessed
-        // Category as a tappable chip below the field instead of auto-committing it — a category
-        // guess is the one part of this that can be wrong often enough to want a confirm tap
-        // (see applyQuickAddCategory() below). Never touches Account unless a history match
-        // supplied one, and never overwrites #txDesc with an empty string just because the field
-        // was cleared back to blank (so clearing Quick Add doesn't blank out a Description the
-        // user already started editing directly).
+        // v353: given the leftover text after amount/date have been stripped, returns every
+        // distinct-description history entry whose text overlaps it (exact match, or either
+        // string contains the other — same loose-substring rule v351/v352 used), ranked exact
+        // matches first then by recency (dynamicDescHistoryEntries is already newest-first per
+        // description, and Array.prototype.sort is stable, so recency order survives within each
+        // rank group), then DEDUPED by (category, account) — not by description text — since two
+        // different descriptions ("PETRONAS Nosob" / "PETRONAS Nosob (R)") can be the exact same
+        // real-world category+account and shouldn't produce two chips for that case, while two
+        // matches that genuinely used different accounts (e.g. paid via TNG one time, Visa
+        // another) are kept as separate candidates on purpose — that's the whole point of this
+        // being an array instead of v351/v352's single-best-match lookup. Capped to 3 so a very
+        // common short fragment (like "pe") can't flood the chip row.
+        function findHistoryCandidates(cleaned) {
+            if (cleaned.length < 2) return [];
+            const key = cleaned.toLowerCase();
+            const matches = dynamicDescHistoryEntries.filter(e => {
+                const k = e.desc.toLowerCase();
+                return k === key || k.includes(key) || key.includes(k);
+            });
+            matches.sort((a, b) => {
+                const aExact = a.desc.toLowerCase() === key ? 0 : 1;
+                const bExact = b.desc.toLowerCase() === key ? 0 : 1;
+                return aExact - bExact;
+            });
+            const seen = new Set();
+            const out = [];
+            for (const m of matches) {
+                const dedupeKey = m.cat + "||" + m.src;
+                if (seen.has(dedupeKey)) continue;
+                seen.add(dedupeKey);
+                out.push(m);
+                if (out.length >= 3) break;
+            }
+            return out;
+        }
+
+        // Looks up an <option>'s own text for a compact chip label — e.g. "Wallet TNG (MYR) — VF"
+        // becomes "Wallet TNG" (everything before the first " (") so a chip can show "Fuel ·
+        // Wallet TNG" without needing its own separate short-name mapping table to maintain.
+        function shortAccountLabel(accountId) {
+            if (!accountId) return "";
+            const opt = document.querySelector(`#srcAccount option[value="${CSS.escape(accountId)}"]`);
+            if (!opt) return "";
+            return opt.textContent.split(" (")[0].trim();
+        }
+
+        // Renders the (already type-filtered, already deduped) candidate list as tappable chips,
+        // each labelled "Category" alone (keyword guess, no account attached) or "Category ·
+        // AccountShortName" (history match). A single surviving candidate renders as a single
+        // chip — deliberately not special-cased into old v351/v352's different plain-category
+        // look, so the tap behavior (confirms category AND account together, see
+        // applyQuickAddSuggestion()) is the same regardless of how many candidates there were;
+        // the user just happens to see one option instead of several.
+        function renderQuickAddCandidates(candidates, hideEntirely) {
+            const wrap = document.getElementById("txQuickAddCatSuggest");
+            if (hideEntirely || candidates.length === 0) {
+                wrap.style.display = "none";
+                wrap.innerHTML = "";
+                wrap._quickAddCandidates = null;
+                return;
+            }
+            wrap.innerHTML = candidates.map((c, i) => {
+                const acctLabel = shortAccountLabel(c.src);
+                const label = acctLabel ? `${c.cat} · ${acctLabel}` : c.cat;
+                return `<button type="button" class="quickadd-chip" data-click="applyQuickAddSuggestion" data-idx="${i}">${getCategoryIcon(c.cat, c.type)} ${escapeHtml(label)}</button>`;
+            }).join("");
+            // Candidates are stashed on the DOM node itself rather than a module-level variable
+            // so a fast retype that re-renders this row between a chip's render and its tap can
+            // never apply a stale, no-longer-displayed candidate — whatever's on-screen is always
+            // exactly what dataset.idx indexes into.
+            wrap._quickAddCandidates = candidates;
+            wrap.style.display = "flex";
+        }
+
+        // Wired as data-input on #txQuickAdd (index.html). Live-fills Amount/Date always (both
+        // unambiguous once matched). Description: filled immediately ONLY when there's exactly
+        // one surviving history candidate (same as v352 — a single match's own saved name is a
+        // safe auto-complete); with zero or several candidates, Description is left as whatever
+        // was actually typed, since with several candidates there's no single "correct" full name
+        // to guess at (see the v353 chat discussion — "pe" matching three different PETRONAS
+        // Nosob entries has no one obviously-right completion). Category AND Account are NEVER
+        // auto-filled here (a v353 change from v351/v352, which silently pre-set Account on an
+        // exact history match) — both now only ever get set together, by tapping a chip
+        // (applyQuickAddSuggestion() below), so the one confirm gesture always covers both of the
+        // fields that actually change how a transaction is classified.
         function handleQuickAddInput(el) {
             const raw = el.value;
-            const suggestWrap = document.getElementById("txQuickAddCatSuggest");
-            if (!raw.trim()) { suggestWrap.style.display = "none"; suggestWrap.innerHTML = ""; return; }
+            if (!raw.trim()) { renderQuickAddCandidates([], true); return; }
 
             const parsed = parseQuickAddText(raw);
 
             if (parsed.amount !== null) document.getElementById("txAmount").value = parsed.amount;
             if (parsed.date) document.getElementById("txDate").value = parsed.date;
-            if (parsed.desc) document.getElementById("txDesc").value = parsed.desc;
-
-            if (parsed.account) {
-                const srcSelect = document.getElementById("srcAccount");
-                if ([...srcSelect.options].some(o => o.value === parsed.account)) {
-                    srcSelect.value = parsed.account;
-                    syncAccountPickerButtonText("srcAccount");
-                }
-            }
 
             // The Category row/select only exists (and is only populated) for whichever type
             // this specific form instance was opened as — openTransactionForm() takes a fixed
             // `type` per open, there's no live Income/Expense toggle inside an already-open form.
-            // So a guess only gets offered when it agrees with the type already open; a
+            // So a candidate only survives when it agrees with the type already open; a
             // same-text-different-type guess (e.g. "salary" typed while an Expense form is open)
             // is silently dropped rather than shown as an unusable chip — same reasoning as never
             // guessing an Account from scratch: an option the user can't actually act on here
-            // isn't worth surfacing.
+            // isn't worth surfacing. If NO history candidate survives that filter, the
+            // keyword-map guess is offered instead (still type-filtered) — same priority order as
+            // v351/v352, just expressed over a list instead of a single result.
             const currentType = document.getElementById("txType").value;
-            if (parsed.category && parsed.type === currentType && currentType !== "transfer") {
-                const sourceLabel = parsed.categorySource === "history" ? "from your history" : "guessed";
-                suggestWrap.innerHTML = `<button type="button" class="quickadd-chip" data-click="applyQuickAddCategory" data-cat="${escapeHtml(parsed.category)}">${getCategoryIcon(parsed.category, parsed.type)} ${escapeHtml(parsed.category)} <span class="qc-source">(${sourceLabel})</span></button>`;
-                suggestWrap.style.display = "flex";
-            } else {
-                suggestWrap.style.display = "none";
-                suggestWrap.innerHTML = "";
+            let candidates = parsed.historyCandidates.filter(c => c.type === currentType);
+            if (candidates.length === 0 && parsed.keywordGuess && parsed.keywordGuess.type === currentType) {
+                candidates = [parsed.keywordGuess];
             }
+
+            if (candidates.length === 1 && candidates[0].desc) {
+                document.getElementById("txDesc").value = candidates[0].desc;
+            } else if (parsed.desc) {
+                document.getElementById("txDesc").value = parsed.desc;
+            }
+
+            renderQuickAddCandidates(candidates, currentType === "transfer");
         }
 
-        // Tapping the guessed-category chip applies it to the real Category field — same
-        // select+picker-button pattern every other direct-set uses (see the comment on
-        // syncAccountPickerButtonText()).
-        function applyQuickAddCategory(el) {
-            const cat = el.dataset.cat;
+        // Tapping a candidate chip applies its category AND account together (a v353 change —
+        // see handleQuickAddInput()'s comment for why these two are no longer set at different
+        // times) via the same select+dispatch-change+syncAccountPickerButtonText pattern every
+        // other direct-set in this file uses. Also fills Description with that specific
+        // candidate's own saved name, which matters most for the multi-candidate case: picking
+        // the "Fuel · Wallet TNG" chip over "Fuel · Hlbb Visa" also resolves which of several
+        // saved descriptions ("PETRONAS Nosob" vs "PETRONAS Nosob (R)") actually belongs with it.
+        function applyQuickAddSuggestion(el) {
+            const wrap = document.getElementById("txQuickAddCatSuggest");
+            const candidates = wrap._quickAddCandidates || [];
+            const c = candidates[parseInt(el.dataset.idx, 10)];
+            if (!c) return;
+
             const catSelect = document.getElementById("txCategory");
-            if ([...catSelect.options].some(o => o.value === cat)) {
-                catSelect.value = cat;
+            if ([...catSelect.options].some(o => o.value === c.cat)) {
+                catSelect.value = c.cat;
                 catSelect.dispatchEvent(new Event("change", { bubbles: true }));
                 syncAccountPickerButtonText("txCategory");
             }
-            document.getElementById("txQuickAddCatSuggest").style.display = "none";
+            if (c.src) {
+                const srcSelect = document.getElementById("srcAccount");
+                if ([...srcSelect.options].some(o => o.value === c.src)) {
+                    srcSelect.value = c.src;
+                    syncAccountPickerButtonText("srcAccount");
+                }
+            }
+            if (c.desc) document.getElementById("txDesc").value = c.desc;
+
+            renderQuickAddCandidates([], true);
         }
 
         // --- TRANSACTION CREATION / EDITOR CORE ---
@@ -10540,23 +10608,31 @@
             const sorted = txs.filter(t => t.desc && t.desc.trim()).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
             const seen = new Set();
             const out = [];
-            // v351: separate from the desc-suggest dedupe above — keeps the most recent
-            // (category/type/account) for every distinct description, for Quick Add's history
-            // match. `sorted` is newest-first, so the first time a key is seen here is already
-            // its most recent occurrence — no extra sort/lookup needed.
-            const historyMap = {};
+            // v353 (was v351's single-lookup historyMap — see the dynamicDescHistoryEntries
+            // comment above for why this is now an array): one entry per distinct description
+            // (case-insensitive), newest occurrence's category/type/account. `sorted` is
+            // newest-first, so the first time a key is seen here is already its most recent
+            // occurrence — no extra sort/lookup needed. Order here (dedup-by-desc, newest first)
+            // is exactly what findHistoryCandidates() relies on for its own recency ranking.
+            const historyEntries = [];
+            const histSeen = new Set(); // separate from `seen` above: if the newest occurrence of
+            // a description happens to have no category (t.cat falsy — an old malformed row, or
+            // an in-progress migration), the original v351 map-based version still fell through to
+            // an OLDER occurrence's category rather than giving up on that description entirely.
+            // Keeping this dedup independent of `seen` preserves that fallback.
             for (const t of sorted) {
                 const key = t.desc.trim().toLowerCase();
                 if (!seen.has(key)) {
                     seen.add(key);
                     out.push(t.desc.trim());
                 }
-                if (!(key in historyMap) && t.cat) {
-                    historyMap[key] = { cat: t.cat, type: t.type, src: t.src, desc: t.desc.trim() };
+                if (!histSeen.has(key) && t.cat) {
+                    histSeen.add(key);
+                    historyEntries.push({ desc: t.desc.trim(), cat: t.cat, type: t.type, src: t.src });
                 }
             }
             dynamicDescSuggestions = out;
-            dynamicDescHistoryMap = historyMap;
+            dynamicDescHistoryEntries = historyEntries;
         }
 
         // Wraps the matched substring in <mark> so it's visually obvious why each row matched —
@@ -10614,6 +10690,7 @@
             document.getElementById("txQuickAdd").value = "";
             document.getElementById("txQuickAddCatSuggest").style.display = "none";
             document.getElementById("txQuickAddCatSuggest").innerHTML = "";
+            document.getElementById("txQuickAddCatSuggest")._quickAddCandidates = null;
             document.getElementById("txQuickAddRow").style.display = existingTxId === null ? "flex" : "none";
 
             const accounts = await readAllDB(STORES.ACCOUNTS);
@@ -18300,7 +18377,7 @@
             openReimbursementFromOptions: () => openReimbursementFromOptions(),
             openAccountPicker: (el) => openAccountPicker(el),
             selectDescSuggestion: (el) => selectDescSuggestion(el),
-            applyQuickAddCategory: (el) => applyQuickAddCategory(el),
+            applyQuickAddSuggestion: (el) => applyQuickAddSuggestion(el),
             navigateToTagsPage: () => navigateToTagsPage(),
             openTagReminderRow: (el) => openTagReminderRow(el),
             openReimbursementFromTagBadge: (el) => openReimbursementFromTagBadge(el),
