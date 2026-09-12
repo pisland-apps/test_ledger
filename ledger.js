@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v358";
+        const APP_VERSION = "v359";
         const APP_VERSION_DATE = "2026-09-12";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -13418,20 +13418,29 @@
             return "pp_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
         }
 
-        // recur is either null (one-off) or { freq: "weekly"|"monthly"|"yearly", interval: N }
-        // (every N weeks/months/years).
+        // recur is either null (one-off) or { freq: "weekly"|"monthly"|"yearly", interval: N,
+        // anchorDay: 1-31 }.
         // v358: switched monthly/yearly from raw Date-overflow rollover (31 Jan + 1 month → 2/3
         // Mar) to CLAMP-to-end-of-month (31 Jan + 1 month → 28/29 Feb) — a Planned Payment is a
         // bill reminder, and bills are overwhelmingly month-end-anchored (rent, card statements,
         // subscriptions): the mental model is "the last day of next month," not "31 days from
-        // now, whatever that lands on." The two approaches only disagree on days 29-31 — every
-        // due date from the 1st-28th advances identically either way, so this only changes
-        // behavior for the exact cases it was reported as wrong for. It also matches what Google
-        // Calendar and Apple Reminders both do for a recurring monthly/yearly event, which is
-        // the expectation anyone coming from those (or from another budgeting app) already has.
-        // Weekly is exact day-arithmetic regardless (7×N days), so there's nothing to clamp there.
+        // now, whatever that lands on." Matches Google Calendar / Apple Reminders.
+        // v359: fixed an anchor-drift bug in that same clamp logic — it was reading the day to
+        // clamp from `dateStr` (the previous step's *already-clamped* result), so after ONE
+        // clamp the original intent was gone for good: 1/31 → 2/28 → 3/28 → 4/28... (permanently
+        // stuck on 28, just a different flavor of the original overflow bug). `recur.anchorDay`
+        // is now set once, at creation, and reused for every step — `dateStr` here is only ever
+        // used to find which year/month to land in, never to re-derive the day. Correct chain:
+        // 1/31 → 2/28 → 3/31 → 4/30 → 5/31 → 6/30 (verified in the standalone chain test — see
+        // this section's test notes). Per its own semantics: clamping never touches anchorDay;
+        // only a genuine future "edit this series' schedule" action should (no such action exists
+        // yet — Mark as Paid's date field only sets the just-posted transaction's date, it doesn't
+        // reschedule the series). `recur.anchorDay || <fallback>` covers a v357/v358 record that
+        // predates this field — see advanceOrDeletePlannedPaymentAfterConfirm(), which backfills
+        // it permanently the first time such a record is advanced post-upgrade.
         function computeNextDueDate(dateStr, recur) {
             const [y, m, day] = dateStr.split("-").map(Number); // m is 1-indexed
+            const anchorDay = recur.anchorDay || day; // fallback only for a pre-v359 record
             const n = Math.max(1, parseInt(recur.interval, 10) || 1);
 
             if (recur.freq === "weekly") {
@@ -13453,7 +13462,7 @@
             // "how many days does this month have" without a lookup table (handles leap Februaries
             // for free, since it's just asking the Date object what day 0 of March is).
             const lastDayOfTargetMonth = new Date(targetYear, targetMonth, 0).getDate();
-            const clampedDay = Math.min(day, lastDayOfTargetMonth);
+            const clampedDay = Math.min(anchorDay, lastDayOfTargetMonth);
             const d = new Date(targetYear, targetMonth - 1, clampedDay);
             return todayLocalStrFromDate(d);
         }
@@ -13505,6 +13514,14 @@
                 if (newCat) payment.cat = newCat;
                 payment.notes = document.getElementById("txNotes").value.trim();
                 payment.attachments = [];
+                // v359: backfill anchorDay for a record created before it existed (v357/v358) —
+                // one-time, using its current dueDate's day as the best available reconstruction
+                // of "what day was this originally meant to land on" (we have no better source of
+                // truth for a payment that predates this field). Every subsequent advance for this
+                // record then anchors correctly from here on.
+                if (!payment.recur.anchorDay) {
+                    payment.recur.anchorDay = parseInt(payment.dueDate.split("-")[2], 10);
+                }
                 payment.dueDate = computeNextDueDate(payment.dueDate, payment.recur);
                 await writeDB(STORES.PLANNED_PAYMENTS, payment);
             } else {
@@ -13547,10 +13564,14 @@
             if (!dateVal) { alert("Please select a due date."); return; }
 
             // v357: Repeat — see the txPlannedRepeatWrap block next to this same button.
+            // v359: anchorDay is fixed at creation time (the due date's own day-of-month) and
+            // reused by computeNextDueDate() for every future step — see that function's own
+            // comment for why this has to be captured once here rather than re-derived later.
             const repeatChecked = document.getElementById("txPlannedRepeatToggle").checked;
             const recur = repeatChecked ? {
                 freq: document.getElementById("txPlannedRepeatFreq").value,
-                interval: Math.max(1, parseInt(document.getElementById("txPlannedRepeatInterval").value, 10) || 1)
+                interval: Math.max(1, parseInt(document.getElementById("txPlannedRepeatInterval").value, 10) || 1),
+                anchorDay: parseInt(dateVal.split("-")[2], 10)
             } : null;
 
             let finalAttachments = [];

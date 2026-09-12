@@ -2502,3 +2502,49 @@ Payment advances after "Mark as Paid" — no change to one-off behavior.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v358.
+
+## v359: fixed anchor-drift in month-end clamping (recurring Planned
+Payments)
+
+v358's clamp-to-month-end fix had a bug of its own, caught before it
+reached most users: it clamped using the day from the *previous
+step's already-clamped result*, not the originally-intended day — so
+after one clamp, the "31st" (or "29th", etc.) intent was gone for
+good: `1/31 → 2/28 → 3/28 → 4/28...`, permanently stuck on 28 instead
+of `1/31 → 2/28 → 3/31 → 4/30 → 5/31 → 6/30`. Same *category* of bug
+as the original overflow issue, just relocated.
+
+- **New `recur.anchorDay`** (1-31), set once at creation
+  (`savePlannedPaymentFromTxForm()`) from the due date's own
+  day-of-month, and never touched by clamping — only a genuine future
+  "edit this series' schedule" action should ever change it (no such
+  action exists yet; Mark as Paid's date field only sets the
+  just-posted transaction's date, it doesn't reschedule the series).
+  `computeNextDueDate()` now clamps against this fixed anchor every
+  step, not against whatever the previous step landed on.
+- **Semantics**: a clamp is a one-off calendar accommodation, not a
+  change of intent — so 1/29 monthly correctly goes `1/29 → 2/28 (clamped)
+  → 3/29 (back to the real anchor)`, not stuck at 28 forever.
+- **Backward-compatible**: a v357/v358 recurring payment (predates
+  this field) gets `anchorDay` backfilled once, the first time it's
+  advanced post-upgrade, from its current `dueDate`'s day — the best
+  reconstruction available, since there's no record of what day it
+  was originally created on.
+- Verified with `node --check`, the data-click/data-change/
+  `getElementById` cross-reference script (0 missing), and two new
+  standalone tests: a 6-step chain from 1/31 (asserts the full
+  sequence, not just one hop) and the 1/29 re-anchor case — both
+  passing.
+- **Worth knowing, not changed**: v358 already made every edited field
+  (not just the date) carry forward to the next occurrence when
+  confirming a recurring payment — e.g. rent going up. That's a
+  deliberate design choice, not an oversight: the model is "whatever
+  you confirmed with = the series' new normal." If a one-off anomaly
+  (a late fee, a one-time surcharge) gets edited in at confirm time,
+  it'll carry forward the same way a genuine rent increase would —
+  there's no separate prompt distinguishing the two, since asking
+  every time would undercut the "just glance and confirm" speed this
+  whole feature is for.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v359.
