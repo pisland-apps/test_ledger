@@ -2397,3 +2397,30 @@ touching your balance) until you actually pay it.
 
 Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
 (sw.js) to v355.
+
+## v356: fixed "Save as Planned" crash, blocked Split Expenses on
+Planned Payments
+
+- **Fixed crash** — "Save as Planned" failed with `Failed to execute
+  'put' on 'IDBObjectStore': Evaluating the object store's key path
+  did not yield a value" (reported via screenshot). Cause: v355 added
+  the new `plannedPayments` store to `STORES` and to
+  `createObjectStore()`'s keyPath setup, but missed a second, separate
+  map — `STORE_KEYPATHS`, used only by `encryptRecord()`/
+  `decryptRecord()` to know which field is each store's key before
+  encrypting everything else. Without an entry there, `encryptRecord()`
+  silently dropped the `id` field entirely before the `put()`, which
+  is what IndexedDB was actually complaining about. Added
+  `plannedPayments: "id"` to `STORE_KEYPATHS` — every store this app
+  encrypts needs an entry in *both* places now, not just one.
+- **Split Expenses now blocked on Planned Payments** — the screenshot
+  that surfaced the crash also had Split Expense rows open on the
+  form. A Planned Payment record only has one {cat, amount} pair, so
+  saving would have silently dropped every split row beyond the main
+  one. "Save as Planned" now checks for split rows first and refuses
+  with an explanation, rather than quietly losing data — remove the
+  split rows first, or use Commit Entry instead for a split entry.
+- Verified with `node --check`.
+
+Bumped `APP_VERSION`/`APP_VERSION_DATE` (ledger.js) and `CACHE_NAME`
+(sw.js) to v356.

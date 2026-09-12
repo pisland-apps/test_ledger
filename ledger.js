@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v355";
+        const APP_VERSION = "v356";
         const APP_VERSION_DATE = "2026-09-12";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -68,7 +68,7 @@
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id", budgets: "id", inventory: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id", budgets: "id", inventory: "id", plannedPayments: "id" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -13411,6 +13411,16 @@
         async function savePlannedPaymentFromTxForm() {
             const type = document.getElementById("txType").value;
             if (type !== "income" && type !== "expense") return; // guarded by the button's own visibility too
+
+            // v356: Split Expenses (extra Category+Amount rows beyond the main one) has no
+            // equivalent here — a Planned Payment is a single {cat, amount} record, and silently
+            // saving only the main row while discarding the split rows would lose data the person
+            // can see is still sitting right there on the form. Blocked outright rather than
+            // guessed at.
+            if (collectTxSplitRows().length > 0) {
+                alert("Planned Payments doesn't support Split Expenses yet — please remove the extra split rows first, or use Commit Entry instead.");
+                return;
+            }
 
             const desc = document.getElementById("txDesc").value.trim();
             const amountVal = document.getElementById("txAmount").value;
