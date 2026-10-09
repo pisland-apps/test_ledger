@@ -3643,3 +3643,13 @@ An insurer's statement splits the surrender value into a **guaranteed** cash val
 - The policy-level loan box is relabelled "Policy loan not yet deducted": a statement's own total (H = A+C+D+E+F+G − loan) is already net of the loan, so fill the box only when the entered values are gross, otherwise the loan would be deducted twice.
 
 - `APP_VERSION` / `CACHE_NAME` → v469.
+
+## v470: Insurance — Terminal bonus gets its own box
+
+A statement separates the accumulated **dividend** (declared yearly, kept with the insurer and earning interest) from the **non-guaranteed terminal dividend / terminal bonus** (paid only on surrender, maturity or death and changeable year to year). v469's single "Bonuses" box hid that difference. A surrender-value entry is now **Date + Guaranteed + Dividend + Terminal bonus + Total**:
+- Total still follows the three parts until it is typed over. Typing the statement's Total works out the part that is empty **only when exactly one is empty**; with two or more empty nothing is guessed — the difference shows as "Other" on the policy (this is also where advance premium / accumulated cash payment lines of a statement end up).
+- Dividend and Terminal bonus accept a sum (`12000 + 3500.50`) and replace it with the result when the box is left.
+- The policy detail splits the latest surrender value into Guaranteed / Dividend / Terminal bonus with percentages, and flags the terminal bonus as changeable.
+- Entries saved by v469 (one combined `bonus`) load with that amount in **Dividend** — edit the entry to move the terminal part into its own box; v468 entries (Guaranteed + Total) load the same way. New entry fields: `dividend`, `terminal` (`bonus` is no longer written; it is still read).
+
+- `APP_VERSION` / `CACHE_NAME` → v470.

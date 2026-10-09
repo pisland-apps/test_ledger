@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v469";
+        const APP_VERSION = "v470";
         const APP_VERSION_DATE = "2026-10-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -2268,8 +2268,8 @@
                         // makeInsuranceId()). Shape: { id, insurer, product, policyNo, type, status,
                         // insuredMemberId, startDate, maturityDate, currency, premium, frequency,
                         // historyCutoff, statementTotal, premiumHistory: [{id,date,amount,note}],
-                        // coverages: [{id,label,sumAssured}], surrenderHistory: [{id,date,guaranteed,
-                        // total}], loanOutstanding, notes, createdAt, updated }. See the
+                        // coverages: [{id,label,sumAssured}], surrenderHistory: [{id,date,guaranteed,dividend,
+                        // terminal,total}], loanOutstanding, notes, createdAt, updated }. See the
                         // "--- INSURANCE ---" section for the full model.
                         database.createObjectStore(STORES.INSURANCE, { keyPath: "id" });
                     }
@@ -15163,7 +15163,7 @@
         // transaction can never leave a stale total behind. Record shape: { id, insurer, product,
         // policyNo, type, status, insuredMemberId, startDate, maturityDate, currency, premium,
         // frequency, historyCutoff, statementTotal, premiumHistory: [{id,date,amount,note}],
-        // coverages: [{id,label,sumAssured}], surrenderHistory: [{id,date,guaranteed,total,note}],
+        // coverages: [{id,label,sumAssured}], surrenderHistory: [{id,date,guaranteed,dividend,terminal,total}],
         // loanOutstanding, notes, createdAt, updated }.
         // A Planned Payment is linked to a policy through ITS OWN optional `policyId` field (one
         // planned payment per policy), so the policy's "next due" is read from that single record
@@ -15234,17 +15234,32 @@
         function insSvValue(r) {
             if (!r) return null;
             if (typeof r.total === "number") return r.total;
-            if (typeof r.guaranteed === "number" || typeof r.bonus === "number") return (r.guaranteed || 0) + (r.bonus || 0);
+            const parts = insSvParts(r);
+            if (parts.g != null || parts.d != null || parts.m != null) return (parts.g || 0) + (parts.d || 0) + (parts.m || 0);
             return null;
         }
 
-        // The Bonuses part of a surrender-value entry: stored (v469+), or for an entry saved by v468
-        // (Guaranteed + Total only) the difference between the two.
+        // The itemised parts of a surrender-value entry: g = Guaranteed, d = Dividend (accumulated),
+        // m = Terminal bonus (non-guaranteed). An entry saved by v469 had one combined `bonus` — it is
+        // read as Dividend (it can be split into Dividend + Terminal by editing the entry); one saved by
+        // v468 (Guaranteed + Total only) has its Total − Guaranteed difference read as Dividend too.
+        function insSvParts(r) {
+            if (!r) return { g: null, d: null, m: null };
+            const g = typeof r.guaranteed === "number" ? r.guaranteed : null;
+            let d = typeof r.dividend === "number" ? r.dividend : null;
+            const m = typeof r.terminal === "number" ? r.terminal : null;
+            // Only an entry from before the itemised boxes (neither key present at all) gets the legacy
+            // reading; one saved by v470 with both left empty keeps them empty and shows "Other".
+            if (d == null && m == null && r.dividend === undefined && r.terminal === undefined) {
+                if (typeof r.bonus === "number") d = r.bonus;
+                else if (typeof r.total === "number" && g != null) d = Math.round((r.total - g) * 100) / 100;
+            }
+            return { g, d, m };
+        }
+
         function insSvBonus(r) {
-            if (!r) return null;
-            if (typeof r.bonus === "number") return r.bonus;
-            if (typeof r.total === "number" && typeof r.guaranteed === "number") return Math.round((r.total - r.guaranteed) * 100) / 100;
-            return null;
+            const p = insSvParts(r);
+            return (p.d == null && p.m == null) ? null : (p.d || 0) + (p.m || 0);
         }
 
         // A plain number or a simple sum ("20389.58 + 11580.50"): the insurer's statement splits the
@@ -15280,7 +15295,8 @@
                 .slice().sort((a, b) => b.date.localeCompare(a.date));
             const latestSv = svs[0] || null;
             const svValue = insSvValue(latestSv);
-            const svGuaranteed = latestSv && typeof latestSv.guaranteed === "number" ? latestSv.guaranteed : null;
+            const svParts = insSvParts(latestSv);
+            const svGuaranteed = svParts.g;
             const svAgeDays = latestSv
                 ? Math.round((new Date(today + "T00:00:00") - new Date(latestSv.date + "T00:00:00")) / 86400000)
                 : null;
@@ -15288,7 +15304,7 @@
             const freq = INS_FREQ[policy.frequency];
             const premium = parseFloat(policy.premium) || 0;
             return {
-                cur, history, historyTotal, ledgerRows, ledgerTotal, paid, svs, latestSv, svValue, svGuaranteed, svAgeDays,
+                cur, history, historyTotal, ledgerRows, ledgerTotal, paid, svs, latestSv, svValue, svGuaranteed, svParts, svAgeDays,
                 // A surrender value older than a year is probably out of date — insurers send a
                 // fresh statement every year — so the card flags it instead of presenting it as current.
                 svStale: svAgeDays != null && svAgeDays > 365,
@@ -15458,7 +15474,11 @@
                         </div>
                     </div>
                     ${f.loan > 0 ? `<div style="font-size:0.75rem; font-weight:700; margin-top:8px;">Loan outstanding −${formatCurrency(f.loan, cur)} → net ${f.netSv == null ? "—" : formatCurrency(f.netSv, cur)}</div>` : ""}
-                    ${(f.svGuaranteed != null && f.svValue != null && f.svValue > 0) ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">Guaranteed part ${formatCurrency(f.svGuaranteed, cur)} (${(f.svGuaranteed / f.svValue * 100).toFixed(0)}%) · the rest is bonuses, not guaranteed</div>` : ""}
+                    ${(f.svValue != null && f.svValue > 0 && (f.svParts.g != null || f.svParts.m != null)) ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">${[
+                        f.svParts.g != null ? `Guaranteed ${formatCurrency(f.svParts.g, cur)} (${(f.svParts.g / f.svValue * 100).toFixed(0)}%)` : "",
+                        f.svParts.d != null && f.svParts.d !== 0 ? `Dividend ${formatCurrency(f.svParts.d, cur)} (${(f.svParts.d / f.svValue * 100).toFixed(0)}%)` : "",
+                        f.svParts.m != null && f.svParts.m !== 0 ? `Terminal bonus ${formatCurrency(f.svParts.m, cur)} (${(f.svParts.m / f.svValue * 100).toFixed(0)}%) — can change each year` : ""
+                    ].filter(Boolean).join(" · ")}</div>` : ""}
                     ${f.paybackPct != null ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">Surrender value is ${f.paybackPct.toFixed(1)}% of premiums paid</div>` : ""}
                 </div>`;
 
@@ -15510,8 +15530,11 @@
                 html += f.svs.map(r => {
                     const bits = [];
                     if (typeof r.guaranteed === "number") bits.push(`Guaranteed ${formatCurrency(r.guaranteed, cur)}`);
-                    const bn = insSvBonus(r);
-                    if (bn != null && bn !== 0) bits.push(`Bonuses ${formatCurrency(bn, cur)}`);
+                    const pp = insSvParts(r);
+                    if (pp.d != null && pp.d !== 0) bits.push(`Dividend ${formatCurrency(pp.d, cur)}`);
+                    if (pp.m != null && pp.m !== 0) bits.push(`Terminal bonus ${formatCurrency(pp.m, cur)}`);
+                    const rest = (insSvValue(r) || 0) - (pp.g || 0) - (pp.d || 0) - (pp.m || 0);
+                    if ((pp.g != null || pp.d != null || pp.m != null) && Math.abs(rest) >= 0.005) bits.push(`Other ${formatCurrency(rest, cur)}`);
                     if (r.note) bits.push(escapeHtml(r.note));
                     return line(escapeHtml(r.date), insSvValue(r) == null ? "—" : formatCurrency(insSvValue(r), cur), bits.join(" · "));
                 }).join("");
@@ -15686,23 +15709,25 @@
             if (!data && continueFromLast) container.scrollTop = container.scrollHeight;
         }
 
-        // One surrender-value entry = Date + Guaranteed + Bonuses + Total. Total FOLLOWS Guaranteed +
-        // Bonuses until it is typed over (data-total-auto); typing a Total with only one of the other two
-        // filled works out the missing one (data-bonus-derived keeps that derived Bonus in step if the
-        // Total is corrected later). So any one/two/three of the boxes can be entered. Bonuses accepts a
-        // sum such as "20389.58 + 11580.50" (see insParseAmount()).
+        // One surrender-value entry = Date + Guaranteed + Dividend + Terminal bonus + Total, mirroring the
+        // insurer's statement (Guaranteed = cash value E (+F); Dividend = accumulated dividend A; Terminal
+        // bonus = non-guaranteed terminal dividend/bonus G). Total FOLLOWS the three parts until it is
+        // typed over (data-total-auto). Typing a Total while exactly one part is empty works that part out
+        // (data-derived remembers which, and keeps it in step if the Total is corrected later); with two
+        // or more parts empty nothing is guessed — the difference simply shows as "Other". So any mix of
+        // boxes can be entered. Dividend and Terminal bonus accept a sum such as "20389.58 + 11580.50"
+        // (see insParseAmount()).
         function addInsSvRow(data) {
             const r = data || {};
             insRowCounter++;
             const rowId = "insSv_" + insRowCounter;
-            const bonus = insSvBonus(r);
-            const gNum = typeof r.guaranteed === "number" ? r.guaranteed : 0;
-            const sumMatches = typeof r.total === "number" && Math.abs(r.total - (gNum + (bonus || 0))) < 0.005;
+            const p = insSvParts(r);
+            const sumMatches = typeof r.total === "number" && Math.abs(r.total - ((p.g || 0) + (p.d || 0) + (p.m || 0))) < 0.005;
             const row = document.createElement("div");
             row.className = "ins-row ins-sv-block";
             row.id = rowId;
             row.dataset.totalAuto = (!data || sumMatches) ? "1" : "0";
-            row.dataset.bonusDerived = "0";
+            row.dataset.derived = "";
             const val = (n) => (typeof n === "number" ? n : "");
             row.innerHTML = `
                 <div class="ins-row-line">
@@ -15711,31 +15736,43 @@
                     <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${rowId}" aria-label="Remove">×</button>
                 </div>
                 <div class="ins-row-line">
-                    <div class="ins-sv-cell"><label>Guaranteed</label><input type="number" class="ins-sv-guaranteed" step="0.01" placeholder="0.00" value="${val(r.guaranteed)}" data-input="insSvRowInput"></div>
-                    <div class="ins-sv-cell"><label>Bonuses</label><input type="text" inputmode="decimal" class="ins-sv-bonus" placeholder="0.00" value="${val(bonus)}" data-input="insSvRowInput" data-change="insSvBonusChange"></div>
-                    <div class="ins-sv-cell"><label>Total</label><input type="number" class="ins-sv-total" step="0.01" placeholder="auto" value="${val(r.total)}" data-input="insSvTotalInput" data-change="insSvTotalChange"></div>
+                    <div class="ins-sv-cell"><label>Guaranteed</label><input type="number" class="ins-sv-guaranteed" step="0.01" placeholder="0.00" value="${val(p.g)}" data-input="insSvRowInput"></div>
+                    <div class="ins-sv-cell"><label>Dividend</label><input type="text" inputmode="decimal" class="ins-sv-dividend" placeholder="0.00" value="${val(p.d)}" data-input="insSvRowInput" data-change="insSvPartChange"></div>
+                    <div class="ins-sv-cell"><label>Terminal bonus</label><input type="text" inputmode="decimal" class="ins-sv-terminal" placeholder="0.00" value="${val(p.m)}" data-input="insSvRowInput" data-change="insSvPartChange"></div>
+                </div>
+                <div class="ins-row-line">
+                    <div class="ins-sv-cell"><label>Total surrender value (auto)</label><input type="number" class="ins-sv-total" step="0.01" placeholder="auto" value="${val(r.total)}" data-input="insSvTotalInput" data-change="insSvTotalChange"></div>
                 </div>`;
             document.getElementById("insSvRows").appendChild(row);
         }
 
         function insSvRowFields(row) {
-            return { g: row.querySelector(".ins-sv-guaranteed"), b: row.querySelector(".ins-sv-bonus"), t: row.querySelector(".ins-sv-total") };
+            return { g: row.querySelector(".ins-sv-guaranteed"), d: row.querySelector(".ins-sv-dividend"), m: row.querySelector(".ins-sv-terminal"), t: row.querySelector(".ins-sv-total") };
         }
 
-        // Typing in Guaranteed or Bonuses: Total follows (unless it has been typed over).
+        function insSvRead(row) {
+            const f = insSvRowFields(row);
+            return { f, v: { g: insParseAmount(f.g.value), d: insParseAmount(f.d.value), m: insParseAmount(f.m.value) }, t: insParseAmount(f.t.value) };
+        }
+
+        // Typing in Guaranteed / Dividend / Terminal bonus: Total follows (unless typed over); when the
+        // Total WAS typed over and one part was derived from it, that part follows the other parts.
         function insSvRowInput(el) {
             const row = el.closest(".ins-row");
-            const f = insSvRowFields(row);
-            if (el === f.b) row.dataset.bonusDerived = "0";
+            const { f, v } = insSvRead(row);
+            const key = el === f.g ? "g" : (el === f.d ? "d" : (el === f.m ? "m" : null));
+            if (key && row.dataset.derived === key) row.dataset.derived = ""; // typed over a derived value
             if (row.dataset.totalAuto === "1") {
-                const g = insParseAmount(f.g.value), b = insParseAmount(f.b.value);
-                f.t.value = (g == null && b == null) ? "" : (Math.round(((g || 0) + (b || 0)) * 100) / 100).toFixed(2);
+                f.t.value = (v.g == null && v.d == null && v.m == null) ? ""
+                    : (Math.round(((v.g || 0) + (v.d || 0) + (v.m || 0)) * 100) / 100).toFixed(2);
+            } else if (row.dataset.derived) {
+                insSvDerive(row);
             }
         }
 
-        // Leaving the Bonuses box turns a typed sum into its result, so the box always shows the
-        // number that will be saved (a long sum would otherwise be cut off by the narrow box).
-        function insSvBonusChange(el) {
+        // Leaving Dividend / Terminal bonus turns a typed sum into its result, so the box always shows
+        // the number that will be saved (a long sum would otherwise be cut off by the narrow box).
+        function insSvPartChange(el) {
             const n = insParseAmount(el.value);
             if (n != null) el.value = n.toFixed(2);
             insSvRowInput(el);
@@ -15747,18 +15784,29 @@
             row.dataset.totalAuto = el.value.trim() === "" ? "1" : "0";
         }
 
-        // Leaving the Total box: with Guaranteed filled and Bonuses empty (or derived earlier) the
-        // Bonuses box is worked out as Total − Guaranteed.
+        // Leaving the Total box: work out the one empty part, if exactly one is empty.
         function insSvTotalChange(el) {
             const row = el.closest(".ins-row");
-            const f = insSvRowFields(row);
-            const t = insParseAmount(f.t.value);
-            if (t == null) { row.dataset.totalAuto = "1"; insSvRowInput(f.g); return; }
-            const g = insParseAmount(f.g.value), b = insParseAmount(f.b.value);
-            if (g != null && t >= g && (b == null || row.dataset.bonusDerived === "1")) {
-                f.b.value = (Math.round((t - g) * 100) / 100).toFixed(2);
-                row.dataset.bonusDerived = "1";
+            const { f, t } = insSvRead(row);
+            if (t == null) { row.dataset.totalAuto = "1"; row.dataset.derived = ""; insSvRowInput(f.g); return; }
+            insSvDerive(row);
+        }
+
+        function insSvDerive(row) {
+            const { f, v, t } = insSvRead(row);
+            if (t == null) return;
+            let target = row.dataset.derived || null;
+            if (!target) {
+                const empty = ["g", "d", "m"].filter(k => v[k] == null);
+                if (empty.length === 1) target = empty[0];
             }
+            if (!target) return;
+            const rest = ["g", "d", "m"].filter(k => k !== target);
+            if (!rest.every(k => v[k] != null)) { row.dataset.derived = ""; return; }
+            const diff = Math.round((t - rest.reduce((s, k) => s + v[k], 0)) * 100) / 100;
+            if (diff < 0) return;
+            f[target].value = diff.toFixed(2);
+            row.dataset.derived = target;
         }
 
         function removeInsRow(el) {
@@ -15790,13 +15838,11 @@
         function collectInsSvRows() {
             const out = [];
             document.querySelectorAll("#insSvRows .ins-row").forEach(row => {
-                const f = insSvRowFields(row);
+                const { v, t } = insSvRead(row);
                 const date = row.querySelector(".ins-sv-date").value;
-                const guaranteed = insParseAmount(f.g.value);
-                const bonus = insParseAmount(f.b.value);
-                let total = insParseAmount(f.t.value);
-                if (total == null && (guaranteed != null || bonus != null)) total = Math.round(((guaranteed || 0) + (bonus || 0)) * 100) / 100;
-                if (date && total != null) out.push({ id: makeInsuranceId(), date, guaranteed, bonus, total });
+                let total = t;
+                if (total == null && (v.g != null || v.d != null || v.m != null)) total = Math.round(((v.g || 0) + (v.d || 0) + (v.m || 0)) * 100) / 100;
+                if (date && total != null) out.push({ id: makeInsuranceId(), date, guaranteed: v.g, dividend: v.d, terminal: v.m, total });
             });
             return out.sort((a, b) => a.date.localeCompare(b.date));
         }
@@ -22993,7 +23039,7 @@
             // v468: INSURANCE — category change may reveal/hide the Policy row; currency change re-labels the payment total
             onTxCategoryChangeInsurance: () => refreshTxPolicyRow(),
             insSvTotalChange: (el) => insSvTotalChange(el), // v469
-            insSvBonusChange: (el) => insSvBonusChange(el),
+            insSvPartChange: (el) => insSvPartChange(el),
             insRecalcPaymentTotal: () => insRecalcPaymentTotal(),
             handleInvAttachmentsSelected: (el, e) => handleInvAttachmentsSelected(e),
             recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),

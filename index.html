@@ -4054,11 +4054,11 @@
                 <button type="button" class="submit-btn" data-click="addInsPaymentRow" style="margin-top:2px; background:var(--chip-bg); color:var(--text-main);">＋ Add payment (copies the previous one, next year)</button>
 
                 <div class="ins-section-title">Surrender value history</div>
-                <p style="font-size:0.72rem; color:var(--text-muted); margin-bottom:8px;">Copy the figures from the insurer's statement. <b>Guaranteed</b> = guaranteed cash value. <b>Bonuses</b> = everything on top that is not guaranteed (accumulated dividend, reversionary and terminal bonus) — you can type a sum such as <i>20389.58 + 11580.50</i>. <b>Total</b> fills in by itself; if you type the statement's Total instead, the missing part is worked out. The latest entry is the value shown on the policy.</p>
+                <p style="font-size:0.72rem; color:var(--text-muted); margin-bottom:8px;">Copy the figures from the insurer's statement. <b>Guaranteed</b> = guaranteed cash value (plus the reversionary-bonus cash value, if any). <b>Dividend</b> = accumulated dividend. <b>Terminal bonus</b> = non-guaranteed terminal dividend / bonus. Dividend and Terminal bonus accept a sum such as <i>12000 + 3500.50</i>. <b>Total</b> fills in by itself; or type the statement's Total — if exactly one part is empty it is worked out, and any difference (for example advance premium or accumulated cash payment) shows as "Other". The latest entry is the value shown on the policy.</p>
                 <div id="insSvRows"></div>
                 <button type="button" class="submit-btn" data-click="addInsSvRow" style="margin-top:2px; background:var(--chip-bg); color:var(--text-main);">＋ Add surrender value</button>
 
-                <div class="form-row" style="margin-top:14px;"><textarea id="insNotes" class="form-input" rows="2" placeholder="Notes (Optional)"></textarea></div>
+                <div class="form-row" style="margin-top:14px;"><textarea id="insNotes" class="form-input" rows="2" placeholder="Notes (Optional)" style="width:100%; box-sizing:border-box;"></textarea></div>
             </div>
             <div style="flex-shrink:0; padding:12px 20px 20px;">
                 <button type="button" class="submit-btn" data-click="handleSaveInsurance" style="margin-top:0;">Save</button>
