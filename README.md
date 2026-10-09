@@ -3632,3 +3632,14 @@ Backup: `insurance` is included in export, restore and the Drive snapshot bundle
 Not in this version (planned): policy attachments, net-worth toggle, per-member coverage report, premiums-paid-vs-surrender-value report, investment-linked ↔ Funds link.
 
 - `APP_VERSION` / `CACHE_NAME` → v468.
+
+## v469: Insurance — surrender value split into Guaranteed + Bonuses, Total auto-calculated
+
+An insurer's statement splits the surrender value into a **guaranteed** cash value and several **non-guaranteed** parts (accumulated dividend, reversionary bonus, terminal dividend/bonus), so a "Guaranteed + Total" pair let the bonuses be left out of Total without anyone noticing. Each surrender-value entry is now **Date + Guaranteed + Bonuses + Total**:
+- **Total follows Guaranteed + Bonuses** until it is typed over. Typing the statement's Total with only Guaranteed filled works out Bonuses as the difference (kept in step if the Total is corrected later). So any one, two or three boxes can be entered.
+- **Bonuses accepts a sum** (`20389.58 + 11580.50`) — the statement lists the bonus parts on separate lines. Leaving the box replaces the sum with its result (31970.08), so what is shown is what is saved.
+- Entries saved by v468 (Guaranteed + Total only) load with Bonuses shown as Total − Guaranteed; nothing is migrated or rewritten until the policy is saved again. New optional field on each entry: `bonus`.
+- The policy detail shows the guaranteed share of the surrender value ("the rest is bonuses, not guaranteed") and "Guaranteed … · Bonuses …" on every history line.
+- The policy-level loan box is relabelled "Policy loan not yet deducted": a statement's own total (H = A+C+D+E+F+G − loan) is already net of the loan, so fill the box only when the entered values are gross, otherwise the loan would be deducted twice.
+
+- `APP_VERSION` / `CACHE_NAME` → v469.

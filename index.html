@@ -2116,6 +2116,10 @@
         .ins-row-x { flex: 0 0 26px; height: 26px; border: none; border-radius: 50%; background: var(--chip-bg); color: var(--expense-color); font-size: 1.1rem; line-height: 1; padding: 0; cursor: pointer; }
         .ins-rows-scroll { max-height: 300px; overflow-y: auto; }
         .ins-hdr { margin-bottom: 2px; }
+        .ins-sv-block { border: 1px solid var(--border-color); border-radius: 12px; padding: 8px; margin-bottom: 8px; }
+        .ins-sv-cell { flex: 1 1 0; min-width: 0; }
+        .ins-sv-cell label { display: block; font-size: 0.62rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; margin: 0 0 2px; }
+        .ins-sv-cell input { width: 100%; }
         .ins-hdr span { font-size: 0.64rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
         .ins-section-title { font-size: 0.74rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin: 18px 0 8px; }
         input, select.form-input { width: 100%; padding: 12px; border: 1.5px solid var(--border-color); border-radius: 8px; font-size: 0.9rem; background: var(--chip-bg); height: 44px; }
@@ -4030,8 +4034,8 @@
                     <div><label>Frequency</label><select id="insFrequency" class="form-input"></select></div>
                 </div>
                 <div class="form-row">
-                    <label>Policy loan outstanding (Optional)</label>
-                    <input type="number" id="insLoan" step="0.01" min="0" placeholder="Deducted from surrender value">
+                    <label>Policy loan not yet deducted (Optional)</label>
+                    <input type="number" id="insLoan" step="0.01" min="0" placeholder="Leave empty if the statement total is already net of loan">
                 </div>
 
                 <div class="ins-section-title">Coverage</div>
@@ -4050,8 +4054,7 @@
                 <button type="button" class="submit-btn" data-click="addInsPaymentRow" style="margin-top:2px; background:var(--chip-bg); color:var(--text-main);">＋ Add payment (copies the previous one, next year)</button>
 
                 <div class="ins-section-title">Surrender value history</div>
-                <p style="font-size:0.72rem; color:var(--text-muted); margin-bottom:8px;">Copy the figures from the insurer's statement: <b>Guaranteed</b> and <b>Total</b> (including bonuses). The latest entry is the value shown on the policy.</p>
-                <div class="ins-row-line ins-hdr"><span class="ins-c-date">Date</span><span class="ins-c-num">Guaranteed</span><span class="ins-c-num">Total</span><span style="flex:0 0 26px;"></span></div>
+                <p style="font-size:0.72rem; color:var(--text-muted); margin-bottom:8px;">Copy the figures from the insurer's statement. <b>Guaranteed</b> = guaranteed cash value. <b>Bonuses</b> = everything on top that is not guaranteed (accumulated dividend, reversionary and terminal bonus) — you can type a sum such as <i>20389.58 + 11580.50</i>. <b>Total</b> fills in by itself; if you type the statement's Total instead, the missing part is worked out. The latest entry is the value shown on the policy.</p>
                 <div id="insSvRows"></div>
                 <button type="button" class="submit-btn" data-click="addInsSvRow" style="margin-top:2px; background:var(--chip-bg); color:var(--text-main);">＋ Add surrender value</button>
 
