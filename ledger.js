@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v470";
+        const APP_VERSION = "v471";
         const APP_VERSION_DATE = "2026-10-10";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -15265,11 +15265,14 @@
         // A plain number or a simple sum ("20389.58 + 11580.50"): the insurer's statement splits the
         // bonuses over several lines (accumulated dividend, reversionary bonus, terminal bonus), and
         // this lets them be typed straight into the one Bonuses box. Anything else → null.
-        function insParseAmount(s) {
+        // `dp` = decimals kept: 2 for money (the default), more for unit counts and unit prices — a price
+        // such as 4.723 must NOT be rounded to 4.72 before units × price is worked out.
+        function insParseAmount(s, dp) {
             const t = String(s == null ? "" : s).replace(/,/g, "").trim();
             if (!t || !/^[+-]?\s*\d*\.?\d+(\s*[+-]\s*\d*\.?\d+)*$/.test(t)) return null;
             const parts = t.match(/[+-]?\s*\d*\.?\d+/g);
-            return Math.round(parts.reduce((sum, p) => sum + parseFloat(p.replace(/\s+/g, "")), 0) * 100) / 100;
+            const k = Math.pow(10, dp == null ? 2 : dp);
+            return Math.round(parts.reduce((sum, p) => sum + parseFloat(p.replace(/\s+/g, "")), 0) * k) / k;
         }
 
         function insAddYear(dateStr) {
@@ -15479,6 +15482,7 @@
                         f.svParts.d != null && f.svParts.d !== 0 ? `Dividend ${formatCurrency(f.svParts.d, cur)} (${(f.svParts.d / f.svValue * 100).toFixed(0)}%)` : "",
                         f.svParts.m != null && f.svParts.m !== 0 ? `Terminal bonus ${formatCurrency(f.svParts.m, cur)} (${(f.svParts.m / f.svValue * 100).toFixed(0)}%) — can change each year` : ""
                     ].filter(Boolean).join(" · ")}</div>` : ""}
+                    ${(f.latestSv && Array.isArray(f.latestSv.funds) && typeof f.latestSv.fundValue === "number") ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">Fund value ${formatCurrency(f.latestSv.fundValue, cur)}${f.latestSv.deduction > 0 ? ` − deduction ${formatCurrency(f.latestSv.deduction, cur)}` : ""} · ${f.latestSv.funds.length} fund${f.latestSv.funds.length === 1 ? "" : "s"} · price date ${escapeHtml(f.latestSv.date)}</div>` : ""}
                     ${f.paybackPct != null ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">Surrender value is ${f.paybackPct.toFixed(1)}% of premiums paid</div>` : ""}
                 </div>`;
 
@@ -15535,6 +15539,10 @@
                     if (pp.m != null && pp.m !== 0) bits.push(`Terminal bonus ${formatCurrency(pp.m, cur)}`);
                     const rest = (insSvValue(r) || 0) - (pp.g || 0) - (pp.d || 0) - (pp.m || 0);
                     if ((pp.g != null || pp.d != null || pp.m != null) && Math.abs(rest) >= 0.005) bits.push(`Other ${formatCurrency(rest, cur)}`);
+                    if (Array.isArray(r.funds) && r.funds.length) {
+                        bits.push(r.funds.map(fd => `${escapeHtml(fd.name || "Fund")}${typeof fd.units === "number" && typeof fd.price === "number" ? ` ${fd.units.toLocaleString("en-US", { maximumFractionDigits: 4 })} units × ${fd.price}` : ""}${typeof fd.value === "number" ? " = " + formatCurrency(fd.value, cur) : ""}`).join("; "));
+                        if (typeof r.deduction === "number" && r.deduction > 0) bits.push(`Deduction −${formatCurrency(r.deduction, cur)}`);
+                    }
                     if (r.note) bits.push(escapeHtml(r.note));
                     return line(escapeHtml(r.date), insSvValue(r) == null ? "—" : formatCurrency(insSvValue(r), cur), bits.join(" · "));
                 }).join("");
@@ -15782,6 +15790,7 @@
         function insSvTotalInput(el) {
             const row = el.closest(".ins-row");
             row.dataset.totalAuto = el.value.trim() === "" ? "1" : "0";
+            if (row.classList.contains("ins-sv-fund") && row.dataset.totalAuto === "1") insFundRowRecalc(row);
         }
 
         // Leaving the Total box: work out the one empty part, if exactly one is empty.
@@ -15807,6 +15816,129 @@
             if (diff < 0) return;
             f[target].value = diff.toFixed(2);
             row.dataset.derived = target;
+        }
+
+        // Investment-linked policy: the surrender value is built from the FUND holdings on the insurer's
+        // unit statement — per fund: name, units, price (NAV) as at a date, value = units × price —
+        // less any deduction (surrender charge etc.) the statement shows. One entry = one price date:
+        // { id, date, funds: [{name, units, price, value}], fundValue, deduction, total }, where `total`
+        // is the surrender value, so every place that reads an entry's value (list card, summary,
+        // "% of premiums paid") needs no special case. Which kind of entry a row is, is decided by the
+        // presence of `funds`, not by the policy type — so changing a policy's Type never rewrites or
+        // hides existing entries. Fund value per line follows units × price until typed over
+        // (data-value-auto); Surrender value follows fund value − deduction until typed over
+        // (data-total-auto, same flag the statement rows use).
+        function insAddSvRowForType() {
+            if (document.getElementById("insType").value === "investment") addInsFundSvRow(null);
+            else addInsSvRow(null);
+        }
+
+        function addInsFundSvRow(data) {
+            const r = data || {};
+            insRowCounter++;
+            const rowId = "insSv_" + insRowCounter;
+            const row = document.createElement("div");
+            row.className = "ins-row ins-sv-block ins-sv-fund";
+            row.id = rowId;
+            row.dataset.totalAuto = "1";
+            const val = (n) => (typeof n === "number" ? n : "");
+            row.innerHTML = `
+                <div class="ins-row-line">
+                    <input type="date" class="ins-c-date ins-sv-date" value="${escapeHtml(r.date || todayLocalStr())}">
+                    <span style="flex:1; font-size:0.68rem; color:var(--text-muted); font-weight:700;">Price date</span>
+                    <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${rowId}" aria-label="Remove">×</button>
+                </div>
+                <div class="ins-fund-lines"></div>
+                <button type="button" class="ins-mini-btn" data-click="addInsFundLine" data-row-id="${rowId}">＋ Add fund</button>
+                <div class="ins-row-line" style="margin-top:8px;">
+                    <div class="ins-sv-cell"><label>Fund value</label><input type="text" class="ins-sv-fundtotal" readonly tabindex="-1"></div>
+                    <div class="ins-sv-cell"><label>Deduction</label><input type="number" class="ins-sv-deduction" step="0.01" min="0" placeholder="0.00" value="${val(r.deduction)}" data-input="insFundRowInput"></div>
+                    <div class="ins-sv-cell"><label>Surrender value</label><input type="number" class="ins-sv-total" step="0.01" placeholder="auto" value="${val(r.total)}" data-input="insSvTotalInput"></div>
+                </div>`;
+            document.getElementById("insSvRows").appendChild(row);
+            const funds = Array.isArray(r.funds) && r.funds.length ? r.funds : [null];
+            funds.forEach(fd => addInsFundLineTo(row, fd));
+            // A loaded total that is not fund value − deduction was typed over by hand: keep it as is.
+            if (typeof r.total === "number") {
+                const sum = funds.reduce((s, fd) => s + ((fd && typeof fd.value === "number") ? fd.value : 0), 0);
+                row.dataset.totalAuto = Math.abs(r.total - (sum - (r.deduction || 0))) < 0.005 ? "1" : "0";
+            }
+            insFundRowRecalc(row);
+        }
+
+        function addInsFundLine(el) {
+            const row = document.getElementById(el.dataset.rowId);
+            if (row) addInsFundLineTo(row, null);
+        }
+
+        function addInsFundLineTo(row, fd) {
+            const f = fd || {};
+            const val = (n) => (typeof n === "number" ? n : "");
+            const line = document.createElement("div");
+            line.className = "ins-fund-line";
+            const autoVal = (typeof f.units === "number" && typeof f.price === "number") ? Math.round(f.units * f.price * 100) / 100 : null;
+            line.dataset.valueAuto = (typeof f.value !== "number" || (autoVal != null && Math.abs(autoVal - f.value) < 0.005)) ? "1" : "0";
+            line.innerHTML = `
+                <div class="ins-row-line">
+                    <input type="text" class="ins-fd-name" placeholder="Fund name" value="${escapeHtml(f.name || "")}">
+                    <button type="button" class="ins-row-x" data-click="removeInsFundLine" aria-label="Remove fund">×</button>
+                </div>
+                <div class="ins-row-line">
+                    <div class="ins-sv-cell"><label>Units</label><input type="number" class="ins-fd-units" step="0.0001" placeholder="0.00" value="${val(f.units)}" data-input="insFundLineInput"></div>
+                    <div class="ins-sv-cell"><label>Price (NAV)</label><input type="number" class="ins-fd-price" step="0.0001" placeholder="0.000" value="${val(f.price)}" data-input="insFundLineInput"></div>
+                    <div class="ins-sv-cell"><label>Value</label><input type="number" class="ins-fd-value" step="0.01" placeholder="auto" value="${val(f.value)}" data-input="insFundValueInput"></div>
+                </div>`;
+            row.querySelector(".ins-fund-lines").appendChild(line);
+        }
+
+        function removeInsFundLine(el) {
+            const line = el.closest(".ins-fund-line");
+            const row = el.closest(".ins-row");
+            if (line) line.remove();
+            if (row) insFundRowRecalc(row);
+        }
+
+        // Units or Price typed: the line's Value follows (unless typed over).
+        function insFundLineInput(el) {
+            const line = el.closest(".ins-fund-line");
+            if (line.dataset.valueAuto === "1") {
+                const u = insParseAmount(line.querySelector(".ins-fd-units").value, 6);
+                const p = insParseAmount(line.querySelector(".ins-fd-price").value, 6);
+                line.querySelector(".ins-fd-value").value = (u != null && p != null) ? (Math.round(u * p * 100) / 100).toFixed(2) : "";
+            }
+            insFundRowRecalc(el.closest(".ins-row"));
+        }
+
+        // Value typed straight in (as printed on the statement) takes it off auto; clearing puts it back.
+        function insFundValueInput(el) {
+            const line = el.closest(".ins-fund-line");
+            line.dataset.valueAuto = el.value.trim() === "" ? "1" : "0";
+            if (line.dataset.valueAuto === "1") { insFundLineInput(el); return; }
+            insFundRowRecalc(el.closest(".ins-row"));
+        }
+
+        function insFundRowInput(el) {
+            insFundRowRecalc(el.closest(".ins-row"));
+        }
+
+        // Fund value = sum of the fund lines; Surrender value follows fund value − deduction (unless typed over).
+        function insFundRowRecalc(row) {
+            const vals = [...row.querySelectorAll(".ins-fd-value")].map(i => insParseAmount(i.value)).filter(v => v != null);
+            const fundTotal = vals.length ? Math.round(vals.reduce((s, v) => s + v, 0) * 100) / 100 : null;
+            row.querySelector(".ins-sv-fundtotal").value = fundTotal == null ? "" : fundTotal.toFixed(2);
+            if (row.dataset.totalAuto === "1") {
+                const ded = insParseAmount(row.querySelector(".ins-sv-deduction").value) || 0;
+                row.querySelector(".ins-sv-total").value = fundTotal == null ? "" : (Math.round((fundTotal - ded) * 100) / 100).toFixed(2);
+            }
+        }
+
+        // Policy type drives which kind of entry "＋ Add" creates, and what the help text says.
+        function updateInsSvAddUi() {
+            const ilp = document.getElementById("insType").value === "investment";
+            document.getElementById("insSvAddBtn").textContent = ilp ? "＋ Add fund value (units × price)" : "＋ Add surrender value";
+            document.getElementById("insSvHelp").innerHTML = ilp
+                ? "For an investment-linked policy, copy the fund lines from the insurer's unit statement: <b>fund name, units and price (NAV) as at the date shown</b> — the value is units × price. If the statement shows a surrender charge or other deduction, enter it under <b>Deduction</b>; the <b>Surrender value</b> fills in as fund value − deduction. The latest entry is the value shown on the policy."
+                : "Copy the figures from the insurer's statement. <b>Guaranteed</b> = guaranteed cash value (plus the reversionary-bonus cash value, if any). <b>Dividend</b> = accumulated dividend. <b>Terminal bonus</b> = non-guaranteed terminal dividend / bonus. Dividend and Terminal bonus accept a sum such as <i>12000 + 3500.50</i>. <b>Total</b> fills in by itself; or type the statement's Total — if exactly one part is empty it is worked out, and any difference (for example advance premium or accumulated cash payment) shows as \"Other\". The latest entry is the value shown on the policy.";
         }
 
         function removeInsRow(el) {
@@ -15838,6 +15970,22 @@
         function collectInsSvRows() {
             const out = [];
             document.querySelectorAll("#insSvRows .ins-row").forEach(row => {
+                if (row.classList.contains("ins-sv-fund")) {
+                    const date = row.querySelector(".ins-sv-date").value;
+                    const funds = [...row.querySelectorAll(".ins-fund-line")].map(l => ({
+                        name: l.querySelector(".ins-fd-name").value.trim(),
+                        units: insParseAmount(l.querySelector(".ins-fd-units").value, 6),
+                        price: insParseAmount(l.querySelector(".ins-fd-price").value, 6),
+                        value: insParseAmount(l.querySelector(".ins-fd-value").value)
+                    })).filter(fd => fd.name || fd.units != null || fd.price != null || fd.value != null);
+                    funds.forEach(fd => { if (fd.value == null && fd.units != null && fd.price != null) fd.value = Math.round(fd.units * fd.price * 100) / 100; });
+                    const fundValue = funds.some(fd => fd.value != null) ? Math.round(funds.reduce((s, fd) => s + (fd.value || 0), 0) * 100) / 100 : null;
+                    const deduction = insParseAmount(row.querySelector(".ins-sv-deduction").value);
+                    let total = insParseAmount(row.querySelector(".ins-sv-total").value);
+                    if (total == null && fundValue != null) total = Math.round((fundValue - (deduction || 0)) * 100) / 100;
+                    if (date && total != null) out.push({ id: makeInsuranceId(), date, funds, fundValue, deduction, total });
+                    return;
+                }
                 const { v, t } = insSvRead(row);
                 const date = row.querySelector(".ins-sv-date").value;
                 let total = t;
@@ -15911,8 +16059,9 @@
             document.getElementById("insSvRows").innerHTML = "";
             ((p && p.coverages) || []).forEach(c => addInsCoverageRow(c));
             ((p && p.premiumHistory) || []).slice().sort((a, b) => a.date.localeCompare(b.date)).forEach(r => addInsPaymentRow(r));
-            ((p && p.surrenderHistory) || []).slice().sort((a, b) => a.date.localeCompare(b.date)).forEach(r => addInsSvRow(r));
+            ((p && p.surrenderHistory) || []).slice().sort((a, b) => a.date.localeCompare(b.date)).forEach(r => (Array.isArray(r.funds) ? addInsFundSvRow(r) : addInsSvRow(r)));
             insRecalcPaymentTotal();
+            updateInsSvAddUi();
             document.getElementById("insDeleteBtn").style.display = id ? "block" : "none";
             openModal("insuranceModal");
         }
@@ -22957,7 +23106,9 @@
             handleDeleteInsurance: () => handleDeleteInsurance(),
             addInsCoverageRow: () => addInsCoverageRow(null),
             addInsPaymentRow: () => addInsPaymentRow(null, true),
-            addInsSvRow: () => addInsSvRow(null),
+            addInsSvRow: () => insAddSvRowForType(),
+            addInsFundLine: (el) => addInsFundLine(el), // v471
+            removeInsFundLine: (el) => removeInsFundLine(el),
             removeInsRow: (el) => removeInsRow(el),
             insuranceDetailEdit: () => insuranceDetailEdit(),
             insuranceRecordPremium: () => insuranceRecordPremium(),
@@ -23040,6 +23191,7 @@
             onTxCategoryChangeInsurance: () => refreshTxPolicyRow(),
             insSvTotalChange: (el) => insSvTotalChange(el), // v469
             insSvPartChange: (el) => insSvPartChange(el),
+            insTypeChanged: () => updateInsSvAddUi(), // v471
             insRecalcPaymentTotal: () => insRecalcPaymentTotal(),
             handleInvAttachmentsSelected: (el, e) => handleInvAttachmentsSelected(e),
             recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),
@@ -23051,6 +23203,9 @@
             insRecalcPaymentTotal: () => insRecalcPaymentTotal(), // v468
             insSvRowInput: (el) => insSvRowInput(el), // v469
             insSvTotalInput: (el) => insSvTotalInput(el),
+            insFundLineInput: (el) => insFundLineInput(el), // v471
+            insFundValueInput: (el) => insFundValueInput(el),
+            insFundRowInput: (el) => insFundRowInput(el),
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),

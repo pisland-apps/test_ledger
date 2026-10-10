@@ -3653,3 +3653,12 @@ A statement separates the accumulated **dividend** (declared yearly, kept with t
 - Entries saved by v469 (one combined `bonus`) load with that amount in **Dividend** — edit the entry to move the terminal part into its own box; v468 entries (Guaranteed + Total) load the same way. New entry fields: `dividend`, `terminal` (`bonus` is no longer written; it is still read).
 
 - `APP_VERSION` / `CACHE_NAME` → v470.
+
+## v471: Insurance — investment-linked policies: surrender value from fund holdings
+
+For a policy whose Type is **Investment-linked**, "＋ Add fund value" creates a fund-based surrender-value entry that mirrors the insurer's unit statement: per fund **name, units, price (NAV) as at the date shown, value = units × price** (value follows units × price until typed over, so the figure printed on the statement can be entered as is), several funds per entry, an optional **Deduction** (surrender charge etc.) and **Surrender value = fund value − deduction** (follows until typed over). One entry = one price date.
+- Stored as `{ id, date, funds: [{name, units, price, value}], fundValue, deduction, total }`; `total` is the surrender value, so the list card, summary totals and "% of premiums paid" read it like any other entry. Which kind of entry a row is, is decided by the presence of `funds` — never by the policy's current Type — so changing a policy's Type doesn't hide or rewrite existing entries.
+- The policy detail shows the fund lines of every entry (`Lion Progressive Fund 5,385.6 units × 4.723 = RM25,436.19`) and, in the summary block, fund value / deduction / number of funds / price date. The 12-month "out of date" warning applies as usual — for a unit-linked value that is stale after weeks rather than a year; shortening it for this type is a possible follow-up.
+- Not in this version: pulling the latest NAV from the Funds page (units × current price as a live estimate).
+
+- `APP_VERSION` / `CACHE_NAME` → v471.
