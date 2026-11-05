@@ -141,6 +141,14 @@
                 // never-touched install still shows Kalam under the crayon preset from first paint.
                 var crayonFontPref = localStorage.getItem("ledgerCrayonFontEnabled");
                 document.documentElement.setAttribute("data-crayon-font", crayonFontPref === "0" ? "default" : "kalam");
+                // v577: global App font pick, same before-first-paint reasoning (see ledger.js getAppFont()).
+                var appFontPref = localStorage.getItem("ledgerAppFont");
+                document.documentElement.setAttribute("data-app-font", (appFontPref === "kalam" || appFontPref === "shadows") ? appFontPref : "default");
+                // v584: Chinese-only font choice, same before-first-paint reasoning (see ledger.js getZhFont()).
+                var zhFontPref = localStorage.getItem("ledgerZhFont");
+                document.documentElement.setAttribute("data-zh-font", (zhFontPref === "longcang" || zhFontPref === "mashanzheng") ? zhFontPref : "default");
+                var zhSizePref = localStorage.getItem("ledgerZhFontSize"); // v588
+                document.documentElement.setAttribute("data-zh-size", (zhSizePref === "large" || zhSizePref === "larger") ? zhSizePref : "normal");
                 // v249: same before-first-paint reasoning as the two attributes above, for
                 // Privacy Mode — a real amount briefly flashing unblurred for one frame while
                 // someone's phone screen is visible to bystanders is exactly the scenario this

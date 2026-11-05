@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v471";
-        const APP_VERSION_DATE = "2026-10-10";
+        const APP_VERSION = "v621";
+        const APP_VERSION_DATE = "2026-11-05";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -124,14 +124,16 @@
         // active/disposed/lost status). Created either inline from an Expense entry (see the
         // "📦 Add to Inventory" block on the transaction form) or manually from the Inventory
         // page's own + button. See the "--- INVENTORY ---" section below.
+        // v537: DB_VERSION 14→15 adds the TIMELINE store (notes timeline of things to remember from
+        // before/after the ledger started; see the "--- TIMELINE ---" section).
         // v468: DB_VERSION 13→14 adds the INSURANCE store (one record per insurance policy — coverage,
         // typed-in premium history, surrender-value history; see the "--- INSURANCE ---" section).
-        const DB_VERSION = 14;
-        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags", BUDGETS: "budgets", INVENTORY: "inventory", PLANNED_PAYMENTS: "plannedPayments", REMINDERS: "reminders", INSURANCE: "insurance", DRIVE_SNAPSHOTS: "driveSnapshots" };
+        const DB_VERSION = 15;
+        const STORES = { ACCOUNTS: "accounts", TRANSACTIONS: "transactions", SETTINGS: "settings", CATEGORIES: "categories", MEMBERS: "members", FUNDS: "funds", NAV_HISTORY: "navHistory", ATTACHMENTS: "attachments", TEMPLATES: "templates", TAGS: "tags", BUDGETS: "budgets", INVENTORY: "inventory", PLANNED_PAYMENTS: "plannedPayments", REMINDERS: "reminders", INSURANCE: "insurance", TIMELINE: "timeline", DRIVE_SNAPSHOTS: "driveSnapshots" };
         // Maps each object store to the field IndexedDB uses as its keyPath. That field must stay
         // unencrypted on the stored record (IndexedDB needs to read it directly to index/generate keys);
         // every other field on the record is encrypted as a single AES-GCM blob.
-        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id", budgets: "id", inventory: "id", plannedPayments: "id", reminders: "id", insurance: "id" };
+        const STORE_KEYPATHS = { accounts: "id", transactions: "id", settings: "key", categories: "id", members: "id", funds: "id", navHistory: "date", attachments: "id", templates: "id", tags: "id", budgets: "id", inventory: "id", plannedPayments: "id", reminders: "id", insurance: "id", timeline: "id" };
 
         // Fixed palette offered when picking a member's color (sidebar dot, net-worth rows, etc.)
         const MEMBER_COLORS = ["#3b82f6", "#ec4899", "#f59e0b", "#10b981", "#8b5cf6", "#ef4444", "#0ea5e9", "#14b8a6", "#f97316", "#64748b"];
@@ -474,7 +476,16 @@
         // restrict the Accounts page list to one group/sub-group at a time, e.g.
         // { group: "Investment", subgroup: "Fixed Deposit", label: "Fixed Deposit" }. null shows
         // every account, same as opening the page from "Financial Accounts" directly.
+        // v571: Accounts page view mode — "list" (the original grouped list) or "cards" (group chips +
+        // swipeable card carousel + detail panel). Per-device on purpose (phone = carousel, PC = grid),
+        // so it lives in localStorage like the sidebar-group state, not in the synced settings store.
+        const ACCOUNTS_VIEW_MODE_KEY = "ledgerAccountsViewMode";
+        let accountsViewMode = (() => { try { return localStorage.getItem(ACCOUNTS_VIEW_MODE_KEY) === "cards" ? "cards" : "list"; } catch (e) { return "list"; } })();
+        let accountsCardGroup = "all";       // "all" or an ACCOUNT_GROUPS name
+        let accountsCardSelectedId = null;   // account id of the card currently selected
+        let accountsCardSubgroup = "all";    // v572: "all" | sub-group name | "__none" (accounts with no sub-group)
         let accountsPageTypeFilter = null;
+        let accountsDormantOnly = false; // v614: Dormant chip on the Accounts page
         // v222 fix: where the Accounts page's "← Back" (and hardware/gesture back) should
         // return to. Every pre-v222 entry point (sidebar, dashboard, delete-account flow)
         // only ever meant "back to Dashboard", so this defaulted implicitly via a hardcoded
@@ -1070,6 +1081,7 @@
                 const verifier = await aesEncryptString(newKey, VERIFIER_PLAINTEXT);
                 saveLockConfig({ salt: newSaltB64, iterations: PBKDF2_ITERATIONS, verifierIv: verifier.iv, verifierData: verifier.data });
                 currentPasscode = newVal;
+                resetDriveImageKeys(); // v579: Drive image files were encrypted under the old passcode — re-upload them
 
                 // Biometric unlock wraps the OLD passcode text with a PRF-derived key (see
                 // enableBiometricUnlock above) — that wrapped value is now stale, since unlocking
@@ -1328,6 +1340,11 @@
                     cred = await navigator.credentials.create({ publicKey: biometricCreateOptions(false, salt) });
                 } catch (err2) {
                     console.error("[ledger] biometric registration failed", err2);
+                    // NotAllowedError = user cancelled / dismissed the prompt: stay quiet.
+                    // Anything else is a real failure the user should hear about.
+                    if (!(err2 && err2.name === "NotAllowedError")) {
+                        alert("Fingerprint / Face unlock couldn't be set up on this device or browser. Continue using your passcode.");
+                    }
                     return false;
                 }
             }
@@ -1446,7 +1463,11 @@
             const toggle = document.getElementById("biometricToggle");
             if (toggle.checked) {
                 try {
-                    await enableBiometricUnlock(currentPasscode);
+                    // enableBiometricUnlock() reports failure by returning false (it never throws),
+                    // so the toggle must be reset from its return value — otherwise it stays on
+                    // even though no biometric record was saved (e.g. device lacks PRF).
+                    const ok = await enableBiometricUnlock(currentPasscode);
+                    if (!ok) toggle.checked = false;
                 } catch (err) {
                     toggle.checked = false;
                     alert("Could not enable biometric unlock: " + (err && err.message ? err.message : err));
@@ -1506,6 +1527,7 @@
         // where the user was — without this, returning always lands back at the very top of the
         // dashboard instead of where they left off.
         let workspaceScrollY = 0;
+        let budgetScrollY = 0; // v616: where the Budget page was scrolled to when a breakdown row opened the transaction list
 
         // Pagination for the transaction list — avoids rendering thousands of DOM rows at once.
         let ledgerRenderLimit = 50;
@@ -1757,6 +1779,9 @@
         // height), so tapping a clipped bar is how you see the true number on any screen size —
         // one mechanism instead of two, and it already works on mobile since v215.
         let monthlyTrendAutoScale = false;
+        // v567: Monthly Trend chart style — "grouped" (income/expense side by side, the original look) or
+        // "mirrored" (one column per month: income up, expense down around a centre line). Persisted in SETTINGS.
+        let monthlyTrendStyle = "grouped";
         // v373: persisted show/hide for the Month/Income/Expense/Balance table under the Monthly
         // Trend chart (toggled by clicking the "Monthly Trend" title) — this initial value only
         // matters before bootstrap() runs its own width-aware default (see storedMonthlyTrendTableExpanded
@@ -2095,6 +2120,7 @@
             const portfolioReportPage = document.getElementById("page-portfolio-report");
             const ownerNetWorthReportPage = document.getElementById("page-owner-networth-report");
             const currencyReportPage = document.getElementById("page-currency-report");
+            const incomeTaxPage = document.getElementById("page-incometax");
             const navUpdatePage = document.getElementById("page-navupdate");
             const dataSecurityPage = document.getElementById("page-datasecurity");
             // v394: the items that used to be inline panels on page-datasecurity (Background
@@ -2124,6 +2150,7 @@
             const plannedPaymentsPage = document.getElementById("page-plannedpayments");
             const remindersPage = document.getElementById("page-reminders");
             const insurancePage = document.getElementById("page-insurance");
+            const timelinePage = document.getElementById("page-timeline");
 
             if (!ledgerPage.classList.contains("hidden")) {
                 handleLedgerBackClick();
@@ -2159,6 +2186,7 @@
                 !portfolioReportPage.classList.contains("hidden") ||
                 !ownerNetWorthReportPage.classList.contains("hidden") ||
                 !currencyReportPage.classList.contains("hidden") ||
+                !incomeTaxPage.classList.contains("hidden") ||
                 !navUpdatePage.classList.contains("hidden") ||
                 !dataSecurityPage.classList.contains("hidden") ||
                 !bgThemePage.classList.contains("hidden") ||
@@ -2168,7 +2196,8 @@
                 !inventoryPage.classList.contains("hidden") ||
                 !plannedPaymentsPage.classList.contains("hidden") ||
                 !remindersPage.classList.contains("hidden") ||
-                !insurancePage.classList.contains("hidden")
+                !insurancePage.classList.contains("hidden") ||
+                !timelinePage.classList.contains("hidden")
             ) {
                 navigateToWorkspace();
             }
@@ -2273,6 +2302,11 @@
                         // "--- INSURANCE ---" section for the full model.
                         database.createObjectStore(STORES.INSURANCE, { keyPath: "id" });
                     }
+                    if (!database.objectStoreNames.contains(STORES.TIMELINE)) {
+                        // v537: one record per timeline entry — keyPath "id" (app-generated, see
+                        // makeTimelineId()). See the "--- TIMELINE ---" section for the shape.
+                        database.createObjectStore(STORES.TIMELINE, { keyPath: "id" });
+                    }
                     if (!database.objectStoreNames.contains(STORES.DRIVE_SNAPSHOTS)) {
                         // v433: safety-net snapshots of THIS device's own data, taken right before
                         // a Google Drive restore overwrites it (only when this device actually had
@@ -2283,7 +2317,7 @@
                         // data } — same encrypted-bundle shape uploadBackupToDrive() writes to
                         // Drive itself, so restoring one goes through the exact same
                         // decryptBackupBundle()/restoreFromBundle() path. Only the most recent 5
-                        // are kept (see pruneDriveSnapshots()).
+                        // are kept, and at most ~60 MB in total (see pruneDriveSnapshots(), v591).
                         database.createObjectStore(STORES.DRIVE_SNAPSHOTS, { keyPath: "id", autoIncrement: true });
                     }
                 };
@@ -2369,6 +2403,11 @@
         // Persisted via SETTINGS like the widget settings above; defaults to true (unchanged
         // behaviour for existing installs).
         let showMonthlyTrendOnDashboard = true;
+        // v518: the "Count insurance surrender value in Net Worth" switch (v488) is retired — a surrender
+        // value is only cash if the policy is surrendered, so it is shown as information (Dashboard card,
+        // Net Worth Statement memo row, Insurance page) and never added to Net Worth. Kept as a constant so
+        // the older insSvNetWorth(scope) calls in the Net Worth code keep returning zero.
+        const includeInsuranceSvInNetWorth = false;
         // v334: which of the current month's Category Budgets (if any) also get their own mini
         // progress row on the Dashboard's "Remaining Budget" widget, opted in one-by-one via the
         // Dashboard Widgets settings panel — see renderDashboardBudgetCategoryToggles(). Empty by
@@ -2533,7 +2572,7 @@
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
-                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}</span>
+                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}${txAttachBadgeHTML(t)}</span>
                             <span class="item-meta">${t.date} [${escapeHtml(displayCat)}]</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
                             ${notesLine}
@@ -2555,6 +2594,34 @@
         // carry the tag right now, and disappears on its own once the user removes the tag from
         // the last matching transaction (e.g. after settling a claim via Reimbursement + editing
         // the transaction to drop the tag) — no separate "resolved" flag anywhere.
+        // v605: Dashboard to-do group helpers. setTodoBadge() puts a count badge on a to-do widget's
+        // section title (level: "red" = overdue/expired, "orange" = due soon, "purple" = info only);
+        // a count of 0 hides it. It also refreshes the thin divider above Budget, which only shows
+        // while at least one of the four to-do widgets is visible. Purely visual — no data touched.
+        const TODO_WIDGET_IDS = ["dashboardPlannedPaymentsWidget", "dashboardRemindersWidget", "dashboardDormantWidget", "dashboardTagWidget", "dashboardWarrantyWidget"]; // v614: + dormant
+        function refreshTodoGroupDivider() {
+            const divider = document.getElementById("todoGroupDivider");
+            if (!divider) return;
+            const anyVisible = TODO_WIDGET_IDS.some(id => {
+                const el = document.getElementById(id);
+                return el && el.style.display !== "none";
+            });
+            divider.style.display = anyVisible ? "" : "none";
+        }
+        function setTodoBadge(widgetId, count, level) {
+            const badge = document.getElementById(widgetId + "Badge");
+            if (badge) {
+                if (count > 0) {
+                    badge.textContent = String(count);
+                    badge.className = "todo-badge " + (level || "orange");
+                    badge.style.display = "";
+                } else {
+                    badge.style.display = "none";
+                }
+            }
+            refreshTodoGroupDivider();
+        }
+
         function renderTagReminderWidget(txs, accounts) {
             const wrap = document.getElementById("dashboardTagWidget");
             const list = document.getElementById("tagReminderList");
@@ -2582,6 +2649,7 @@
                 .filter(Boolean);
 
             wrap.style.display = rows.length ? "" : "none";
+            setTodoBadge("dashboardTagWidget", rows.reduce((n, r) => n + r.count, 0), "purple");
             if (rows.length === 0) return;
 
             list.innerHTML = rows.map(r => {
@@ -2746,6 +2814,17 @@
         function applyMonthlyTrendDashboardVisibility() {
             const slot = document.getElementById("monthlyTrendDashboardSlot");
             if (slot) slot.style.display = showMonthlyTrendOnDashboard ? "" : "none";
+        }
+
+        // v518: the Dashboard's Insurance SV pill is information only (not counted in Net Worth); it is
+        // hidden when no in-force policy has a surrender value.
+        function updateInsuranceSvChip() {
+            const chip = document.getElementById("nwInsChip");
+            if (!chip) return;
+            const info = insSvNetWorth("all", true);
+            chip.classList.toggle("hidden", info.count === 0);
+            const v = document.getElementById("nwInsChipValue");
+            if (v) v.innerHTML = formatBalanceHTML(info.base, baseCurrency);
         }
 
         async function handleDashboardMonthlyTrendToggleChange(el) {
@@ -3029,6 +3108,14 @@
             return `${isNeg ? "-" : ""}${sym}${absStr}`;
         }
 
+        // v531: NAV / unit price needs 4 decimals (e.g. 0.8713) — formatCurrency's 2dp showed it as
+        // "RM0.87", which looked different from the 0.8713 typed on Daily NAV Update.
+        function formatNavPrice(nav, curr) {
+            const sym = currencySymbols[curr] || curr;
+            const n = Number(nav) || 0;
+            return `${n < 0 ? "-" : ""}${sym}${Math.abs(n).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}`;
+        }
+
         // v377: same formatting as formatCurrency() (thousands separators, 2dp, sign placement)
         // but without the currency symbol — used only by the mobile Monthly Trend table, where
         // dropping "RM"/"S$"/etc. off every cell is what makes Month/Income/Expense/Balance fit
@@ -3159,6 +3246,56 @@
             return convertCurrency(t.amount, t.currency, baseCurrency);
         }
 
+        // v549: does this record's base-currency value stay put when FX rates are updated? True for base-currency
+        // entries, and for a rate-locked entry on a base-currency account (same rule convertTxAmountToBase applies).
+        function txBaseIsFrozen(t, acc) {
+            if (t.currency === baseCurrency) return true;
+            return !!(t.manualFxRate && acc && acc.type !== "multi" && acc.type !== "fd" && acc.currency === baseCurrency);
+        }
+
+        // v547: small 🔒 on rows whose FX is frozen (Income/Expense manualFxRate, or a Transfer's fixed
+        // received amount). Replaces the orange "✏️ Manual FX" pill — once locking is the default that
+        // pill would shout on every foreign row. Hover title / Quick View show the actual rate.
+        function fmtRateShown(r) { return r >= 1 ? r.toFixed(4) : String(Number(r.toPrecision(5))); }
+        // v548: quote a pair the same way the Currency Setting table does — the currency worth MORE sits on
+        // the left ("1 USD = 4.0964 MYR", "1 MYR = 337.2663 KRW"). `rate` = how many `acctCur` 1 `cur` buys.
+        function fxQuote(cur, acctCur, rate) {
+            if (!(rate > 0) || !isFinite(rate)) return "";
+            return rate >= 1 ? `1 ${cur} = ${rate.toFixed(4)} ${acctCur}` : `1 ${acctCur} = ${(1 / rate).toFixed(4)} ${cur}`;
+        }
+        function txFxLockBadgeHTML(t, accounts) {
+            let title;
+            if (t.manualFxRate) {
+                const acc = (accounts || []).find(a => a.id === t.src);
+                title = acc && acc.currency ? `Rate locked: ${fxQuote(t.currency, acc.currency, t.manualFxRate)}` : "Rate locked";
+            } else if (t.type === "transfer" && t.destAmount != null) {
+                title = "Received amount locked";
+            } else return "";
+            return `<span title="${escapeHtml(title)}" style="margin-left:6px; font-size:0.78rem; cursor:help;">🔒</span>`;
+        }
+
+        // v547: Quick View "Rate" line for foreign Income/Expense on a single-currency account.
+        function fxRateLineHTML(tx, accounts) {
+            if (tx.type === "transfer") return "";
+            const acc = (accounts || []).find(a => a.id === tx.src);
+            if (!acc || !acc.currency || acc.currency === tx.currency || acc.type === "multi" || acc.type === "fd" || acc.type === "unittrust") return "";
+            if (tx.manualFxRate) {
+                return `<div>Rate: 🔒 ${escapeHtml(fxQuote(tx.currency, acc.currency, tx.manualFxRate))} <span style="color:var(--text-muted);">(≈ ${formatCurrency(tx.amount * tx.manualFxRate, acc.currency)}, fixed)</span></div>`;
+            }
+            const live = convertCurrency(1, tx.currency, acc.currency);
+            return `<div>Rate: live ${escapeHtml(fxQuote(tx.currency, acc.currency, live))} <span style="color:var(--text-muted);">(not locked — follows the FX table)</span></div>`;
+        }
+
+        // v546: shared 📎 badge for a transaction row — same markup/behaviour as the main ledger
+        // list's receiptBadge (tap = open the attachment, or the picker when there are several;
+        // openTxAttachmentsBadge() stops propagation so the row's own Quick View doesn't also open).
+        // Returns "" when the record has no attachment, so rows without one are unchanged.
+        function txAttachBadgeHTML(t) {
+            const n = (Array.isArray(t.attachments) ? t.attachments.length : 0) + (t.image ? 1 : 0);
+            if (!n) return "";
+            return `<span data-click="openTxAttachmentsBadge" data-id="${escapeHtml(t.id)}" data-attachments="${escapeHtml(JSON.stringify(t.attachments || []))}" ${t.image ? `data-legacy-image="${escapeHtml(t.image)}"` : ''} style="cursor:pointer; margin-left:4px;" title="View attachment${n > 1 ? 's' : ''}">📎${n > 1 ? `<span style="font-size:0.6rem; vertical-align:top;">×${n}</span>` : ''}</span>`;
+        }
+
         function openModal(id) { 
             document.getElementById(id).classList.add("active"); 
             modalStack.push(id);
@@ -3239,7 +3376,7 @@
         // --- SPA NAVIGATION PIPELINE ---
         // Every top-level page div's id — used by showPage() to hide all but the target,
         // so adding a new page never risks leaving a stale one visible underneath.
-        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-database", "page-attachment-review", "page-total-summary", "page-monthly-trend", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-datasecurity", "page-bgtheme", "page-networthcardstyle", "page-dashboardwidgets", "page-currencyconfig", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity", "page-inventory", "page-plannedpayments", "page-reminders", "page-insurance"];
+        const APP_PAGE_IDS = ["page-workspace", "page-ledger", "page-savings", "page-networth-statement", "page-accounts", "page-categories", "page-templates", "page-tags", "page-tag-report", "page-budget", "page-database", "page-attachment-review", "page-total-summary", "page-monthly-trend", "page-spending-breakdown", "page-income-breakdown", "page-portfolio-report", "page-owner-networth-report", "page-currency-report", "page-incometax", "page-datasecurity", "page-bgtheme", "page-networthcardstyle", "page-dashboardwidgets", "page-currencyconfig", "page-member", "page-navupdate", "page-fundactivity", "page-currencyactivity", "page-inventory", "page-plannedpayments", "page-reminders", "page-insurance", "page-timeline"];
         // v406: which rail icon (by its data-click, and data-target for the one that uses
         // sidebarGo instead of its own navigateTo*Page()) corresponds to which Settings page —
         // used by updateSettingsIconRailActiveState() below to highlight the icon for whichever
@@ -3314,6 +3451,7 @@
                 case "page-portfolio-report": return "Unit Trust Portfolio";
                 case "page-owner-networth-report": return "Financial Assets vs Real Estate";
                 case "page-currency-report": return "Net Worth by Currency";
+                case "page-incometax": return "Income after Tax";
                 case "page-datasecurity": return "Settings";
                 case "page-navupdate": return "Daily NAV Update";
                 case "page-member": return document.getElementById("memberPageTitle")?.textContent || "Member";
@@ -3325,6 +3463,7 @@
                 case "page-currencyconfig": return "Currency Setting";
                 case "page-reminders": return "Reminders";
                 case "page-insurance": return "Insurance";
+                case "page-timeline": return "Timeline";
                 default: return "Ledger";
             }
         }
@@ -3385,6 +3524,8 @@
                 return el && !el.classList.contains("hidden");
             });
             if (!activePageId) { window.print(); return; }
+            // v496: the Insurance page has its own report (options sheet first).
+            if (activePageId === "page-insurance") { openInsurancePrintSheet(); return; }
 
             const activeEl = document.getElementById(activePageId);
             const title = getActivePageTitle(activePageId);
@@ -3653,7 +3794,7 @@
                         <div class="tx-icon-circle" style="background:${txIconBg};"><span style="line-height:1;">${iconBadge}</span></div>
                         <div class="tx-row-body">
                             <div class="item-left">
-                                <span class="item-name">${escapeHtml(t.desc)}</span>
+                                <span class="item-name">${escapeHtml(t.desc)}${txAttachBadgeHTML(t)}</span>
                                 <span class="item-meta">[${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]</span>
                                 <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                             </div>
@@ -3889,6 +4030,7 @@
 
         function navigateToCategoryPage(categoryName, backTarget = "workspace", year = "all", month = "all") {
             if (backTarget === "workspace") workspaceScrollY = window.scrollY;
+            if (backTarget === "budget") budgetScrollY = window.scrollY; // v616
             activeCategoryView = categoryName;
             categoryDrillYear = year;
             categoryDrillMonth = month;
@@ -4024,6 +4166,22 @@
             if (yearKey !== currentYearKey()) return 12;
             return 12 - new Date().getMonth();
         }
+        // v617: fractional months elapsed (full months before this one + the part of this month
+        // that has passed, today included) — used for the yearly "Spending pace" so a month that
+        // has barely started isn't counted as a whole one. Past/future years: 12.
+        function monthsElapsedFracInYearKey(yearKey) {
+            if (yearKey !== currentYearKey()) return 12;
+            const now = new Date();
+            const dim = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+            return now.getMonth() + now.getDate() / dim;
+        }
+        // v617: the real percentage used, so an overspend reads 105.4% rather than being capped
+        // at 100%. Returns "Over" when there is no positive budget but money has been spent.
+        function usedPctText(spent, total) {
+            if (!(total > 0)) return spent > 0 ? "Over" : "0%";
+            const pct = Math.max((spent / total) * 100, 0);
+            return (pct >= 100 ? pct.toFixed(1) : pct.toFixed(0)) + "%";
+        }
         function monthsElapsedInYearKey(yearKey) {
             if (yearKey !== currentYearKey()) return 12;
             return new Date().getMonth() + 1;
@@ -4117,7 +4275,10 @@
             const yearlyEffective = budgetEffectiveTotal(yearRec);
             const priorSpend = priorMonthsActualSpend(monthKey, txs, accounts);
             const monthsRemaining = monthsRemainingInYearFrom(monthKey);
-            return (yearlyEffective - priorSpend) / monthsRemaining;
+            // v619: never negative — once the year is already over budget there is nothing left to
+            // allocate, so the month's auto budget is RM0 (not minus RM5,283.75). Also stops
+            // "lock in this month's budget" from saving a negative amount.
+            return Math.max((yearlyEffective - priorSpend) / monthsRemaining, 0);
         }
 
         // The single source of truth every renderer uses for "what is this month's budget right
@@ -4143,6 +4304,8 @@
         // the CURRENT month + CURRENT year regardless of what this page happens to be browsing.
         let budgetViewScope = "month";
         let budgetViewPeriodKey = currentMonthKey();
+        let budgetBreakdownShowAll = false; // v617: Yearly breakdown shows the top 8 until expanded
+        function toggleBudgetBreakdownAll() { budgetBreakdownShowAll = !budgetBreakdownShowAll; renderBudgetPage(); }
 
         function navigateToBudgetPage(scope) {
             workspaceScrollY = window.scrollY;
@@ -4159,16 +4322,30 @@
             if (scope === budgetViewScope) return;
             budgetViewScope = scope;
             budgetViewPeriodKey = currentPeriodKey(scope);
+            budgetBreakdownShowAll = false;
             renderBudgetPage();
         }
 
         function budgetPagePrevPeriod() {
             budgetViewPeriodKey = shiftPeriodKey(budgetViewPeriodKey, -1);
+            budgetBreakdownShowAll = false;
             renderBudgetPage();
         }
         function budgetPageNextPeriod() {
             budgetViewPeriodKey = shiftPeriodKey(budgetViewPeriodKey, 1);
+            budgetBreakdownShowAll = false;
             renderBudgetPage();
+        }
+
+        // v616: "!" button beside the pace rows — shows/hides the explanation text and remembers
+        // the choice on this device (localStorage only, not part of the backup).
+        function toggleBudgetPaceHelp() {
+            const box = document.getElementById("budgetPaceHelp");
+            if (!box) return;
+            const open = box.style.display === "none";
+            box.style.display = open ? "block" : "none";
+            document.querySelectorAll('[data-click="toggleBudgetPaceHelp"]').forEach(b => b.setAttribute("aria-expanded", String(open)));
+            try { localStorage.setItem("budgetPaceHelpOpen", open ? "1" : "0"); } catch (e) {}
         }
 
         // Renders the whole Budget page body — the scope toggle's active state, the "This Month /
@@ -4246,15 +4423,16 @@
             // number, and the note below spells it out.
             const netRefundPeriod = spent < 0;
 
-            let leftLabel, leftValue, paceRows;
+            let leftLabel, leftValue, paceRows, paceActual = 0, paceTarget = 0;
             if (isYear) {
                 const monthsLeft = monthsLeftInYearKey(budgetViewPeriodKey);
-                const monthsElapsed = Math.max(monthsElapsedInYearKey(budgetViewPeriodKey), 1);
+                const monthsElapsed = Math.max(monthsElapsedFracInYearKey(budgetViewPeriodKey), 1); // v617: fractional, not whole months
                 const paceSpent = spent / monthsElapsed;
-                const paceBudget = effectiveTotal / 12;
+                const paceBudget = Math.max(effectiveTotal, 0) / 12; // v616: never show a negative "budgeted" figure
                 const paceRemaining = monthsLeft > 0 ? remaining / monthsLeft : remaining;
                 leftLabel = "Months Left";
                 leftValue = monthsLeft;
+                paceActual = paceSpent; paceTarget = paceBudget;
                 paceRows = `
                     <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per month so far this year (spent ÷ months elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per month so far)</span><strong>${formatBalanceHTML(paceSpent, baseCurrency)}</strong></div>
                     <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across the 12 months of the year (budget ÷ 12)"><span style="color:var(--text-muted);">🔵 Budgeted per month (whole year)</span><strong>${formatCurrency(paceBudget, baseCurrency)}</strong></div>
@@ -4264,10 +4442,11 @@
                 const daysLeft = daysLeftInMonthKey(budgetViewPeriodKey);
                 const daysElapsed = Math.max(daysElapsedInMonthKey(budgetViewPeriodKey), 1);
                 const dailyAvgSpent = spent / daysElapsed;
-                const dailyBudget = effectiveTotal / daysInMonthKey(budgetViewPeriodKey);
+                const dailyBudget = Math.max(effectiveTotal, 0) / daysInMonthKey(budgetViewPeriodKey); // v616: clamp (auto-calculated month can go negative once the year is over budget)
                 const dailyRemaining = daysLeft > 0 ? remaining / daysLeft : remaining;
                 leftLabel = "Days Left";
                 leftValue = daysLeft;
+                paceActual = dailyAvgSpent; paceTarget = dailyBudget;
                 paceRows = `
                     <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="What you've actually spent per day so far this month (spent ÷ days elapsed)"><span style="color:var(--text-muted);">🟠 Spending pace (per day so far)</span><strong>${formatBalanceHTML(dailyAvgSpent, baseCurrency)}</strong></div>
                     <div style="display:flex; justify-content:space-between; padding:3px 0; font-size:0.8rem;" title="Your total budget spread evenly across every day of the month (budget ÷ days in month)"><span style="color:var(--text-muted);">🔵 Budgeted per day (whole month)</span><strong>${formatCurrency(dailyBudget, baseCurrency)}</strong></div>
@@ -4275,13 +4454,30 @@
                 `;
             }
 
+            // v616: one live status line stays visible; the long explanation hides behind the "!"
+            // button (open/closed choice remembered on this device only).
+            let paceHelpOpen = false;
+            try { paceHelpOpen = localStorage.getItem("budgetPaceHelpOpen") === "1"; } catch (e) {}
+            const paceVerdict = overBudget
+                ? { text: "Over budget", color: "var(--expense-color)" }
+                : (paceActual > paceTarget + 0.005
+                    ? { text: `Pace is above budget — on track to run out before the ${isYear ? "year" : "month"} ends`, color: "var(--expense-color)" }
+                    : { text: "On track", color: "var(--primary)" });
+
+            // v619: an auto-calculated month with nothing left to allocate — say why, once.
+            let noRoomNote = "";
+            if (isVirtual && effectiveTotal <= 0.005) {
+                const yOver = computePeriodActuals(resolved.yearRec.id, txs, accounts).total - budgetEffectiveTotal(resolved.yearRec);
+                if (yOver > 0) noRoomNote = `<p style="font-size:0.72rem; color:var(--text-muted); margin-top:10px;">The ${escapeHtml(resolved.yearRec.id)} yearly budget is already over by ${formatCurrency(yOver, baseCurrency)}, so there is nothing left to allocate to this month.</p>`;
+            }
+
             const summaryHTML = `
                 <div class="report-card-mini" style="margin-bottom:14px;">
                     ${isVirtual ? `<div style="font-size:0.68rem; font-weight:700; color:var(--primary); background:var(--chip-bg); display:inline-block; padding:3px 8px; border-radius:6px; margin-bottom:8px;">🔄 Auto-calculated from your ${escapeHtml(resolved.yearRec.id)} Yearly Budget</div>` : ""}
                     <div style="display:flex; justify-content:space-between; align-items:flex-start;">
                         <div>
-                            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Remaining Budget</span>
-                            <div style="font-size:1.7rem; font-weight:800; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(remaining, baseCurrency)}</div>
+                            <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">${overBudget ? "Over budget by" : "Remaining Budget"}</span>
+                            <div style="font-size:1.7rem; font-weight:800; ${overBudget ? "color:var(--expense-color);" : ""}">${overBudget ? formatCurrency(-remaining, baseCurrency) : formatBalanceHTML(remaining, baseCurrency)}</div>
                         </div>
                         <button type="button" class="trash-btn" data-click="openBudgetSetupModal" title="${isVirtual ? "Set a specific budget for this month" : "Edit total budget"}">✏️</button>
                     </div>
@@ -4293,17 +4489,24 @@
                     </div>
                     <div style="display:grid; grid-template-columns:repeat(4, 1fr); gap:8px; margin-top:14px; text-align:center;">
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">Spent</div><div style="font-weight:700; font-size:0.85rem; ${overBudget ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(spent, baseCurrency)}</div></div>
-                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Budget</div><div style="font-weight:700; font-size:0.85rem;">${formatCurrency(effectiveTotal, baseCurrency)}</div></div>
-                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Used</div><div style="font-weight:700; font-size:0.85rem;">${pctUsed.toFixed(0)}%</div></div>
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Budget</div><div style="font-weight:700; font-size:0.85rem;">${formatCurrency(Math.max(effectiveTotal, 0), baseCurrency)}</div></div>
+                        <div><div style="font-size:0.68rem; color:var(--text-muted);">Used</div><div style="font-weight:700; font-size:0.85rem;">${usedPctText(spent, effectiveTotal)}</div></div>
                         <div><div style="font-size:0.68rem; color:var(--text-muted);">${leftLabel}</div><div style="font-weight:700; font-size:0.85rem;">${leftValue}</div></div>
                     </div>
+                    ${noRoomNote}
                     ${netRefundPeriod ? `<p style="font-size:0.72rem; color:var(--text-muted); margin-top:8px;">Spent is negative because a refund posted this ${isYear ? "year" : "month"} is larger than what was actually spent in its category — so this ${isYear ? "year" : "month"} is a net inflow so far.</p>` : ""}
-                    <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:10px;">
+                    <div style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:4px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                            <span style="font-size:0.74rem; font-weight:700; color:${paceVerdict.color};">${paceVerdict.text}</span>
+                            <button type="button" data-click="toggleBudgetPaceHelp" aria-label="What do these numbers mean?" aria-expanded="${paceHelpOpen}" title="What do these numbers mean?" style="min-width:44px; min-height:44px; background:none; border:none; padding:0; cursor:pointer; display:flex; align-items:center; justify-content:center;"><span style="width:22px; height:22px; border-radius:50%; border:1.5px solid var(--text-muted); color:var(--text-muted); font-weight:800; font-size:0.8rem; display:flex; align-items:center; justify-content:center;">!</span></button>
+                        </div>
                         ${paceRows}
+                        <div id="budgetPaceHelp" style="display:${paceHelpOpen ? "block" : "none"}; margin-top:6px;">
+                            <p style="font-size:0.68rem; color:var(--text-muted);">These compare your ${isYear ? "month-to-month" : "day-to-day"} pace against your budget — if "Spending pace" is above "Budgeted per ${isYear ? "month" : "day"}", you're on track to run out before the ${isYear ? "year" : "month"} ends.</p>
+                            ${isVirtual ? `<p style="margin-top:8px; font-size:0.72rem; color:var(--text-muted);">Automatically accounts for prior months' actual spend this year — this month isn't set as its own budget, so it's an even share of what's left of the year.</p>` : ""}
+                        </div>
                     </div>
-                    <p style="font-size:0.68rem; color:var(--text-muted); margin-top:6px;">These compare your ${isYear ? "month-to-month" : "day-to-day"} pace against your budget — if "Spending pace" is above "Budgeted per ${isYear ? "month" : "day"}", you're on track to run out before the ${isYear ? "year" : "month"} ends.</p>
                     ${!isVirtual && resolved.rec.carryoverEnabled ? `<div style="margin-top:10px; font-size:0.72rem; color:var(--text-muted);">Includes ${formatCurrency(resolved.rec.carryoverAmount || 0, baseCurrency)} carried over from ${escapeHtml(periodKeyLabel(shiftPeriodKey(budgetViewPeriodKey, -1)))}.</div>` : ""}
-                    ${isVirtual ? `<div style="margin-top:10px; font-size:0.72rem; color:var(--text-muted);">Automatically accounts for prior months' actual spend this year — this month isn't set as its own budget, so it's an even share of what's left of the year.</div>` : ""}
                 </div>
             `;
 
@@ -4328,14 +4531,138 @@
                         </div>
                     `;
                 }).join("");
+                // v619: with no category budgets, list where the month's money went instead of an
+                // empty box (spending only, largest first, tap → that category's transactions).
+                let spendListHTML = "";
+                if (!catRows) {
+                    const spendRows = Object.keys(byCategory).map(cat => ({ cat, v: byCategory[cat] })).filter(r => r.v > 0.005).sort((a, b) => b.v - a.v);
+                    const sum = spendRows.reduce((a, r) => a + r.v, 0);
+                    const TOP_M = 10;
+                    const shownRows = (budgetBreakdownShowAll || spendRows.length <= TOP_M + 1) ? spendRows : spendRows.slice(0, TOP_M);
+                    const mo = String(Number(budgetViewPeriodKey.slice(5, 7)) - 1);
+                    spendListHTML = shownRows.map(r => {
+                        const sh = sum > 0 ? (r.v / sum) * 100 : 0;
+                        return `
+                            <div data-click="navigateToCategoryPage" data-category="${escapeHtml(r.cat)}" data-back="budget" data-year="${escapeHtml(budgetViewPeriodKey.slice(0, 4))}" data-month="${mo}" style="padding:9px 0; border-bottom:1px solid var(--border-color); cursor:pointer;">
+                                <div style="display:flex; align-items:center; gap:10px; font-size:0.86rem;">
+                                    <span style="width:22px; text-align:center; flex:none;">${getCategoryIcon(r.cat, "expense")}</span>
+                                    <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;">${escapeHtml(r.cat)}</span>
+                                    <strong style="white-space:nowrap;">${formatCurrency(r.v, baseCurrency)}</strong>
+                                    <span style="width:40px; text-align:right; color:var(--text-muted); flex:none;">${sh < 1 ? "<1%" : sh.toFixed(0) + "%"}</span>
+                                </div>
+                            </div>`;
+                    }).join("");
+                    if (spendRows.length > TOP_M + 1) spendListHTML += `<div style="text-align:center;"><button type="button" class="text-btn" data-click="toggleBudgetBreakdownAll" style="padding:8px 16px; margin:6px 0 0;">${budgetBreakdownShowAll ? `Show top ${TOP_M} only` : `Show all ${spendRows.length} categories (+${spendRows.length - TOP_M} more)`}</button></div>`;
+                }
                 catSectionHTML = `
                     <div class="section-header">
-                        <span class="section-title">${isYear ? "Yearly" : ""} Category Budgets</span>
+                        <span class="section-title">${catRows ? "Category Budgets" : (spendListHTML ? "Where the money went" : "Category Budgets")}</span>
                     </div>
                     <div class="config-list" style="padding-bottom:88px;">
-                        ${catRows || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">No category budgets yet — tap the + button to break this ${isYear ? "year" : "month"}'s total down by category${isVirtual ? " (this will lock in this month's current auto-calculated amount as its own budget)" : ""}.</p>`}
+                        ${catRows || (spendListHTML ? `<div class="report-card-mini">${spendListHTML}</div><p style="color:var(--text-muted); padding:8px 0 0; font-size:0.72rem;">No category budgets yet — tap + to set one${isVirtual ? " (locks in this month's auto-calculated amount)" : ""}.</p>` : `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">Nothing spent yet this month. Tap + to set a category budget.</p>`)}
                     </div>
                 `;
+            }
+
+            // v616/v618: on the Yearly tab the category list becomes a "Where the money went"
+            // breakdown — a small donut (top 6 + Others) over a compact legend-style list, one line
+            // per category: dot, icon, name, amount, share. A category with a yearly budget gets a
+            // thin second line (bar + "left"/"Over by" + edit). Includes every category with spending
+            // this year (largest first) plus any budgeted category with no spending yet. Same figures
+            // as the Spent total above (computePeriodActuals: refunds net against their category,
+            // "Exclude from Net Savings" categories left out, base currency).
+            if (isYear) {
+                const budgets = {};
+                (resolved.rec.categoryBudgets || []).forEach(cb => { budgets[cb.cat] = cb.amount; });
+                const cats = Array.from(new Set([...Object.keys(byCategory), ...Object.keys(budgets)]));
+                const rowsData = cats.map(cat => ({ cat, spent: byCategory[cat] || 0, budget: Object.prototype.hasOwnProperty.call(budgets, cat) ? budgets[cat] : null }))
+                    .filter(r => Math.abs(r.spent) >= 0.005 || r.budget !== null)
+                    .sort((a, b) => b.spent - a.spent);
+                const positiveSum = rowsData.reduce((acc, r) => acc + Math.max(r.spent, 0), 0);
+                const budgetedCount = rowsData.filter(r => r.budget !== null).length;
+                const unbudgetedSpent = rowsData.filter(r => r.budget === null).reduce((acc, r) => acc + Math.max(r.spent, 0), 0);
+
+                // Donut: top 6 spending categories, the rest grouped as "Others" (grey).
+                const OTHERS_COLOR = "#94a3b8";
+                const spendRows = rowsData.filter(r => r.spent > 0);
+                const DONUT_TOP = 6;
+                const groupOthers = spendRows.length > DONUT_TOP + 1;
+                const colorFor = {};
+                spendRows.forEach((r, i) => { colorFor[r.cat] = (groupOthers && i >= DONUT_TOP) ? OTHERS_COLOR : BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length]; });
+                const slices = groupOthers
+                    ? [...spendRows.slice(0, DONUT_TOP).map(r => ({ v: r.spent, c: colorFor[r.cat] })), { v: spendRows.slice(DONUT_TOP).reduce((a, r) => a + r.spent, 0), c: OTHERS_COLOR }]
+                    : spendRows.map(r => ({ v: r.spent, c: colorFor[r.cat] }));
+                const R = 46, CIRC = 2 * Math.PI * R;
+                let acc = 0;
+                const arcs = positiveSum > 0 ? slices.map(sl => {
+                    const len = (sl.v / positiveSum) * CIRC;
+                    const arc = `<circle cx="60" cy="60" r="${R}" fill="none" stroke="${sl.c}" stroke-width="14" stroke-dasharray="${len.toFixed(2)} ${(CIRC - len).toFixed(2)}" stroke-dashoffset="${(-acc).toFixed(2)}" transform="rotate(-90 60 60)"></circle>`;
+                    acc += len;
+                    return arc;
+                }).join("") : "";
+                const donutHTML = positiveSum > 0 ? `
+                    <div style="display:flex; justify-content:center; padding:4px 0 10px;">
+                        <svg viewBox="0 0 120 120" width="170" height="170" role="img" aria-label="Spending by category">
+                            <circle cx="60" cy="60" r="${R}" fill="none" stroke="var(--border-color)" stroke-width="14"></circle>
+                            ${arcs}
+                            <text x="60" y="56" text-anchor="middle" font-size="7" fill="var(--text-muted)">Spent ${escapeHtml(budgetViewPeriodKey)}</text>
+                            <text x="60" y="69" text-anchor="middle" font-size="10" font-weight="800" fill="currentColor">${formatCurrencyNumberOnly(Math.max(spent, 0))}</text>
+                        </svg>
+                    </div>` : "";
+
+                const TOP_N = 10;
+                const visibleRows = (budgetBreakdownShowAll || rowsData.length <= TOP_N + 1)
+                    ? rowsData
+                    : rowsData.filter((r, i) => i < TOP_N || r.budget !== null);
+                const hiddenCount = rowsData.length - visibleRows.length;
+                const rowsHTML = visibleRows.map(r => {
+                    const hasBudget = r.budget !== null;
+                    const shown = Math.max(r.spent, 0);
+                    const over = hasBudget && r.spent > r.budget;
+                    const sharePct = positiveSum > 0 ? (shown / positiveSum) * 100 : 0;
+                    const shareText = shown <= 0 ? "—" : (sharePct < 1 ? "<1%" : sharePct.toFixed(0) + "%");
+                    const dot = colorFor[r.cat] || "transparent";
+                    const barPct = hasBudget ? (r.budget > 0 ? Math.min((shown / r.budget) * 100, 100) : (shown > 0 ? 100 : 0)) : 0;
+                    const budgetLine = hasBudget ? `
+                        <div style="display:flex; align-items:center; gap:8px; margin:5px 0 0 32px;">
+                            <div class="progress-bar-container" style="flex:1; height:5px;"><div class="progress-bar-fill" style="width:${barPct}%; ${over ? "background:var(--expense-color);" : ""}"></div></div>
+                            <span style="font-size:0.68rem; white-space:nowrap; ${over ? "color:var(--expense-color); font-weight:700;" : "color:var(--text-muted);"}">${over ? `Over by ${formatCurrency(r.spent - r.budget, baseCurrency)}` : `${formatCurrency(r.budget - shown, baseCurrency)} left of ${formatCurrency(r.budget, baseCurrency)}`}</span>
+                            <button type="button" class="trash-btn" data-click="editCategoryBudget" data-cat="${escapeHtml(r.cat)}" title="Edit this category's budget" style="min-width:32px; min-height:32px; font-size:0.8rem;">✏️</button>
+                        </div>` : "";
+                    return `
+                        <div data-click="navigateToCategoryPage" data-category="${escapeHtml(r.cat)}" data-back="budget" data-year="${escapeHtml(budgetViewPeriodKey)}" data-month="all" style="padding:9px 0; border-bottom:1px solid var(--border-color); cursor:pointer;">
+                            <div style="display:flex; align-items:center; gap:10px; font-size:0.86rem;">
+                                <span style="width:10px; height:10px; border-radius:50%; flex:none; background:${dot};"></span>
+                                <span style="width:22px; text-align:center; flex:none;">${getCategoryIcon(r.cat, "expense")}</span>
+                                <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-weight:600;">${escapeHtml(r.cat)}</span>
+                                <strong style="white-space:nowrap; ${over ? "color:var(--expense-color);" : ""}">${formatCurrency(shown, baseCurrency)}</strong>
+                                <span style="width:40px; text-align:right; color:var(--text-muted); flex:none;">${shareText}</span>
+                            </div>
+                            ${budgetLine}
+                        </div>
+                    `;
+                }).join("");
+                const overAmt = spent - effectiveTotal;
+                const headLine = `${formatCurrency(Math.max(spent, 0), baseCurrency)} spent of ${formatCurrency(Math.max(effectiveTotal, 0), baseCurrency)} budget`
+                    + (overAmt > 0 ? "" : ` · ${formatCurrency(-overAmt, baseCurrency)} left`); // the summary card above already says how much over
+                const hintLine = budgetedCount === 0
+                    ? `No category budgets yet — use the + button below to set one.`
+                    : (unbudgetedSpent > 0 ? `${formatCurrency(unbudgetedSpent, baseCurrency)} of spending is in categories with no yearly budget.` : "");
+                const breakdownHTML = `
+                    <div class="section-header">
+                        <span class="section-title">Where the money went</span>
+                    </div>
+                    <p style="font-size:0.74rem; color:var(--text-muted); margin:-4px 0 8px;">${headLine}</p>
+                    <div class="report-card-mini" style="margin-bottom:88px;">
+                        ${donutHTML}
+                        ${rowsHTML || `<p style="color:var(--text-muted); padding:8px 0; font-size:0.85rem;">Nothing spent in ${escapeHtml(budgetViewPeriodKey)} yet.</p>`}
+                        ${(hiddenCount > 0 || (budgetBreakdownShowAll && rowsData.length > TOP_N + 1)) ? `<div style="text-align:center;"><button type="button" class="text-btn" data-click="toggleBudgetBreakdownAll" style="padding:8px 16px; margin:6px 0 0;">${budgetBreakdownShowAll ? `Show top ${TOP_N} only` : `Show all ${rowsData.length} categories (+${hiddenCount} more)`}</button></div>` : ""}
+                        ${hintLine ? `<p style="color:var(--text-muted); padding:8px 0 0; font-size:0.72rem;">${hintLine}</p>` : ""}
+                        ${rowsHTML ? `<p style="color:var(--text-muted); padding:4px 0 0; font-size:0.68rem;">Tap a row to see its transactions for ${escapeHtml(budgetViewPeriodKey)}.</p>` : ""}
+                    </div>
+                `;
+                contentEl.innerHTML = summaryHTML + breakdownHTML;
+                return;
             }
 
             contentEl.innerHTML = summaryHTML + catSectionHTML;
@@ -4350,7 +4677,7 @@
                 return `
                     <div data-click="navigateToBudgetPage" data-scope="month" style="flex:1; cursor:pointer;">
                         <div style="font-size:0.72rem; color:var(--text-muted); text-align:center;">This Month${source === "virtual" ? " 🔄" : ""}</div>
-                        <div style="font-size:0.85rem; font-weight:700; text-align:center; ${over ? "color:var(--expense-color);" : ""}">${pct.toFixed(0)}% used</div>
+                        <div style="font-size:0.85rem; font-weight:700; text-align:center; ${over ? "color:var(--expense-color);" : ""}">${usedPctText(spent, effectiveTotal) === "Over" ? "Over budget" : usedPctText(spent, effectiveTotal) + " used"}</div>
                         <div class="progress-bar-container" style="height:6px; margin-top:4px;"><div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div></div>
                     </div>
                 `;
@@ -4363,7 +4690,7 @@
                 return `
                     <div data-click="navigateToBudgetPage" data-scope="year" style="flex:1; cursor:pointer;">
                         <div style="font-size:0.72rem; color:var(--text-muted); text-align:center;">This Year</div>
-                        <div style="font-size:0.85rem; font-weight:700; text-align:center; ${over ? "color:var(--expense-color);" : ""}">${pct.toFixed(0)}% used</div>
+                        <div style="font-size:0.85rem; font-weight:700; text-align:center; ${over ? "color:var(--expense-color);" : ""}">${usedPctText(yearSpent, effectiveTotal) === "Over" ? "Over budget" : usedPctText(yearSpent, effectiveTotal) + " used"}</div>
                         <div class="progress-bar-container" style="height:6px; margin-top:4px;"><div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div></div>
                     </div>
                 `;
@@ -4415,7 +4742,7 @@
                 yearLineHTML = `
                     <div data-click="navigateToBudgetPage" data-scope="year" style="font-size:0.72rem; color:var(--text-muted); margin-top:6px; display:flex; justify-content:space-between;">
                         <span>This Year</span>
-                        <span style="${yearRemaining < 0 ? "color:var(--expense-color); font-weight:700;" : ""}">${formatBalanceHTML(yearRemaining, baseCurrency)} left</span>
+                        <span style="${yearRemaining < 0 ? "color:var(--expense-color); font-weight:700;" : ""}">${yearRemaining < 0 ? `over by ${formatCurrency(-yearRemaining, baseCurrency)}` : `${formatBalanceHTML(yearRemaining, baseCurrency)} left`}</span>
                     </div>
                 `;
             }
@@ -4459,10 +4786,10 @@
             wrap.innerHTML = `
                 <div class="report-card-mini" style="cursor:pointer;" data-click="navigateToBudgetPage" data-scope="month">
                     <div style="display:flex; justify-content:space-between; align-items:baseline;">
-                        <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Remaining Budget · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left</span>
+                        <span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">${over ? "Over budget by" : "Remaining Budget"} · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left</span>
                         <span style="font-size:0.72rem; color:var(--text-muted);">View →</span>
                     </div>
-                    <div style="font-size:1.35rem; font-weight:800; ${over ? "color:var(--expense-color);" : ""}">${formatBalanceHTML(remaining, baseCurrency)}</div>
+                    <div style="font-size:1.35rem; font-weight:800; ${over ? "color:var(--expense-color);" : ""}">${over ? formatCurrency(-remaining, baseCurrency) : formatBalanceHTML(remaining, baseCurrency)}</div>
                     <div class="progress-bar-wrap">
                         <div class="progress-bar-container" style="height:8px; margin-top:6px;">
                             <div class="progress-bar-fill" style="width:${pct}%; ${over ? "background:var(--expense-color);" : ""}"></div>
@@ -4594,7 +4921,7 @@
 
         // --- Category Budget Modal (add/edit/delete one row of rec.categoryBudgets) — scoped to
         // whichever period (budgetViewPeriodKey) the Budget page is currently browsing. ---
-        async function openCategoryBudgetModal() {
+        async function openCategoryBudgetModal(preCat) {
             let rec = await getBudgetRecord(budgetViewPeriodKey);
             if (!rec) {
                 // Auto-calculated (virtual) month — adding a category budget needs a real record
@@ -4628,6 +4955,7 @@
             const select = document.getElementById("budgetCatSelect");
             select.innerHTML = buildCategoryOptionsHTML("expense", usedCats);
             select.value = "";
+            if (preCat && Array.from(select.options).some(o => o.value === preCat)) select.value = preCat; // v616: "+" on a breakdown row
             syncAccountPickerButtonText("budgetCatSelect");
             document.getElementById("budgetCatAmountInput").value = "";
             openModal("categoryBudgetModal");
@@ -5035,6 +5363,14 @@
         // on a phone screen — no more demoting Balance to its own line (v376). The currency is
         // stated once instead, in a small caption under the table, same idea as the "Figures are
         // in ... base currency" caption already used on the Total Bill Summary report page.
+        // v570: the table's Balance cell. A month with activity (and the Total row) is tappable and opens the Savings Statement
+        // scoped to that month / the whole year (same drill-in as the Dashboard report cards). Months with nothing logged stay plain.
+        function monthlyTrendBalanceCell(opts, income, expense, padding, balanceText, color, weight) {
+            const base = `padding:${padding}; text-align:right; color:${color}; ${weight}`;
+            if (opts.monthIdx === undefined || (income === 0 && expense === 0)) return `<td style="${base}">${balanceText}</td>`;
+            return `<td class="mt-bal-tap" style="${base}" data-click="monthlyTrendBalanceClick" data-month="${opts.monthIdx}" data-year="${escapeHtml(monthlyTrendYear)}" title="Open Net Savings Statement"><span class="mt-bal-num">${balanceText}</span><span class="mt-bal-chev">›</span></td>`;
+        }
+
         function renderMonthlyTrendTable(months) {
             const wrap = document.getElementById("monthlyTrendTableWrap");
             if (!wrap) return;
@@ -5056,11 +5392,11 @@
                             <td style="padding:8px 6px; ${weight}">${escapeHtml(label)}</td>
                             <td style="padding:8px 6px; text-align:right; color:var(--income-color); ${weight}">${formatCurrencyNumberOnly(income)}</td>
                             <td style="padding:8px 6px; text-align:right; color:var(--expense-color); ${weight}">${formatCurrencyNumberOnly(expense)}</td>
-                            <td style="padding:8px 6px; text-align:right; color:${balanceColor(balance)}; ${weight}">${formatCurrencyNumberOnly(balance)}</td>
+                            ${monthlyTrendBalanceCell(opts, income, expense, "8px 6px", formatCurrencyNumberOnly(balance), balanceColor(balance), weight)}
                         </tr>`;
                 };
-                let rows = months.map(mo => row(mo.label, mo.income, mo.expense)).join("");
-                rows += row("Total", totalIncome, totalExpense, { bold: true });
+                let rows = months.map((mo, i) => row(mo.label, mo.income, mo.expense, { monthIdx: String(i) })).join("");
+                rows += row("Total", totalIncome, totalExpense, { bold: true, monthIdx: "all" });
                 wrap.innerHTML = `
                     <table style="width:100%; border-collapse:collapse; font-size:0.78rem;">
                         <thead>
@@ -5086,12 +5422,12 @@
                         <td style="padding:8px 10px; ${weight}">${escapeHtml(label)}</td>
                         <td style="padding:8px 10px; text-align:right; color:var(--income-color); ${weight}">${formatCurrency(income, baseCurrency)}</td>
                         <td style="padding:8px 10px; text-align:right; color:var(--expense-color); ${weight}">${formatCurrency(expense, baseCurrency)}</td>
-                        <td style="padding:8px 10px; text-align:right; color:${balanceColor(balance)}; ${weight}">${formatCurrency(balance, baseCurrency)}</td>
+                        ${monthlyTrendBalanceCell(opts, income, expense, "8px 10px", formatCurrency(balance, baseCurrency), balanceColor(balance), weight)}
                     </tr>`;
             };
 
-            let rows = months.map(mo => row(mo.label, mo.income, mo.expense)).join("");
-            rows += row("Total", totalIncome, totalExpense, { bold: true });
+            let rows = months.map((mo, i) => row(mo.label, mo.income, mo.expense, { monthIdx: String(i) })).join("");
+            rows += row("Total", totalIncome, totalExpense, { bold: true, monthIdx: "all" });
 
             wrap.innerHTML = `
                 <table style="width:100%; border-collapse:collapse; font-size:0.82rem;">
@@ -5140,6 +5476,98 @@
             }
         }
 
+        // v567: bar with rounded BOTTOM corners and a flat top edge (the expense half of the mirrored chart).
+        function bottomRoundedBarPath(x, y, width, height, r) {
+            const rr = Math.max(0, Math.min(r, width / 2, height));
+            if (rr <= 0.05) return `M${x},${y} h${width} v${height} h${-width} Z`;
+            return `M${x},${y} V${y + height - rr} Q${x},${y + height} ${x + rr},${y + height} H${x + width - rr} Q${x + width},${y + height} ${x + width},${y + height - rr} V${y} Z`;
+        }
+
+        // v567: "Mirrored" Monthly Trend — ONE column per month: income grows UP from a centre line, expense grows DOWN
+        // from it, both on the SAME scale (so the two halves are directly comparable). Same data-* attributes, tooltip,
+        // Auto-scale (clipped bars get the notch at their outer end), mobile layout and colours as the grouped chart.
+        function buildMonthlyTrendMirroredSVG(months, isMobile, autoScale) {
+            const w = isMobile ? 480 : 680;
+            const h = isMobile ? 300 : 260;
+            const padLeft = isMobile ? 54 : 46, padRight = 10, padTop = isMobile ? 40 : 34, padBottom = isMobile ? 34 : 26;
+            const axisFontSize = isMobile ? 13 : 9;
+            const monthFontSize = isMobile ? 13 : 9;
+            const legendFontSize = isMobile ? 14 : 10;
+            const plotW = w - padLeft - padRight, plotH = h - padTop - padBottom;
+            const centreGap = 1.5; // hairline gap between the up bar and the down bar of the same month
+            // Shared scale for both halves: same "nice" axis ceiling logic as the grouped chart.
+            const allVals = months.flatMap(mo => [mo.income, mo.expense]).filter(v => v > 0).sort((a, b) => b - a);
+            const trueMax = Math.max(allVals[0] || 0, 0.01);
+            const scaleBasis = (autoScale && allVals.length > 1) ? allVals[1] : trueMax;
+            const magnitude = Math.pow(10, Math.floor(Math.log10(scaleBasis || 1)));
+            let axisMax = magnitude * 10;
+            for (const step of [1, 2, 2.5, 5, 10]) {
+                if (scaleBasis <= magnitude * step) { axisMax = magnitude * step; break; }
+            }
+            // ONE scale for both halves (same pixels per RM above and below), but the centre line sits where the
+            // data needs it: each half only gets as many grid steps as its own biggest bar needs (1 or 2 steps of
+            // axisMax/2), so a month-range with small expenses doesn't waste half the chart on empty space.
+            const step = axisMax / 2;
+            const maxInc = Math.min(Math.max(0, ...months.map(mo => mo.income)), axisMax);
+            const maxExp = Math.min(Math.max(0, ...months.map(mo => mo.expense)), axisMax);
+            const upUnits = Math.max(1, Math.ceil(maxInc / step - 1e-9));
+            const downUnits = Math.max(1, Math.ceil(maxExp / step - 1e-9));
+            const ppu = (plotH - 2 * centreGap) / (upUnits + downUnits); // pixels per grid step
+            const midY = padTop + upUnits * ppu + centreGap;
+            const upBase = midY - centreGap, downBase = midY + centreGap;
+            let gridlinesSVG = "";
+            for (let k = -downUnits; k <= upUnits; k++) {
+                const y = k === 0 ? midY : (k > 0 ? upBase - k * ppu : downBase - k * ppu);
+                gridlinesSVG += `
+                    <line x1="${padLeft}" y1="${y.toFixed(1)}" x2="${w - padRight}" y2="${y.toFixed(1)}" stroke="${k === 0 ? "#cbd5e1" : "#e2e8f0"}" stroke-width="1"></line>
+                    <text x="${padLeft - 8}" y="${(y + 3).toFixed(1)}" font-size="${axisFontSize}" text-anchor="end" fill="#94a3b8">${k === 0 ? "0" : formatCompactAxisNumber(Math.abs(k) * step)}</text>
+                `;
+            }
+            const groupW = plotW / 12;
+            const barW = groupW * 0.62;
+            const minVisibleH = 3;
+            let barsSVG = "";
+            let notchesSVG = "";
+            months.forEach((mo, i) => {
+                const x = padLeft + i * groupW + (groupW - barW) / 2;
+                if (mo.income > 0) {
+                    const clipped = mo.income > axisMax;
+                    const hh = clipped ? upUnits * ppu : Math.max(minVisibleH, (ppu * mo.income) / step);
+                    const y = upBase - hh;
+                    barsSVG += `<path d="${topRoundedBarPath(x, y, barW, hh, 4)}" fill="#22c55e" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Income" data-val="${mo.income.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
+                    if (clipped) notchesSVG += clipNotchSVG(x, y, barW);
+                }
+                if (mo.expense > 0) {
+                    const clipped = mo.expense > axisMax;
+                    const hh = clipped ? downUnits * ppu : Math.max(minVisibleH, (ppu * mo.expense) / step);
+                    const y = downBase;
+                    barsSVG += `<path d="${bottomRoundedBarPath(x, y, barW, hh, 4)}" fill="#ef4444" class="mtrend-bar" data-label="${escapeHtml(mo.label)}" data-type="Expense" data-val="${mo.expense.toFixed(2)}" data-click="monthlyTrendBarTap"></path>`;
+                    if (clipped) notchesSVG += clipNotchSVG(x, y + hh - 13, barW); // notch sits at the OUTER (bottom) end
+                }
+                barsSVG += `<text x="${(padLeft + i * groupW + groupW / 2).toFixed(1)}" y="${h - (isMobile ? 8 : 6)}" font-size="${monthFontSize}" text-anchor="middle" fill="#64748b">${escapeHtml(mo.label)}</text>`;
+            });
+            return `
+                <svg viewBox="0 0 ${w} ${h}" style="width:100%; display:block;" data-click="hideMonthlyTrendTooltip">
+                    <g>
+                        <rect x="0" y="0" width="12" height="12" fill="#22c55e" rx="2" transform="translate(${padLeft}, 4)"></rect>
+                        <text x="${padLeft + 16}" y="14" font-size="${legendFontSize}" fill="#334155">Income</text>
+                        <rect x="0" y="0" width="12" height="12" fill="#ef4444" rx="2" transform="translate(${padLeft + (isMobile ? 78 : 66)}, 4)"></rect>
+                        <text x="${padLeft + (isMobile ? 94 : 82)}" y="14" font-size="${legendFontSize}" fill="#334155">Expense</text>
+                    </g>
+                    ${gridlinesSVG}
+                    ${barsSVG}
+                    ${notchesSVG}
+                </svg>
+            `;
+        }
+
+        async function toggleMonthlyTrendStyle() {
+            monthlyTrendStyle = monthlyTrendStyle === "mirrored" ? "grouped" : "mirrored";
+            await writeDB(STORES.SETTINGS, { key: "monthlyTrendStyle", value: monthlyTrendStyle });
+            const { accounts, txs } = await computeAccountBalances();
+            renderMonthlyTrendChart(txs, accounts);
+        }
+
         function renderMonthlyTrendChart(txs, accounts) {
             populateMonthlyTrendYearOptions(txs);
             const year = parseInt(document.getElementById("monthlyTrendYearSelect").value, 10);
@@ -5150,12 +5578,19 @@
             // was true on first paint.
             const isMobile = window.innerWidth <= 480;
             document.getElementById("monthlyTrendChartWrap").innerHTML = hasAnyData
-                ? buildMonthlyTrendBarSVG(months, isMobile, monthlyTrendAutoScale)
+                ? (monthlyTrendStyle === "mirrored" ? buildMonthlyTrendMirroredSVG : buildMonthlyTrendBarSVG)(months, isMobile, monthlyTrendAutoScale)
                 : '<p style="font-size:0.75rem; text-align:center; color:var(--text-muted); padding: 40px 0;">No transactions logged for this year yet.</p>';
             const toggleBtn = document.getElementById("monthlyTrendAutoScaleToggle");
             if (toggleBtn) {
-                toggleBtn.textContent = monthlyTrendAutoScale ? "⤢ Auto-scale: On" : "⤢ Auto-scale";
+                toggleBtn.innerHTML = `<span class="mt-btn-ic">⤢</span><span class="mt-btn-tx"> Auto-scale${monthlyTrendAutoScale ? '<span class="mt-btn-on">: On</span>' : ""}</span>`;
+                toggleBtn.setAttribute("aria-pressed", monthlyTrendAutoScale ? "true" : "false");
                 toggleBtn.classList.toggle("active-filter-btn", monthlyTrendAutoScale);
+            }
+            const styleBtn = document.getElementById("monthlyTrendStyleToggle");
+            if (styleBtn) {
+                styleBtn.innerHTML = `<span class="mt-btn-ic">⇅</span><span class="mt-btn-tx"> Mirror<span class="mt-btn-ed">ed</span>${monthlyTrendStyle === "mirrored" ? '<span class="mt-btn-on">: On</span>' : ""}</span>`;
+                styleBtn.setAttribute("aria-pressed", monthlyTrendStyle === "mirrored" ? "true" : "false");
+                styleBtn.classList.toggle("active-filter-btn", monthlyTrendStyle === "mirrored");
             }
             renderMonthlyTrendTable(months);
             renderMonthlyTrendMascotIcon();
@@ -5223,6 +5658,7 @@
             accountsPageBackTarget = backTarget || "workspace";
             workspaceScrollY = window.scrollY;
             accountsPageTypeFilter = typeFilter || null;
+            accountsDormantOnly = false; // v614: every normal entry starts unfiltered
             showPage("page-accounts");
             window.scrollTo(0, 0);
             pushVirtualState("accounts");
@@ -5254,6 +5690,42 @@
 
         // Clears the Accounts page's type filter (if any) and re-renders — wired to the "Show
         // All Accounts" link that appears whenever a sidebar type shortcut narrowed the list.
+        function toggleAccountsDormantFilter() {
+            accountsDormantOnly = !accountsDormantOnly;
+            accountsCardSelectedId = null;
+            renderAccountsPage();
+        }
+        // v614: dashboard "Dormant accounts" line → Accounts page, filtered to Dormant.
+        async function navigateToDormantAccounts() {
+            await navigateToAccountsPage(null, "workspace");
+            accountsDormantOnly = true;
+            accountsCardSelectedId = null;
+            await renderAccountsPage();
+        }
+        function toggleAccDormantFields() {
+            const wrap = document.getElementById("newAccDormantWrap");
+            if (wrap) wrap.style.display = document.getElementById("newAccStatus").value === "dormant" ? "" : "none";
+        }
+        // v614: dashboard widget — only while a dormant account still holds a balance (zero-balance
+        // dormant accounts keep just the 💤 marker on their card).
+        function renderDormantAccountsWidget(accounts, nativeBalances) {
+            const wrap = document.getElementById("dashboardDormantWidget");
+            const list = document.getElementById("dormantWidgetList");
+            if (!wrap || !list) return;
+            const rows = (accounts || []).filter(isDormantAccount)
+                .map(a => ({ a, val: accountBaseValue(a, nativeBalances) }))
+                .filter(r => r.val > 0.005);
+            wrap.style.display = rows.length ? "" : "none";
+            setTodoBadge("dashboardDormantWidget", rows.length, "orange");
+            if (!rows.length) { list.innerHTML = ""; return; }
+            const total = rows.reduce((s, r) => s + r.val, 0);
+            list.innerHTML = rows.map(r => `
+                <div class="config-item dormant-row" data-click="navigateToDormantAccounts">
+                    <span>${escapeHtml(r.a.name)}<span class="dormant-sub">${escapeHtml(r.a.dormantNote || (r.a.dormantSince ? "Dormant since " + formatNavHistoryDate(r.a.dormantSince) : "Dormant"))}</span></span>
+                    <span>${formatBalanceHTML(r.val, baseCurrency)}</span>
+                </div>`).join("") + (rows.length > 1 ? `<div class="config-list-subtotal"><span class="total-label">Total</span>: <span class="total-amount">${formatBalanceHTML(total, baseCurrency)}</span></div>` : "");
+        }
+
         async function clearAccountsPageTypeFilter() {
             accountsPageTypeFilter = null;
             await renderAccountsPage();
@@ -5369,6 +5841,13 @@
                 showPage("page-income-breakdown");
                 await renderIncomeBreakdownPage();
                 window.scrollTo(0, workspaceScrollY);
+            } else if (ledgerBackToPage === "budget") {
+                // v616: back from a category's transactions opened off the Budget page's yearly
+                // breakdown — budgetViewScope/budgetViewPeriodKey are still what they were, so
+                // the same year comes back up.
+                showPage("page-budget");
+                await renderBudgetPage();
+                window.scrollTo(0, budgetScrollY);
             } else {
                 navigateToWorkspace();
             }
@@ -5407,6 +5886,36 @@
         // called on open and after every sidebar-triggered navigation so the drawer stays
         // in sync even though page switches also happen from outside the sidebar (e.g. the
         // dashboard's own "Total Income" stat box also opens the ledger page).
+        // v494: collapsible Reports sub-groups. Open/closed choice is a per-device preference (localStorage,
+        // default all open). The group holding the page you are on is always shown while the drawer is open,
+        // without changing the saved choice.
+        const SIDEBAR_GROUPS_KEY = "sidebarGroupsOpen";
+        function sidebarGroupsOpenSet() {
+            try { const v = JSON.parse(localStorage.getItem(SIDEBAR_GROUPS_KEY)); if (Array.isArray(v)) return new Set(v); } catch (e) {}
+            return new Set(["cashflow", "spending", "networth"]);
+        }
+        function applySidebarGroups() {
+            const open = sidebarGroupsOpenSet();
+            const activeBody = document.querySelector(".sidebar-item.active")?.closest("[data-group-body]");
+            if (activeBody) open.add(activeBody.dataset.groupBody);
+            document.querySelectorAll(".sidebar-group-head").forEach(head => {
+                const isOpen = open.has(head.dataset.group);
+                head.classList.toggle("collapsed", !isOpen);
+                head.setAttribute("aria-expanded", isOpen ? "true" : "false");
+                const body = document.querySelector(`[data-group-body="${head.dataset.group}"]`);
+                if (body) body.classList.toggle("collapsed", !isOpen);
+            });
+        }
+        function toggleSidebarGroup(el) {
+            const s = sidebarGroupsOpenSet();
+            const g = el.dataset.group;
+            const body = document.querySelector(`[data-group-body="${g}"]`);
+            // tapping a header whose group is only open because it holds the active page closes it for real
+            if (s.has(g) && !(body && body.classList.contains("collapsed"))) s.delete(g); else s.add(g);
+            try { localStorage.setItem(SIDEBAR_GROUPS_KEY, JSON.stringify([...s])); } catch (e) {}
+            applySidebarGroups();
+        }
+
         function updateSidebarActiveState() {
             document.querySelectorAll(".sidebar-item").forEach(i => i.classList.remove("active"));
             const workspaceHidden = document.getElementById("page-workspace").classList.contains("hidden");
@@ -5423,6 +5932,7 @@
             const portfolioReportHidden = document.getElementById("page-portfolio-report").classList.contains("hidden");
             const ownerNetWorthReportHidden = document.getElementById("page-owner-networth-report").classList.contains("hidden");
             const currencyReportHidden = document.getElementById("page-currency-report").classList.contains("hidden");
+            const incomeTaxHidden = document.getElementById("page-incometax").classList.contains("hidden");
             const navUpdateHidden = document.getElementById("page-navupdate").classList.contains("hidden");
             const inventoryHidden = document.getElementById("page-inventory").classList.contains("hidden");
             const plannedPaymentsHidden = document.getElementById("page-plannedpayments").classList.contains("hidden");
@@ -5441,6 +5951,7 @@
             else if (!portfolioReportHidden) target = "portfolio-report";
             else if (!ownerNetWorthReportHidden) target = "owner-networth-report";
             else if (!currencyReportHidden) target = "currency-report";
+            else if (!incomeTaxHidden) target = "incometax";
             else if (!navUpdateHidden) target = "navupdate";
             else if (!ledgerHidden) {
                 const isUnfiltered = activeLedgerAccountView === "all" && activeCategoryView === "all" && directTypeView === "all";
@@ -5450,6 +5961,7 @@
                 const el = document.querySelector(`.sidebar-item[data-target="${target}"]`);
                 if (el) el.classList.add("active");
             }
+            applySidebarGroups();
         }
 
         // Routes a sidebar tap to the matching page/modal. Accounts/Categories, App Local
@@ -5478,12 +5990,14 @@
             else if (target === "portfolio-report") navigateToPortfolioReportPage();
             else if (target === "owner-networth-report") navigateToOwnerNetWorthReportPage();
             else if (target === "currency-report") navigateToCurrencyReportPage();
+            else if (target === "incometax") navigateToIncomeTaxPage();
             else if (target === "tag-report") navigateToTagReportPage();
             else if (target === "budget") navigateToBudgetPage();
             else if (target === "inventory") navigateToInventoryPage();
             else if (target === "plannedpayments") navigateToPlannedPaymentsPage();
             else if (target === "reminders") navigateToRemindersPage();
             else if (target === "insurance") navigateToInsurancePage();
+            else if (target === "timeline") navigateToTimelinePage();
             else if (target === "lock") lockAppNow();
         }
 
@@ -5510,6 +6024,18 @@
                 const percentage = Math.min((estimate.usage / estimate.quota) * 100, 100);
                 document.getElementById("meterFillElement").style.width = `${Math.max(percentage, 0.4)}%`;
             }
+            // v591: Local Snapshots are part of the "Used" figure but not of the footprint estimate above —
+            // show them on their own line (stored sizes only, nothing is decrypted).
+            const snapEl = document.getElementById("snapshotStorageText");
+            if (snapEl) {
+                try {
+                    const rows = await listDriveSnapshotRows();
+                    const bytes = rows.reduce((n, r) => n + r.size, 0);
+                    snapEl.textContent = rows.length
+                        ? `Local Snapshots: ${rows.length} (~${(bytes / (1024 * 1024)).toFixed(2)} MB) — included in "Used" above. Manage them in Settings → Backup & Restore → Local Snapshots.`
+                        : "Local Snapshots: none";
+                } catch (err) { snapEl.textContent = ""; }
+            }
         }
 
         // --- CURRENCY SETTINGS CONTROLS ---
@@ -5526,6 +6052,7 @@
             baseSelect.value = baseCurrency;
             renderFxRatesInputs();
             document.getElementById("fetchFxRatesStatus").textContent = "";
+            initFxLockCard(); // v547
         }
 
         // Renders one row per non-base currency in `rates` (defaults to the saved fxRates when
@@ -5565,6 +6092,183 @@
                 `;
             });
             document.getElementById("fxRatesFormContainer").innerHTML = html;
+        }
+
+
+        // --- v547: LOCK RATE ON PAST RECORDS (Currency Setting ▸ bulk) ---
+        // Freezes existing, still-unlocked foreign-currency Income/Expense records at a rate the USER types
+        // (never today's table rate — that would rewrite history). Filters: entry currency, account
+        // currency, date range. Preview first (count + RM impact vs today's table), then Confirm.
+        // Only records with NO manualFxRate are touched, so "Undo" simply returns them to following the live
+        // rate (their state before) — records that were already locked are never modified by either action.
+        let fxLockPending = null;
+        function fxLockEls() {
+            return { cur: document.getElementById("fxLockCur"), acct: document.getElementById("fxLockAcctCur"),
+                from: document.getElementById("fxLockFrom"), to: document.getElementById("fxLockTo"),
+                dir: document.getElementById("fxLockDir"), rate: document.getElementById("fxLockRate"),
+                hint: document.getElementById("fxLockHint"), out: document.getElementById("fxLockPreview"),
+                confirm: document.getElementById("fxLockConfirmBtn") };
+        }
+        function fxLockInvalidate() {
+            fxLockPending = null;
+            const e = fxLockEls();
+            if (e.out) e.out.innerHTML = "";
+            if (e.confirm) e.confirm.style.display = "none";
+        }
+        function fxLockSelectionChanged() {
+            const e = fxLockEls();
+            if (!e.cur) return;
+            const cur = e.cur.value, acct = e.acct.value;
+            const live = (cur !== acct && fxRates[cur] && fxRates[acct]) ? convertCurrency(1, cur, acct) : null;
+            // default direction = the side that gives a number >= 1 (how rates are normally quoted)
+            const curPer = live !== null && live >= 1;
+            e.dir.innerHTML = `<option value="cur">1 ${escapeHtml(cur)} = ? ${escapeHtml(acct)}</option><option value="acct">1 ${escapeHtml(acct)} = ? ${escapeHtml(cur)}</option>`;
+            e.dir.value = curPer ? "cur" : "acct";
+            e.hint.textContent = live === null ? "Pick two different currencies."
+                : `For reference only (not applied): today's table has ${fxQuote(cur, acct, live)}. Type the rate you actually paid.`;
+            fxLockInvalidate();
+        }
+        async function initFxLockCard() {
+            const e = fxLockEls();
+            if (!e.cur) return;
+            const opts = Object.keys(fxRates).sort((a, b) => a.localeCompare(b)).map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+            const prevCur = e.cur.value, prevAcct = e.acct.value;
+            e.cur.innerHTML = opts; e.acct.innerHTML = opts;
+            e.cur.value = (prevCur && fxRates[prevCur]) ? prevCur : (fxRates.KRW ? "KRW" : Object.keys(fxRates).find(c => c !== baseCurrency) || baseCurrency);
+            e.acct.value = (prevAcct && fxRates[prevAcct]) ? prevAcct : baseCurrency;
+            fxLockSelectionChanged();
+            await fxLockRenderUndo();
+        }
+        // v557: "Currently locked" panel. Derived from the transactions themselves (every record that carries a
+        // manualFxRate), grouped by entry currency -> account currency at one exact rate, so EVERY earlier bulk
+        // lock stays visible and can be unlocked on its own. (Before v557 this was a single "last bulk lock"
+        // slot that each new lock overwrote, which hid the earlier batches.) Groups of 1 are individually
+        // locked records (rate typed on the entry itself) — summarised in one line, never offered for unlock.
+        function fxLockedInfo(t, accById) {
+            if ((t.type !== "income" && t.type !== "expense") || t.fundId || !t.manualFxRate) return null;
+            const acc = accById.get(t.src);
+            if (!acc || !acc.currency || acc.currency === t.currency) return null;
+            return { cur: t.currency, acctCur: acc.currency, rate: t.manualFxRate };
+        }
+        async function fxLockRenderUndo() {
+            const box = document.getElementById("fxLockUndoBox");
+            if (!box) return;
+            const [txs, accounts] = await Promise.all([readAllDB(STORES.TRANSACTIONS), readAllDB(STORES.ACCOUNTS)]);
+            const accById = new Map(accounts.map(a => [a.id, a]));
+            const groups = new Map();
+            txs.forEach(t => {
+                const k = fxLockedInfo(t, accById);
+                if (!k) return;
+                const key = `${k.cur}|${k.acctCur}|${k.rate}`;
+                const g = groups.get(key) || { ...k, n: 0, min: "9999", max: "" };
+                const d = String(t.date || "").slice(0, 10);
+                g.n++;
+                if (d < g.min) g.min = d;
+                if (d > g.max) g.max = d;
+                groups.set(key, g);
+            });
+            const batches = [...groups.values()].filter(g => g.n >= 2).sort((x, y) => y.n - x.n);
+            const singles = [...groups.values()].filter(g => g.n < 2).reduce((n, g) => n + g.n, 0);
+            if (!batches.length && !singles) { box.innerHTML = ""; return; }
+            const rowsHtml = batches.map(g => `
+                <div style="display:flex; align-items:center; gap:8px; padding:8px 0; border-top:1px solid var(--border-color);">
+                    <div style="flex:1; min-width:0;">
+                        <div style="font-size:0.82rem; font-weight:700;">${escapeHtml(g.cur)} → ${escapeHtml(g.acctCur)} · ${g.n} records</div>
+                        <div style="font-size:0.72rem; color:var(--text-muted);">${escapeHtml(g.min)} to ${escapeHtml(g.max)} · ${escapeHtml(fxQuote(g.cur, g.acctCur, g.rate))}</div>
+                    </div>
+                    <button type="button" class="btn-util" data-click="fxLockUndo" data-cur="${escapeHtml(g.cur)}" data-acct="${escapeHtml(g.acctCur)}" data-rate="${g.rate}" style="width:auto; padding:6px 10px; font-size:0.75rem;">↩ Unlock</button>
+                </div>`).join("");
+            box.innerHTML = `<p style="font-size:0.72rem; font-weight:800; color:var(--text-muted); margin:0 0 2px; letter-spacing:0.04em;">CURRENTLY LOCKED</p>
+                ${rowsHtml}
+                ${singles ? `<p style="font-size:0.72rem; color:var(--text-muted); margin:6px 0 0; border-top:1px solid var(--border-color); padding-top:8px;">+ ${singles} individually locked record${singles === 1 ? "" : "s"} (rate set on the entry itself).</p>` : ""}
+                <p style="font-size:0.7rem; color:var(--text-muted); margin:6px 0 0;">Unlock sends a batch back to following the live rate. Records locked at other rates are not touched.</p>`;
+        }
+        async function fxLockPreview() {
+            const e = fxLockEls();
+            const cur = e.cur.value, acctCur = e.acct.value, from = e.from.value, to = e.to.value;
+            const typed = parseFloat(e.rate.value);
+            if (!cur || !acctCur || cur === acctCur) { alert("Pick two different currencies (entry currency and account currency)."); return; }
+            if (!from || !to || from > to) { alert("Pick a valid date range (From must not be after To)."); return; }
+            if (!isFinite(typed) || typed <= 0) { alert("Type the exchange rate you actually paid (greater than zero). It is never filled in automatically."); return; }
+            const rate = e.dir.value === "cur" ? typed : 1 / typed;   // stored as: 1 entry-currency = rate account-currency
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const accById = new Map(accounts.map(a => [a.id, a]));
+            const ids = [];
+            let alreadyLocked = 0, otherAcctCur = 0;
+            const sums = { expense: { n: 0, native: 0, locked: 0, live: 0 }, income: { n: 0, native: 0, locked: 0, live: 0 } };
+            txs.forEach(t => {
+                if ((t.type !== "income" && t.type !== "expense") || t.currency !== cur || t.fundId) return;
+                const d = String(t.date || "").slice(0, 10);
+                if (d < from || d > to) return;
+                const acc = accById.get(t.src);
+                if (!acc || acc.type === "multi" || acc.type === "fd" || acc.type === "unittrust" || !acc.currency || acc.currency === cur) return;
+                if (acc.currency !== acctCur) { otherAcctCur++; return; }
+                if (t.manualFxRate) { alreadyLocked++; return; }
+                ids.push(t.id);
+                const g = sums[t.type];
+                g.n++; g.native += t.amount; g.locked += t.amount * rate; g.live += convertCurrency(t.amount, cur, acctCur);
+            });
+            fxLockPending = null;
+            let html = "";
+            if (!ids.length) {
+                html = `<p style="font-size:0.8rem; margin:8px 0 0;">No unlocked ${escapeHtml(cur)} Income/Expense records found on ${escapeHtml(acctCur)} accounts in that range.${alreadyLocked ? ` (${alreadyLocked} already locked.)` : ""}</p>`;
+            } else {
+                const row = (label, g) => g.n ? `<div style="margin-top:4px;">${label}: <b>${g.n}</b> record${g.n === 1 ? "" : "s"} · ${formatCurrency(g.native, cur)} → <b>${formatCurrency(g.locked, acctCur)}</b> at your rate <span style="color:var(--text-muted);">(today's table would give ${formatCurrency(g.live, acctCur)}, difference ${formatCurrency(g.locked - g.live, acctCur)})</span></div>` : "";
+                const live = convertCurrency(1, cur, acctCur);
+                const offPct = live > 0 ? Math.abs(rate / live - 1) * 100 : 0;
+                html = `<div style="margin-top:10px; padding:10px; border:1px solid var(--border-color); border-radius:10px; font-size:0.8rem;">
+                    <div style="font-weight:800;">Will lock ${ids.length} record${ids.length === 1 ? "" : "s"} at ${escapeHtml(fxQuote(cur, acctCur, rate))} <span style="font-weight:600; color:var(--text-muted);">(${escapeHtml(from)} to ${escapeHtml(to)})</span></div>
+                    ${row("Expense", sums.expense)}${row("Income", sums.income)}
+                    ${offPct > 20 ? `<div style="margin-top:6px; color:#b91c1c; font-weight:700;">⚠ Your rate is ${offPct.toFixed(0)}% away from today's table rate. Check the digits and the direction before confirming.</div>` : ""}
+                    ${(alreadyLocked || otherAcctCur) ? `<div style="margin-top:6px; color:var(--text-muted);">Skipped: ${alreadyLocked ? `${alreadyLocked} already locked` : ""}${alreadyLocked && otherAcctCur ? ", " : ""}${otherAcctCur ? `${otherAcctCur} on accounts whose currency is not ${escapeHtml(acctCur)}` : ""}.</div>` : ""}
+                    <div style="margin-top:6px; color:var(--text-muted);">Account balances and reports will show these amounts at your rate from now on, and no longer move when you save new FX values.</div>
+                </div>`;
+                fxLockPending = { ids, rate, cur, acctCur, from, to };
+            }
+            e.out.innerHTML = html;
+            e.confirm.style.display = ids.length ? "" : "none";
+            if (ids.length) e.confirm.textContent = `🔒 Lock ${ids.length} record${ids.length === 1 ? "" : "s"}`;
+        }
+        async function fxLockConfirm() {
+            const p = fxLockPending;
+            if (!p) { return; }
+            const idSet = new Set(p.ids);
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const done = [];
+            try {
+                for (const t of txs) {
+                    if (!idSet.has(t.id) || t.manualFxRate) continue;
+                    t.manualFxRate = p.rate;
+                    await writeDB(STORES.TRANSACTIONS, t);
+                    done.push(t.id);
+                }
+            } catch (err) {
+                alert("Bulk lock stopped part-way: " + (err && err.message ? err.message : err) + (done.length ? ` (${done.length} record(s) were already locked; use Unlock under "Currently locked" to revert them.)` : ""));
+            }
+            fxLockInvalidate();
+            showToast(`Locked ${done.length} record${done.length === 1 ? "" : "s"}`);
+            await fxLockRenderUndo();
+            renderApp();
+        }
+        async function fxLockUndo(el) {
+            const cur = el && el.dataset.cur, acctCur = el && el.dataset.acct, rate = Number(el && el.dataset.rate);
+            if (!cur || !acctCur || !(rate > 0)) return;
+            const [txs, accounts] = await Promise.all([readAllDB(STORES.TRANSACTIONS), readAllDB(STORES.ACCOUNTS)]);
+            const accById = new Map(accounts.map(a => [a.id, a]));
+            const hits = txs.filter(t => {
+                const k = fxLockedInfo(t, accById);
+                return k && k.cur === cur && k.acctCur === acctCur && k.rate === rate;
+            });
+            if (!hits.length) { await fxLockRenderUndo(); return; }
+            if (!confirm(`Unlock ${hits.length} ${cur} record${hits.length === 1 ? "" : "s"} (${cur} → ${acctCur}, ${fxQuote(cur, acctCur, rate)})?\n\nThey go back to following the live rate. Records locked at other rates are not touched.`)) return;
+            for (const t of hits) {
+                t.manualFxRate = null;
+                await writeDB(STORES.TRANSACTIONS, t);
+            }
+            showToast(`Unlocked ${hits.length} record${hits.length === 1 ? "" : "s"}`);
+            await fxLockRenderUndo();
+            renderApp();
         }
 
         function handleBaseCurrencyChange() {
@@ -6100,6 +6804,10 @@
             document.getElementById("editAccountId").value = "";
             document.getElementById("newAccName").value = "";
             document.getElementById("newAccRef").value = "";
+            document.getElementById("newAccStatus").value = "active"; // v614
+            document.getElementById("newAccDormantSince").value = "";
+            document.getElementById("newAccDormantNote").value = "";
+            toggleAccDormantFields();
             document.getElementById("newAccGroup").value = DEFAULT_ACCOUNT_GROUP;
             handleAccGroupChange();
             document.getElementById("newAccBal").value = "0";
@@ -6157,6 +6865,11 @@
                 // when the account is re-grouped, since a bank account number doesn't stop being
                 // true just because the account got moved to a different Group/Sub-Group.
                 accountRef: accountRef,
+                // v614: manual Dormant flag. Since/Note are cleared whenever the status is Active
+                // so a reactivated account doesn't keep a stale "dormant since" date behind.
+                status: (document.getElementById("newAccStatus").value === "dormant") ? "dormant" : "active",
+                dormantSince: (document.getElementById("newAccStatus").value === "dormant") ? (document.getElementById("newAccDormantSince").value || "") : "",
+                dormantNote: (document.getElementById("newAccStatus").value === "dormant") ? document.getElementById("newAccDormantNote").value.trim() : "",
                 subgroup: document.getElementById("newAccSubgroup").value || "",
                 linkedAccountId: (group === "Bank Loan" ? (document.getElementById("newAccLinkedAccount").value || null) : null),
                 includeInNetWorth: (group === "Real Estate" ? (document.getElementById("newAccIncludeNetWorth").value !== "no") : true),
@@ -6435,7 +7148,18 @@
             const withoutZeroBalance = filter
                 ? filtered.filter(a => Math.abs(accountBaseValue(a, nativeBalances)) >= 0.005)
                 : filtered;
-            const sorted = sortAccountsByGroupThenName(withoutZeroBalance);
+            // v614: Dormant chip — shown while any account in the current set is flagged; stays
+            // visible while active so it can always be switched off again.
+            const dormantInSet = withoutZeroBalance.filter(isDormantAccount);
+            if (accountsDormantOnly && dormantInSet.length === 0) accountsDormantOnly = false;
+            const dormantChipEl = document.getElementById("accountsDormantChipRow");
+            if (dormantChipEl) {
+                dormantChipEl.classList.toggle("hidden", dormantInSet.length === 0);
+                dormantChipEl.innerHTML = dormantInSet.length
+                    ? `<button type="button" class="acct-chip dormant-chip${accountsDormantOnly ? " active" : ""}" data-click="toggleAccountsDormantFilter" aria-pressed="${accountsDormantOnly ? "true" : "false"}">\uD83D\uDCA4 Dormant <span class="acct-chip-n">${dormantInSet.length}</span></button>`
+                    : "";
+            }
+            const sorted = sortAccountsByGroupThenName(accountsDormantOnly ? dormantInSet : withoutZeroBalance);
 
             // v64: the collapse/expand state (expandedAccountSubrows) used to be keyed by
             // account id alone, so the same account's subrows showed the same open/closed state
@@ -6452,6 +7176,16 @@
             // and the underlying data-click wiring are left untouched, so nothing about the
             // function itself is removed, it's just not shown any more.
             if (hintEl) hintEl.classList.add("hidden");
+
+            // v571: Cards view — same data/filter/sort as the list below, different presentation.
+            syncAccountsViewToggle();
+            const accountsListEl = document.getElementById("accountsPageList");
+            accountsListEl.classList.toggle("acct-cards-mode", accountsViewMode === "cards");
+            if (accountsViewMode === "cards") {
+                accountsListEl.innerHTML = buildAccountsCardsHTML(sorted, accounts, txs, nativeBalances, fundsByAccountId, fdPlacementsByAccountId, filter);
+                wireAccountsCardsTrack();
+                return;
+            }
 
             let html = "";
             let lastGroup = null;
@@ -6582,14 +7316,14 @@
                 // Dashboard's Net Worth total (see newAccIncludeNetWorth), so it's obvious here
                 // too rather than just being a silent gap in the headline number.
                 const excludedLine = a.includeInNetWorth === false
-                    ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
+                    ? `<br><span class="acct-excl-line" style="font-size:0.7rem; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
                 // v164: Account No./Ref shown right under the account name (was bundled at the
                 // bottom of the card via accountExtraInfoLine's own refLine) — includeRef:false
                 // below so it isn't rendered twice.
                 const acctRefLine = a.accountRef
-                    ? `<div class="account-card-refline">${escapeHtml(a.accountRef)}</div>`
+                    ? `<div class="account-card-refline">${accountRefDisplayHTML(a)}</div>`
                     : "";
                 const extraInfoLine = accountExtraInfoLine(a, nativeBalances, false, accounts);
 
@@ -6599,7 +7333,7 @@
                 // negated (see openCreditCardPayment's comment for why that's the right number).
                 const ccAmountDue = a.type === "creditcard" ? Math.max(0, -(nativeBalances[a.id] || 0)) : 0;
                 const ccAmountDueLine = ccAmountDue > 0.005
-                    ? `<br><span style="font-size:0.72rem; color:#9d174d; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
+                    ? `<br><span class="acct-cc-line" style="font-size:0.72rem; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
                     : "";
                 const ccPayBtnHTML = ccAmountDue > 0.005
                     ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">💳 Pay</button>`
@@ -6704,7 +7438,7 @@
                     : "";
 
                 html += `
-                    <div class="config-item account-card" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
+                    <div class="config-item account-card${isDormantAccount(a) ? " dormant" : ""}" style="cursor:pointer;" data-click="navigateToLedgerPage" data-id="${escapeHtml(a.id)}" data-back="accounts">
                         ${accountAvatarHTML(a.name, a.logo)}
                         <div class="account-card-body">
                             <div class="account-card-toprow">
@@ -6747,6 +7481,383 @@
                 : `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts yet — tap + to add one.</p>`);
         }
 
+        // ===== v571: Accounts page "Cards" view =====
+        const ACCOUNT_CARD_GRADIENTS = {
+            "Bank/Cash": ["#0f766e", "#2dd4bf"],
+            "Credit Card": ["#9d174d", "#f472b6"],
+            "Multi-Currency": ["#1d4ed8", "#38bdf8"],
+            "Investment": ["#5b21b6", "#a78bfa"],
+            "Real Estate": ["#92400e", "#fbbf24"],
+            "Other Assets": ["#334155", "#94a3b8"],
+            "Bank Loan": ["#7f1d1d", "#f87171"],
+            "Other Liabilities": ["#44403c", "#a8a29e"]
+        };
+        function accountCardGradient(group) {
+            const g = ACCOUNT_CARD_GRADIENTS[group] || ACCOUNT_CARD_GRADIENTS["Other Assets"];
+            return `linear-gradient(135deg, ${g[0]}, ${g[1]})`;
+        }
+        // Plain-text amount (no red span) so it stays readable on a coloured card face.
+        function cardAmountText(amount, curr) {
+            return amount < 0 ? `\u2212${formatCurrency(Math.abs(amount), curr)}` : formatCurrency(amount, curr);
+        }
+        function isAccountsCarouselMode() {
+            return true; // v575: phone and PC both use the one-row carousel (PC gets ‹ › buttons and arrow keys)
+        }
+        function syncAccountsViewToggle() {
+            document.querySelectorAll("#accountsViewToggle .acct-view-btn").forEach(b => {
+                const on = b.dataset.mode === accountsViewMode;
+                b.classList.toggle("active", on);
+                b.setAttribute("aria-pressed", on ? "true" : "false");
+            });
+        }
+        function setAccountsViewMode(el) {
+            const mode = el.dataset.mode === "cards" ? "cards" : "list";
+            if (mode === accountsViewMode) return;
+            accountsViewMode = mode;
+            try { localStorage.setItem(ACCOUNTS_VIEW_MODE_KEY, mode); } catch (e) { /* private mode: just not remembered */ }
+            renderAccountsPage();
+        }
+        // v572b: re-rendering rebuilt the chip rows, which reset their sideways scroll to the first chip —
+        // tapping a pill in the middle of a scrolled row made the row jump back to the start. The scroll
+        // position is saved before the re-render and restored (and the active chip kept in view) after it.
+        let accountsChipScroll = { group: 0, sub: 0 };
+        function saveAccountsChipScroll() {
+            document.querySelectorAll("#accountsPageList .acct-chips").forEach(r => {
+                if (r.dataset.chiprow) accountsChipScroll[r.dataset.chiprow] = r.scrollLeft;
+            });
+        }
+        function restoreAccountsChipScroll() {
+            document.querySelectorAll("#accountsPageList .acct-chips").forEach(r => {
+                const key = r.dataset.chiprow;
+                if (!key) return;
+                r.scrollLeft = accountsChipScroll[key] || 0;
+                const act = r.querySelector(".acct-chip.active");
+                if (act) {
+                    const left = act.offsetLeft, right = left + act.offsetWidth;
+                    if (left < r.scrollLeft) r.scrollLeft = Math.max(0, left - 8);
+                    else if (right > r.scrollLeft + r.clientWidth) r.scrollLeft = right - r.clientWidth + 8;
+                }
+            });
+        }
+        function selectAccountsCardGroup(el) {
+            saveAccountsChipScroll();
+            accountsChipScroll.sub = 0; // a different group has a different sub-group row — start it at the left
+            accountsCardGroup = el.dataset.group || "all";
+            accountsCardSubgroup = "all";
+            accountsCardSelectedId = null;
+            renderAccountsPage();
+        }
+        // v572: second chip row — sub-groups of the selected group (Bank/Cash > Savings Account, Investment > KWSP, ...)
+        function selectAccountsCardSubgroup(el) {
+            saveAccountsChipScroll();
+            accountsCardSubgroup = el.dataset.sub || "all";
+            accountsCardSelectedId = null;
+            renderAccountsPage();
+        }
+        // v572: counter button opens/closes a name list to jump straight to any card
+        function accountsCardCounterTap() {
+            const list = document.getElementById("acctJumpList");
+            if (list) list.classList.toggle("hidden");
+        }
+        function accountsCardJump(el) {
+            const list = document.getElementById("acctJumpList");
+            if (list) list.classList.add("hidden");
+            selectAccountCard(el.dataset.id, false);
+        }
+        // v572: on the last card, "↺ First" scrolls back to card 1 (no auto-loop, so the end of the list stays visible)
+        // v575: ‹ › buttons (PC) — select the previous / next card in the current list
+        function accountsCardStep(el) {
+            const track = document.getElementById("acctCardsTrack");
+            if (!track) return;
+            const slots = Array.from(track.children);
+            const i = slots.findIndex(s => s.dataset.acctId === accountsCardSelectedId);
+            const j = Math.min(slots.length - 1, Math.max(0, i + (Number(el.dataset.dir) || 0)));
+            if (j !== i && slots[j]) selectAccountCard(slots[j].dataset.acctId, false);
+        }
+        function accountsCardGoFirst() {
+            const track = document.getElementById("acctCardsTrack");
+            if (!track || !track.children.length) return;
+            selectAccountCard(track.children[0].dataset.acctId, false);
+        }
+
+        function accountCardFaceHTML(a, accounts, nativeBalances) {
+            const group = a.group || DEFAULT_ACCOUNT_GROUP;
+            const baseVal = accountBaseValue(a, nativeBalances);
+            const isBasket = a.type === "multi" || a.type === "fd" || a.type === "unittrust";
+            let main, sub = "";
+            if (isBasket) {
+                const baskets = nativeBalances[a.id] || {};
+                const n = Object.keys(baskets).length;
+                if (n === 0) { main = "\u2014"; sub = a.type === "unittrust" ? "No funds yet" : "No balance yet"; }
+                else {
+                    main = `\u2248 ${cardAmountText(baseVal, baseCurrency)}`;
+                    sub = n > 1 ? `${n} currencies` : Object.keys(baskets)[0];
+                }
+            } else {
+                const bal = nativeBalances[a.id] || 0;
+                main = cardAmountText(bal, a.currency);
+                if (a.currency !== baseCurrency) sub = `\u2248 ${cardAmountText(baseVal, baseCurrency)}`;
+            }
+            if (a.type === "creditcard") {
+                const due = Math.max(0, -(nativeBalances[a.id] || 0));
+                if (due > 0.005) { main = cardAmountText(due, a.currency); sub = "Amount due"; }
+            }
+            const typeLabel = a.type === "creditcard" ? "Credit Card" : (a.subgroup || group);
+            const owners = (Array.isArray(a.memberIds) ? a.memberIds : []).map(id => getMemberById(id)?.name).filter(Boolean);
+            const foot = owners.length ? owners.join(" \u00b7 ") : "Unassigned";
+            const excluded = a.includeInNetWorth === false ? `<span class="acct-card-pill dashed">\uD83D\uDEAB Not in Net Worth</span>` : "";
+            const dormantPill = isDormantAccount(a) ? `<span class="acct-card-pill dormant">\uD83D\uDCA4 Dormant</span>` : "";
+            const grad = accountCardGradient(group);
+            const front = `
+                <div class="acct-card-face acct-card-front" style="background:${grad};">
+                    <div class="acct-card-top">
+                        ${accountAvatarHTML(a.name, a.logo)}
+                        <div class="acct-card-name">${escapeHtml(a.name)}</div>
+                        <button type="button" class="acct-flip-btn" data-click="flipAccountCard" data-id="${escapeHtml(a.id)}" aria-label="Show card info" title="Card info">i</button>
+                    </div>
+                    <div class="acct-card-badges"><span class="acct-card-pill">${escapeHtml(typeLabel)}</span>${dormantPill}${excluded}</div>
+                    <div class="acct-card-bal">${main}</div>
+                    <div class="acct-card-sub">${escapeHtml(sub)}</div>
+                    <div class="acct-card-foot">${escapeHtml(foot)}</div>
+                </div>`;
+            // Back face: the low-frequency details (nothing needed for day-to-day use lives only here).
+            const linkedAcc = a.linkedAccountId ? accounts.find(x => x.id === a.linkedAccountId) : null;
+            // Long values (account no., related account) get a full-width line with the label above; short ones
+            // (currency, members) sit side by side. The group is not repeated here — the chips already show it.
+            const field = (lbl, val) => `<div class="acct-back-field"><span class="lbl">${escapeHtml(lbl)}</span><span class="val">${escapeHtml(val)}</span></div>`;
+            const longRows = [];
+            if (a.accountRef) longRows.push(shouldMaskAccountRef(a)
+                ? `<div class="acct-back-field"><span class="lbl">Account no.</span><span class="val">${accountRefDisplayHTML(a)}</span></div>`
+                : field("Account no.", a.accountRef));
+            if (linkedAcc) longRows.push(field("Related", accountOptionLabel(linkedAcc, accounts)));
+            const shortRows = [];
+            if (!isBasket) shortRows.push(field("Currency", a.currency));
+            shortRows.push(field("Members", foot));
+            if (a.includeInNetWorth === false) shortRows.push(field("Net Worth", "Excluded"));
+            const extra = accountExtraInfoLine(a, nativeBalances, false, accounts);
+            const back = `
+                <div class="acct-card-face acct-card-back" data-click="flipAccountCard" data-id="${escapeHtml(a.id)}">
+                    <div class="acct-back-title"><span>${escapeHtml(a.name)}</span>
+                        <button type="button" class="acct-flip-btn" data-click="flipAccountCard" data-id="${escapeHtml(a.id)}" aria-label="Back to card" title="Back">\u21a9</button>
+                    </div>
+                    ${longRows.join("")}
+                    <div class="acct-back-pair">${shortRows.join("")}</div>
+                    ${extra ? `<div>${extra.replace(/^<br>/, "")}</div>` : ""}
+                    <div class="acct-back-hint">Tap anywhere to flip back</div>
+                </div>`;
+            return `<div class="acct-card-flip">${front}${back}</div>`;
+        }
+
+        function accountCardDetailHTML(a, accounts, txs, nativeBalances, fundsByAccountId, fdPlacementsByAccountId, selected) {
+            const id = a.id;
+            const monthPrefix = todayLocalStr().slice(0, 7);
+            let inSum = 0, outSum = 0;
+            const mine = txs.filter(t => t.src === id || t.dest === id);
+            mine.forEach(t => {
+                if (!t.date || String(t.date).slice(0, 7) !== monthPrefix) return;
+                if (String(t.desc || "").startsWith("Opening")) return;
+                const v = convertCurrency(t.amount || 0, t.currency, baseCurrency);
+                if (t.type === "income" && t.src === id) inSum += v;
+                else if (t.type === "expense" && t.src === id) outSum += v;
+                else if (t.type === "transfer") { if (t.src === id) outSum += v; if (t.dest === id) inSum += v; }
+            });
+            const recent = mine.slice().sort((x, y) => String(y.date || "").localeCompare(String(x.date || "")) || (Number(y.id) || 0) - (Number(x.id) || 0)).slice(0, 5);
+            const recentHTML = recent.length === 0
+                ? `<div class="acct-empty">No entries yet.</div>`
+                : recent.map(t => {
+                    const isIn = t.type === "income" || (t.type === "transfer" && t.dest === id && t.src !== id);
+                    const label = t.desc || t.cat || (t.type === "transfer" ? "Transfer" : t.type);
+                    return `<div class="acct-recent-row" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(String(t.id))}">
+                        <div class="acct-recent-main"><div class="acct-recent-desc">${escapeHtml(label)}</div><div class="acct-recent-date">${escapeHtml(String(t.date || ""))}</div></div>
+                        <div class="acct-recent-amt ${isIn ? "in" : "out"}">${isIn ? "+" : "\u2212"}${formatCurrency(t.amount || 0, t.currency)}</div>
+                    </div>`;
+                }).join("");
+
+            // Currency / fund / placement breakdown (same targets as the list view's subrows).
+            let subHTML = "";
+            if (a.type === "multi") {
+                const baskets = nativeBalances[a.id] || {};
+                const cur = Object.keys(baskets).sort();
+                if (cur.length) subHTML = cur.map(c => `
+                    <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToCurrencyActivityPage" data-id="${escapeHtml(a.id)}" data-currency="${escapeHtml(c)}" data-back="accounts">
+                        <span style="display:flex; align-items:center; gap:8px;">${currencyIconHTML(c)}<span>${escapeHtml(c)} <span style="color:var(--text-muted); font-weight:600;">\u2014 ${formatBalanceHTML(baskets[c], c)}</span></span></span>
+                        <span style="color:var(--text-muted);">\u203a</span>
+                    </div>`).join("");
+            } else if (a.type === "unittrust") {
+                const funds = (fundsByAccountId[a.id] || []).slice().sort((x, y) => x.name.localeCompare(y.name));
+                subHTML = funds.map(f => `
+                    <div class="config-item fund-subrow" style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}" data-back="accounts">
+                        <span>${escapeHtml(f.name)} <span style="color:var(--text-muted); font-weight:600;">\u2014 ${formatBalanceHTML((f.units || 0) * (f.currentNav || 0), f.currency)}</span></span>
+                        <span style="color:var(--text-muted);">\u203a</span>
+                    </div>`).join("");
+            } else if (a.type === "fd") {
+                const pl = (fdPlacementsByAccountId[a.id] || []).slice().sort((x, y) => new Date(y.date) - new Date(x.date));
+                subHTML = pl.map(t => `
+                    <div class="config-item fund-subrow" style="cursor:pointer;" data-click="openTransactionForm" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(String(t.id))}">
+                        <span>Placement${t.fdReferenceNo ? ` (${escapeHtml(t.fdReferenceNo)})` : ""}<br><span style="color:var(--text-muted); font-weight:600;">${formatBalanceHTML(t.amount, t.currency)} \u00b7 Matures ${escapeHtml(t.fdMaturityDate)}</span></span>
+                        <span style="color:var(--text-muted);">\u203a</span>
+                    </div>`).join("");
+            }
+            const subTitle = a.type === "multi" ? "Currencies" : a.type === "unittrust" ? "Funds" : "Open placements";
+            const due = a.type === "creditcard" ? Math.max(0, -(nativeBalances[a.id] || 0)) : 0;
+            const canAdd = a.type !== "fd" && a.type !== "unittrust";
+            return `
+                <div class="acct-detail${selected ? "" : " hidden"}" data-detail-id="${escapeHtml(id)}">
+                    <div class="acct-detail-stats">
+                        <div class="acct-stat"><span>Money in \u00b7 this month</span><b style="color:var(--income-color);">${formatCurrency(inSum, baseCurrency)}</b></div>
+                        <div class="acct-stat"><span>Money out \u00b7 this month</span><b style="color:var(--expense-color);">${formatCurrency(outSum, baseCurrency)}</b></div>
+                    </div>
+                    <div class="acct-actions">
+                        ${canAdd ? `<button type="button" class="acct-act-btn primary" data-click="accountsCardAddEntry" data-id="${escapeHtml(id)}">+ Add entry</button>` : ""}
+                        ${due > 0.005 ? `<button type="button" class="acct-act-btn pay" data-click="openCreditCardPayment" data-id="${escapeHtml(id)}">\uD83D\uDCB3 Pay</button>` : ""}
+                        <button type="button" class="acct-act-btn" data-click="navigateToLedgerPage" data-id="${escapeHtml(id)}" data-back="accounts">Activity</button>
+                        <button type="button" class="acct-act-btn" data-click="editAccount" data-id="${escapeHtml(id)}">Edit</button>
+                    </div>
+                    ${subHTML ? `<div class="acct-sub-title">${subTitle}</div>${subHTML}` : ""}
+                    <div class="acct-sub-title">Recent</div>
+                    ${recentHTML}
+                </div>`;
+        }
+
+        function buildAccountsCardsHTML(sorted, accounts, txs, nativeBalances, fundsByAccountId, fdPlacementsByAccountId, filter) {
+            if (sorted.length === 0) {
+                return filter
+                    ? `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No ${escapeHtml(filter.label)} accounts yet.</p>`
+                    : `<p style="color:var(--text-muted); text-align:center; padding:24px 0; font-size:0.85rem;">No accounts yet \u2014 tap + to add one.</p>`;
+            }
+            const groupOf = a => a.group || DEFAULT_ACCOUNT_GROUP;
+            const groups = ACCOUNT_GROUPS.filter(g => sorted.some(a => groupOf(a) === g));
+            if (accountsCardGroup !== "all" && !groups.includes(accountsCardGroup)) accountsCardGroup = "all";
+            const inGroup = accountsCardGroup === "all" ? sorted : sorted.filter(a => groupOf(a) === accountsCardGroup);
+            // v572: sub-groups actually present in the selected group, in the app's own sub-group order
+            let subChips = [];
+            if (accountsCardGroup !== "all") {
+                const order = subgroupsForGroup(accountsCardGroup);
+                const present = Array.from(new Set(inGroup.map(a => a.subgroup || "")));
+                subChips = present.filter(s => s !== "").sort((x, y) => order.indexOf(x) - order.indexOf(y));
+                if (present.includes("") && subChips.length > 0) subChips.push("__none");
+                if (subChips.length < 2) subChips = [];
+            }
+            if (accountsCardSubgroup !== "all" && !subChips.includes(accountsCardSubgroup)) accountsCardSubgroup = "all";
+            const subKey = a => a.subgroup || "__none";
+            const visible = (subChips.length && accountsCardSubgroup !== "all") ? inGroup.filter(a => subKey(a) === accountsCardSubgroup) : inGroup;
+            if (!visible.some(a => a.id === accountsCardSelectedId)) accountsCardSelectedId = visible[0].id;
+
+            const chips = groups.length > 1
+                ? `<div class="acct-chips" data-chiprow="group">
+                    <button type="button" class="acct-chip${accountsCardGroup === "all" ? " active" : ""}" data-click="selectAccountsCardGroup" data-group="all">All <span class="acct-chip-n">${sorted.length}</span></button>
+                    ${groups.map(g => `<button type="button" class="acct-chip${accountsCardGroup === g ? " active" : ""}" data-click="selectAccountsCardGroup" data-group="${escapeHtml(g)}">${escapeHtml(g)} <span class="acct-chip-n">${sorted.filter(a => groupOf(a) === g).length}</span></button>`).join("")}
+                   </div>`
+                : "";
+            const subLabel = s => s === "__none" ? "(No sub-group)" : s;
+            const subRow = subChips.length
+                ? `<div class="acct-chips acct-chips-sub" data-chiprow="sub">
+                    <button type="button" class="acct-chip sub${accountsCardSubgroup === "all" ? " active" : ""}" data-click="selectAccountsCardSubgroup" data-sub="all">All <span class="acct-chip-n">${inGroup.length}</span></button>
+                    ${subChips.map(s => `<button type="button" class="acct-chip sub${accountsCardSubgroup === s ? " active" : ""}" data-click="selectAccountsCardSubgroup" data-sub="${escapeHtml(s)}">${escapeHtml(subLabel(s))} <span class="acct-chip-n">${inGroup.filter(a => subKey(a) === s).length}</span></button>`).join("")}
+                   </div>`
+                : "";
+            const totalLabel = (subChips.length && accountsCardSubgroup !== "all") ? `Sub-group total \u00b7 ${subLabel(accountsCardSubgroup)}` : `Group total \u00b7 ${accountsCardGroup}`;
+            const groupTotal = accountsCardGroup !== "all"
+                ? `<div class="acct-group-total">${escapeHtml(totalLabel)}: ${formatBalanceHTML(visible.reduce((s, a) => s + accountBaseValue(a, nativeBalances), 0), baseCurrency)}</div>`
+                : "";
+            const slots = visible.map(a => `
+                <div class="acct-card-slot${a.id === accountsCardSelectedId ? " selected" : ""}${isDormantAccount(a) ? " dormant" : ""}" role="button" tabindex="0" aria-label="${escapeHtml(a.name)}" data-acct-id="${escapeHtml(a.id)}" data-click="selectAccountCard" data-id="${escapeHtml(a.id)}">
+                    ${accountCardFaceHTML(a, accounts, nativeBalances)}
+                </div>`).join("");
+            const selIdx = visible.findIndex(a => a.id === accountsCardSelectedId);
+            const dots = visible.length <= 10
+                ? `<div class="acct-dots" id="acctDots">${visible.map((a, i) => `<span class="acct-dot${i === selIdx ? " on" : ""}"></span>`).join("")}</div>`
+                : "";
+            const details = visible.map(a => accountCardDetailHTML(a, accounts, txs, nativeBalances, fundsByAccountId, fdPlacementsByAccountId, a.id === accountsCardSelectedId)).join("");
+            const isLast = selIdx === visible.length - 1 && visible.length > 1;
+            const jump = visible.length > 1
+                ? `<div class="acct-jump hidden" id="acctJumpList">${visible.map(a => `<button type="button" class="acct-jump-item" data-click="accountsCardJump" data-id="${escapeHtml(a.id)}">${escapeHtml(a.name)}</button>`).join("")}</div>`
+                : "";
+            return `${chips}${subRow}${groupTotal}
+                <div class="acct-cards-track" id="acctCardsTrack">${slots}</div>
+                <div class="acct-cards-meta">
+                    <button type="button" class="acct-step-btn" data-click="accountsCardStep" data-dir="-1" aria-label="Previous card" title="Previous card">\u2039</button>
+                    <button type="button" class="acct-counter-btn" id="acctCardsCounter" data-click="accountsCardCounterTap" aria-label="Choose a card from the list">${selIdx + 1} / ${visible.length}</button>
+                    ${dots}
+                    <button type="button" class="acct-first-btn${isLast ? "" : " hidden"}" id="acctFirstBtn" data-click="accountsCardGoFirst">\u21ba First</button>
+                    <button type="button" class="acct-step-btn" data-click="accountsCardStep" data-dir="1" aria-label="Next card" title="Next card">\u203a</button>
+                </div>
+                ${jump}
+                ${details}`;
+        }
+
+        // Centres the selected card on first paint and keeps the selection in step with swiping.
+        function wireAccountsCardsTrack() {
+            restoreAccountsChipScroll();
+            const track = document.getElementById("acctCardsTrack");
+            if (!track) return;
+            const centerSlot = (slot, smooth) => {
+                if (!slot || !isAccountsCarouselMode()) return;
+                track.scrollTo({ left: slot.offsetLeft - (track.clientWidth - slot.offsetWidth) / 2, behavior: smooth ? "smooth" : "auto" });
+            };
+            const selSlot = Array.from(track.children).find(s => s.dataset.acctId === accountsCardSelectedId);
+            centerSlot(selSlot, false);
+            let raf = null;
+            track.addEventListener("scroll", () => {
+                if (raf || !isAccountsCarouselMode()) return;
+                raf = requestAnimationFrame(() => {
+                    raf = null;
+                    const mid = track.scrollLeft + track.clientWidth / 2;
+                    let best = null, bestDist = Infinity;
+                    Array.from(track.children).forEach(s => {
+                        const d = Math.abs(s.offsetLeft + s.offsetWidth / 2 - mid);
+                        if (d < bestDist) { bestDist = d; best = s; }
+                    });
+                    if (best && best.dataset.acctId !== accountsCardSelectedId) selectAccountCard(best.dataset.acctId, true);
+                });
+            }, { passive: true });
+            track.addEventListener("keydown", (e) => {
+                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                    e.preventDefault();
+                    accountsCardStep({ dataset: { dir: e.key === "ArrowLeft" ? "-1" : "1" } });
+                    const cur = Array.from(track.children).find(s => s.dataset.acctId === accountsCardSelectedId);
+                    if (cur) cur.focus({ preventScroll: true });
+                    return;
+                }
+                if (e.key !== "Enter" && e.key !== " ") return;
+                const slot = e.target.closest && e.target.closest(".acct-card-slot");
+                if (!slot || e.target !== slot) return;
+                e.preventDefault();
+                selectAccountCard(slot.dataset.acctId, false);
+            });
+        }
+
+        // DOM-only selection change (no re-render): highlight, detail panel, counter, dots.
+        function selectAccountCard(id, fromScroll) {
+            if (!id) return;
+            accountsCardSelectedId = id;
+            const track = document.getElementById("acctCardsTrack");
+            if (!track) return;
+            const slots = Array.from(track.children);
+            slots.forEach(s => {
+                s.classList.toggle("selected", s.dataset.acctId === id);
+                if (s.dataset.acctId !== id) s.classList.remove("flipped"); // v572: a card never stays turned over once you leave it
+            });
+            document.querySelectorAll("#accountsPageList .acct-detail").forEach(d => d.classList.toggle("hidden", d.dataset.detailId !== id));
+            const idx = slots.findIndex(s => s.dataset.acctId === id);
+            const counter = document.getElementById("acctCardsCounter");
+            if (counter) counter.textContent = `${idx + 1} / ${slots.length}`;
+            const firstBtn = document.getElementById("acctFirstBtn");
+            if (firstBtn) firstBtn.classList.toggle("hidden", !(slots.length > 1 && idx === slots.length - 1));
+            document.querySelectorAll("#acctDots .acct-dot").forEach((d, i) => d.classList.toggle("on", i === idx));
+            if (!fromScroll && isAccountsCarouselMode() && idx >= 0) {
+                const slot = slots[idx];
+                track.scrollTo({ left: slot.offsetLeft - (track.clientWidth - slot.offsetWidth) / 2, behavior: "smooth" });
+            }
+        }
+        function flipAccountCard(el) {
+            const slot = el.closest(".acct-card-slot");
+            if (slot) slot.classList.toggle("flipped");
+        }
+        function accountsCardAddEntry(el) {
+            openTransactionForm("expense", null, el.dataset.id);
+        }
+
         // Wired to the ▸/▾ caret on an Accounts-page row that has fund/currency/FD-placement
         // subrows (v62) — toggles just that one account's subrow container + caret glyph
         // directly in the DOM rather than re-rendering the whole list, so the rest of the page
@@ -6782,6 +7893,10 @@
             stagedAccLogoDataUrl = null; // unchanged unless the user picks/removes a new one below
             renderAccLogoPreview(account.logo || null);
             document.getElementById("newAccRef").value = account.accountRef || "";
+            document.getElementById("newAccStatus").value = isDormantAccount(account) ? "dormant" : "active"; // v614
+            document.getElementById("newAccDormantSince").value = account.dormantSince || "";
+            document.getElementById("newAccDormantNote").value = account.dormantNote || "";
+            toggleAccDormantFields();
             document.getElementById("newAccGroup").value = account.group || DEFAULT_ACCOUNT_GROUP;
             await handleAccGroupChange(
                 account.subgroup || "",
@@ -7056,7 +8171,7 @@
             document.getElementById("fundActivityMeta").innerHTML = `
                 <span>${escapeHtml(fund.category || "")}${fund.code ? " · " + escapeHtml(fund.code) : ""}</span>
                 <span style="color:var(--primary); font-weight:700;">${escapeHtml(ownerLabel)}</span>
-                <span>${(fund.units || 0).toFixed(4)} ${gold ? "g" : "units"} @ ${formatCurrency(fund.currentNav || 0, fund.currency)}${gold ? "/g" : " NAV"}${goldStalenessBadgeHTML(fund)}</span>
+                <span>${(fund.units || 0).toFixed(4)} ${gold ? "g" : "units"} @ ${formatNavPrice(fund.currentNav || 0, fund.currency)}${gold ? "/g" : " NAV"}${goldStalenessBadgeHTML(fund)}</span>
             `;
 
             const html = fundTxs.map(t => {
@@ -7177,7 +8292,7 @@
                 return `
                     <div class="ledger-item" data-click="openTxQuickView" data-type="${escapeHtml(t.type)}" data-id="${escapeHtml(t.id)}">
                         <div class="item-left">
-                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}</span>
+                            <span class="item-name">${iconBadge} ${escapeHtml(t.desc)}${txAttachBadgeHTML(t)}</span>
                             <span class="item-meta">${escapeHtml(t.date)} [${escapeHtml(displayCat)}]${referenceText}</span>
                             <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                             ${notesLine}
@@ -7743,6 +8858,12 @@
                     </td>
                 </tr>`;
         }
+        // v525: same summary as closedFundsSummaryRow, but a <div> for the card layout.
+        function closedFundsSummaryCard(count, plText, plPositive) {
+            const expanded = getShowClosedFunds();
+            const plColor = plPositive ? "var(--income-color)" : "var(--expense-color)";
+            return `<div class="fh-closed" data-click="toggleClosedFunds" title="Fully redeemed funds (0 units). They still count in every total.">${expanded ? "▾" : "▸"} ${count} closed fund${count === 1 ? "" : "s"} · Realized P/L <span style="color:${plColor};">${plText}</span> · ${expanded ? "tap to hide" : "tap to show"}</div>`;
+        }
         function toggleClosedFunds() {
             setShowClosedFunds(!getShowClosedFunds());
             renderApp();
@@ -7859,27 +8980,25 @@
                 const closed = isClosedFund(f, invested);
                 if (closed) closedPl += pl;
                 (closed ? closedRows : rowsHtml).push(`
-                    <tr style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}">
-                        <td style="padding:8px 10px;">
-                            <strong>${escapeHtml(f.name)}</strong><br>
-                            <span style="font-size:0.68rem; color:var(--text-muted);">${escapeHtml(f.code || "")}</span><br>
-                            <span style="font-size:0.68rem; color:var(--primary); font-weight:700;">${escapeHtml(ownerLabel)}</span>
-                        </td>
-                        <td style="padding:8px 10px;">${escapeHtml(f.category || "")}</td>
-                        <td style="padding:8px 10px; text-align:right;">${(f.units || 0).toFixed(4)}${isGoldFund(f) ? " g" : ""}</td>
-                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(f.currentNav || 0, f.currency)}${isGoldFund(f) ? "/g" : ""}${goldStalenessBadgeHTML(f)}</td>
-                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(value, f.currency)}</strong></td>
-                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested, f.currency)}</td>
-                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested - recovered, f.currency)}</td>
-                        <td style="padding:8px 10px; text-align:right; color:${plColor}; font-weight:700;">${pl >= 0 ? "+" : ""}${formatCurrency(pl, f.currency)}</td>
-                        <td style="padding:8px 10px; text-align:right; color:${plColor};">${returnPct.toFixed(2)}%</td>
-                        <td style="padding:8px 10px; text-align:right;">${holdingYears >= 0.08 ? annualised.toFixed(2) + "%" : "-"}</td>
-                        <td style="padding:8px 10px; text-align:right;">${holdingYears >= 0.08 ? holdingYears.toFixed(1) + " yrs" : "-"}</td>
-                    </tr>`);
+                    <div class="fh-card ${pl >= 0 ? "pos" : "neg"}" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}">
+                        <div class="fh-head">
+                            <div style="min-width:0;">
+                                <div class="fh-name">${escapeHtml(f.name)}</div>
+                                ${fundCardSubHTML(f, fundTxs)}
+                                <div class="fh-chips">${f.category ? `<span class="fh-chip">${escapeHtml(f.category)}</span>` : ""}${ownerLabel ? `<span class="fh-chip owner">${escapeHtml(ownerLabel)}</span>` : ""}</div>
+                            </div>
+                            <div class="fh-val">
+                                <div class="fh-val-main">${formatCurrency(value, f.currency)}</div>
+                                <div class="fh-pl">${pl >= 0 ? "+" : ""}${formatCurrency(pl, f.currency)} (${returnPct.toFixed(2)}%)</div>
+                                ${fundAnnualisedLineHTML(f, fundTxs)}
+                            </div>
+                        </div>
+                        ${fundCardStatsHTML(f, invested, recovered, fundTxs)}
+                    </div>`);
             });
 
             if (closedRows.length > 0) {
-                rowsHtml.push(closedFundsSummaryRow(closedRows.length, (closedPl >= 0 ? "+" : "") + formatCurrency(closedPl, commonCurrency || baseCurrency), closedPl >= 0, 11));
+                rowsHtml.push(closedFundsSummaryCard(closedRows.length, (closedPl >= 0 ? "+" : "") + formatCurrency(closedPl, commonCurrency || baseCurrency), closedPl >= 0));
                 if (getShowClosedFunds()) closedRows.forEach(r => rowsHtml.push(r));
             }
 
@@ -7914,22 +9033,20 @@
                 if (commonCurrency === null) commonCurrency = currency; else if (commonCurrency !== currency) mixedCurrency = true;
 
                 rowsHtml.push(`
-                    <tr style="opacity:0.7;">
-                        <td style="padding:8px 10px;">
-                            <strong>${escapeHtml(name)}</strong><br>
-                            <span style="font-size:0.68rem; color:var(--expense-color); font-weight:700;">⚠️ fund deleted</span>
-                        </td>
-                        <td style="padding:8px 10px;">-</td>
-                        <td style="padding:8px 10px; text-align:right;">${units.toFixed(4)}</td>
-                        <td style="padding:8px 10px; text-align:right;">-</td>
-                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(orphanValue, currency)}</strong></td>
-                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested, currency)}</td>
-                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested - recovered, currency)}</td>
-                        <td style="padding:8px 10px; text-align:right;">-</td>
-                        <td style="padding:8px 10px; text-align:right;">-</td>
-                        <td style="padding:8px 10px; text-align:right;">-</td>
-                        <td style="padding:8px 10px; text-align:right;">-</td>
-                    </tr>`);
+                    <div class="fh-card orphan">
+                        <div class="fh-head">
+                            <div style="min-width:0;">
+                                <div class="fh-name">${escapeHtml(name)}</div>
+                                <div class="fh-sub" style="color:var(--expense-color); font-weight:700;">⚠️ fund deleted</div>
+                            </div>
+                            <div class="fh-val"><div class="fh-val-main">${formatCurrency(orphanValue, currency)}</div></div>
+                        </div>
+                        <div class="fh-stats">
+                            <div><div class="fh-stat-l">Units</div><div class="fh-stat-v">${units.toFixed(4)}</div></div>
+                            <div><div class="fh-stat-l">Invested</div><div class="fh-stat-v">${formatCurrency(invested, currency)}</div></div>
+                            ${Math.abs(recovered) >= 0.005 ? `<div><div class="fh-stat-l">Current inv.</div><div class="fh-stat-v">${formatCurrency(invested - recovered, currency)}</div></div>` : ""}
+                        </div>
+                    </div>`);
             });
 
             if (rowsHtml.length === 0) {
@@ -7942,39 +9059,19 @@
             // Totals only mean much as one number when every fund shares a currency — with a
             // mixed basket, sum the figures at face value but flag it rather than implying a false
             // single-currency total.
-            const totalsRow = `
-                <tr style="border-top:2px solid var(--border-color); font-weight:700;">
-                    <td style="padding:8px 10px;" colspan="2">Total${mixedCurrency ? ' <span style="font-weight:400; font-size:0.68rem; color:var(--text-muted);">(mixed currencies — summed at face value)</span>' : ""}</td>
-                    <td style="padding:8px 10px;"></td>
-                    <td style="padding:8px 10px;"></td>
-                    <td style="padding:8px 10px; text-align:right;">${formatCurrency(totalValue, commonCurrency || baseCurrency)}</td>
-                    <td style="padding:8px 10px; text-align:right;">${formatCurrency(totalInvested, commonCurrency || baseCurrency)}</td>
-                    <td style="padding:8px 10px; text-align:right;">${formatCurrency(totalInvested - totalRecovered, commonCurrency || baseCurrency)}</td>
-                    <td style="padding:8px 10px; text-align:right; color:${totalPlColor};">${totalPl >= 0 ? "+" : ""}${formatCurrency(totalPl, commonCurrency || baseCurrency)}</td>
-                    <td style="padding:8px 10px; text-align:right; color:${totalPlColor};">${totalReturnPct.toFixed(2)}%</td>
-                    <td style="padding:8px 10px;"></td>
-                    <td style="padding:8px 10px;"></td>
-                </tr>`;
+            const cur = commonCurrency || baseCurrency;
+            // v528: the old Total card now lives in the balance hero at the top of the page.
+            const heroSub = document.getElementById("ledgerBalanceHeroSub");
+            if (heroSub) {
+                heroSub.innerHTML = `
+                    <span class="fh-pl" style="--pl:${totalPlColor};">${totalPl >= 0 ? "+" : ""}${formatCurrency(totalPl, cur)} (${totalReturnPct.toFixed(2)}%)</span>
+                    <span>Invested<b>${formatCurrency(totalInvested, cur)}</b></span>
+                    ${Math.abs(totalRecovered) >= 0.005 ? `<span>Current inv.<b>${formatCurrency(totalInvested - totalRecovered, cur)}</b></span>` : ""}
+                    ${mixedCurrency ? '<span class="bal-hero-note">Mixed currencies — totals are summed at face value</span>' : ""}`;
+                heroSub.style.display = "flex";
+            }
 
-            wrap.innerHTML = `
-                <table style="width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
-                    <thead>
-                        <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase;">
-                            <th style="padding:6px 10px;">Fund</th>
-                            <th style="padding:6px 10px;">Category</th>
-                            <th style="padding:6px 10px; text-align:right;">Units</th>
-                            <th style="padding:6px 10px; text-align:right;">NAV</th>
-                            <th style="padding:6px 10px; text-align:right;">Value</th>
-                            <th style="padding:6px 10px; text-align:right;">Invested</th>
-                            <th style="padding:6px 10px; text-align:right;" title="Invested minus Recovered (cash already taken out via sells / payouts). Current Invested + P/L = Value.">Current Inv.</th>
-                            <th style="padding:6px 10px; text-align:right;">P/L</th>
-                            <th style="padding:6px 10px; text-align:right;">Return</th>
-                            <th style="padding:6px 10px; text-align:right;">Annualised</th>
-                            <th style="padding:6px 10px; text-align:right;">Holding</th>
-                        </tr>
-                    </thead>
-                    <tbody>${rowsHtml.join("")}${totalsRow}</tbody>
-                </table>`;
+            wrap.innerHTML = rowsHtml.join("");
         }
 
         // --- DAILY NAV UPDATE PAGE ---
@@ -8052,13 +9149,64 @@
         // wants to show the Account No./Ref in its own separate spot — see the Accounts-page
         // .account-card-refline below the account name — opt out of it here, so it isn't also
         // repeated in whatever this function returns for the rest of the row/banner.
+        // v615: card numbers in Account No. / Ref are shown masked (•••• 1234) and revealed only on tap.
+        // A Credit Card account always masks a number of 8+ digits; any other account masks it only
+        // when it looks like a card number (13-19 digits that pass the Luhn check), so ordinary bank
+        // account numbers keep showing in full. The full number is NOT put into the page while masked
+        // (revealAccountRef reads it back from the database), and the edit form still shows it in full.
+        function accountRefDigits(ref) { return String(ref || "").replace(/\D/g, ""); }
+        function luhnValid(d) {
+            let sum = 0, dbl = false;
+            for (let i = d.length - 1; i >= 0; i--) {
+                let n = d.charCodeAt(i) - 48;
+                if (dbl) { n *= 2; if (n > 9) n -= 9; }
+                sum += n; dbl = !dbl;
+            }
+            return sum % 10 === 0;
+        }
+        function shouldMaskAccountRef(a) {
+            if (!a || !a.accountRef) return false;
+            const d = accountRefDigits(a.accountRef);
+            if (d.length < 8) return false;
+            if (a.type === "creditcard") return true;
+            return d.length >= 13 && d.length <= 19 && luhnValid(d);
+        }
+        function accountRefDisplayHTML(a) {
+            if (!shouldMaskAccountRef(a)) return escapeHtml(a.accountRef || "");
+            const last4 = accountRefDigits(a.accountRef).slice(-4);
+            return `<span class="acct-ref-mask" data-click="revealAccountRef" data-id="${escapeHtml(a.id)}" data-mask="\u2022\u2022\u2022\u2022 ${last4}" role="button" tabindex="0" title="Tap to show the full number for 5 seconds">\u2022\u2022\u2022\u2022 ${last4} \uD83D\uDC41</span>`;
+        }
+        async function revealAccountRef(el) {
+            if (!el) return;
+            if (el._hideTimer) { clearTimeout(el._hideTimer); el._hideTimer = null; }
+            if (el.dataset.shown === "1") { el.textContent = el.dataset.mask + " \uD83D\uDC41"; el.dataset.shown = "0"; return; }
+            const accts = await readAllDB(STORES.ACCOUNTS);
+            const a = accts.find(x => x.id === el.dataset.id);
+            if (!a || !a.accountRef) return;
+            el.textContent = a.accountRef;
+            el.dataset.shown = "1";
+            el._hideTimer = setTimeout(() => { el.textContent = el.dataset.mask + " \uD83D\uDC41"; el.dataset.shown = "0"; el._hideTimer = null; }, 5000);
+        }
+
+        // v614: Dormant status helpers. Manual flag only (see the Account status field) — Ledger
+        // can't know the bank's own dormancy rule, and interest credits don't count as activity.
+        function isDormantAccount(a) { return !!a && a.status === "dormant"; }
+        function dormantAccountLine(a) {
+            if (!isDormantAccount(a)) return "";
+            const bits = [a.dormantSince ? `Dormant since ${formatNavHistoryDate(a.dormantSince)}` : "Dormant"];
+            if (a.dormantNote) bits.push(escapeHtml(a.dormantNote));
+            return `<br><span class="acct-dormant-line" style="font-size:0.7rem; font-weight:600;">💤 ${bits.join(" · ")}</span>`;
+        }
         function accountExtraInfoLine(a, nativeBalances, includeRef = true, accounts = null) {
+            return accountExtraInfoLineBase(a, nativeBalances, includeRef, accounts) + dormantAccountLine(a);
+        }
+        function accountExtraInfoLineBase(a, nativeBalances, includeRef = true, accounts = null) {
             const group = a.group || DEFAULT_ACCOUNT_GROUP;
             // Account No. / Ref (v130): plain informational text, independent of group/type, so
             // it's built separately here and prepended ahead of whichever type-specific line (if
             // any) applies below, rather than living inside one of those mutually-exclusive
             // branches.
-            const refLine = (includeRef && a.accountRef) ? `<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${escapeHtml(a.accountRef)}</span>` : "";
+            const refLine = (includeRef && a.accountRef) ? `<br><span style="font-size:0.7rem; color:var(--text-muted); font-weight:600;">${accountRefDisplayHTML(a)}</span>` : "";
             // v412: "Shares Credit Limit With" — when set, Limit/Available are computed across
             // the whole group (this card's anchor + every other card pointing at that same
             // anchor) instead of just this one account, so every card in the group shows the
@@ -8087,7 +9235,7 @@
                     const available = Math.max(0, ccAnchor.creditLimit - ccAmountDueForAvail);
                     bits.push(`Available ${formatBalanceHTML(available, a.currency || baseCurrency)}`);
                 }
-                return refLine + (bits.length ? `<br><span style="font-size:0.7rem; color:#9d174d; font-weight:600;">💳 ${bits.join(" · ")}</span>` : "");
+                return refLine + (bits.length ? `<br><span class="acct-cc-line" style="font-size:0.7rem; font-weight:600;">💳 ${bits.join(" · ")}</span>` : "");
             }
             if (group === "Real Estate" && (a.propertyType || a.holdingStartDate)) {
                 const bits = [];
@@ -8102,7 +9250,7 @@
             }
             if (group === "Bank Loan" && a.hasRedrawFacility) {
                 const dateStr = a.redrawAsOfDate ? ` (as of ${formatNavHistoryDate(a.redrawAsOfDate)})` : "";
-                return refLine + `<br><span style="font-size:0.7rem; color:#0369a1; font-weight:600;">💰 Redraw Available: ${formatBalanceHTML(a.redrawAmount || 0, a.currency || baseCurrency)}${dateStr}</span>`;
+                return refLine + `<br><span class="acct-redraw-line" style="font-size:0.7rem; font-weight:600;">💰 Redraw Available: ${formatBalanceHTML(a.redrawAmount || 0, a.currency || baseCurrency)}${dateStr}</span>`;
             }
             return refLine;
         }
@@ -8515,6 +9663,8 @@
             // font="kalam"]), so re-asserting it here on every theme apply is harmless for every
             // other preset and keeps it correctly set even right after a fresh selectBgTheme().
             applyCrayonFontAttr();
+            applyAppFontAttr(); // v577: re-assert the global App font too (cheap, idempotent)
+            applyZhFontAttr(); // v584: same for the Chinese font
             if (save) {
                 try {
                     localStorage.setItem(BG_THEME_STORAGE_KEY, JSON.stringify(theme));
@@ -8595,6 +9745,8 @@
             if (autoToggle) autoToggle.checked = isBgThemeAutoEnabled();
             const fontToggle = document.getElementById("crayonFontToggle");
             if (fontToggle) fontToggle.checked = isCrayonFontEnabled();
+            applyAppFontAttr();
+            applyZhFontAttr(); // v584
         }
 
         function selectBgTheme(el) {
@@ -8667,6 +9819,7 @@
             window.scrollTo(0, 0);
             pushVirtualState("bgtheme");
             buildBgThemeSwatchGrid();
+            zhPackOnPickerOpen(); // v594: offline-font status line (saved state first, then the cache check)
         }
 
         // --- v326: Net Worth Card Style (Setting page) --------------------------------------
@@ -9156,6 +10309,387 @@
             setCrayonFontEnabled(!!(toggle && toggle.checked));
         }
 
+        // v577: global "App font" picker (Settings > Background Theme > App font) — "default"
+        // (the app's normal sans-serif), "kalam" or "shadows" (Shadows Into Light Two). Applied as
+        // html[data-app-font] (see the CSS next to the crayon font rule in index.html), and mirrored
+        // in theme-init.js so the saved font is already active on first paint.
+        const APP_FONT_KEY = "ledgerAppFont";
+        const APP_FONT_CHOICES = ["default", "kalam", "shadows"];
+        function getAppFont() {
+            let v = null;
+            try { v = localStorage.getItem(APP_FONT_KEY); } catch (e) {}
+            return APP_FONT_CHOICES.includes(v) ? v : "default";
+        }
+        function applyAppFontAttr() {
+            document.documentElement.setAttribute("data-app-font", getAppFont());
+            const cur = getAppFont();
+            document.querySelectorAll("#appFontPicker .app-font-opt").forEach(b => b.classList.toggle("selected", b.dataset.font === cur));
+        }
+        // v584: Chinese-only font choice ("default" | "longcang" | "mashanzheng" (v590)), independent of the App font above.
+        // html[data-zh-font] sets --zh-ff (see the CSS in index.html); mirrored in theme-init.js.
+        const ZH_FONT_KEY = "ledgerZhFont";
+        const ZH_FONT_CHOICES = ["default", "longcang", "mashanzheng"]; // v590: + Ma Shan Zheng
+        function getZhFont() {
+            let v = null;
+            try { v = localStorage.getItem(ZH_FONT_KEY); } catch (e) {}
+            return ZH_FONT_CHOICES.includes(v) ? v : "default";
+        }
+        function applyZhFontAttr() {
+            const cur = getZhFont();
+            document.documentElement.setAttribute("data-zh-font", cur);
+            document.querySelectorAll("#zhFontPicker .app-font-opt").forEach(b => b.classList.toggle("selected", b.dataset.font === cur));
+            applyZhSizeAttr(); // v588
+            try { renderZhPackStatus(); } catch (e) {} // v594
+        }
+        // v588: "Chinese size" for the Long Cang / Ma Shan Zheng (v590) fonts — device-only (localStorage, like the font choice itself: not in the backup,
+        // does not trigger a Drive sync). Done with CSS `size-adjust` on COPIES of the Chinese @font-face slices (families
+        // "Long Cang L"/"Klee One ZH L" = 110%, "... XL" = 120%), built once per size from the existing rules; CSS vars in
+        // index.html (--zh-ff) point at them. size-adjust scales only those glyphs, so English / digits are untouched.
+        const ZH_SIZE_KEY = "ledgerZhFontSize";
+        const ZH_SIZE_PCT = { normal: 100, large: 110, larger: 120 };
+        const ZH_SIZE_SUFFIX = { large: "L", larger: "XL" };
+        function getZhSize() {
+            let v = null;
+            try { v = localStorage.getItem(ZH_SIZE_KEY); } catch (e) {}
+            return Object.prototype.hasOwnProperty.call(ZH_SIZE_PCT, v) ? v : "normal";
+        }
+        function ensureZhSizeFonts(size) {
+            if (!ZH_SIZE_SUFFIX[size]) return;
+            const id = "zhSizeFonts-" + size;
+            if (document.getElementById(id)) return;
+            let css = "";
+            try {
+                for (const sheet of Array.from(document.styleSheets)) {
+                    let rules;
+                    try { rules = sheet.cssRules; } catch (e) { continue; }
+                    for (const r of Array.from(rules)) {
+                        if (!(r instanceof CSSFontFaceRule) && r.type !== 5) continue;
+                        const fam = (r.style.getPropertyValue("font-family") || "").replace(/["']/g, "").trim();
+                        if (fam !== "Long Cang" && fam !== "Ma Shan Zheng" && fam !== "Klee One ZH") continue; // v590: + Ma Shan Zheng
+                        css += r.cssText.replace(/font-family:\s*[^;]+;/, `font-family: "${fam} ${ZH_SIZE_SUFFIX[size]}"; size-adjust: ${ZH_SIZE_PCT[size]}%;`) + "\n";
+                    }
+                }
+            } catch (e) {}
+            if (!css) return;
+            const st = document.createElement("style");
+            st.id = id;
+            st.textContent = css;
+            document.head.appendChild(st);
+        }
+        function applyZhSizeAttr() {
+            const size = getZhSize();
+            if (getZhFont() !== "default") ensureZhSizeFonts(size); // v590: Long Cang or Ma Shan Zheng
+            document.documentElement.setAttribute("data-zh-size", size);
+            document.querySelectorAll("#zhSizeRow .zh-size-opt").forEach(b => b.classList.toggle("selected", b.dataset.size === size));
+        }
+        function selectZhSize(el) {
+            const v = el && el.dataset ? el.dataset.size : "normal";
+            try { localStorage.setItem(ZH_SIZE_KEY, Object.prototype.hasOwnProperty.call(ZH_SIZE_PCT, v) ? v : "normal"); } catch (e) {}
+            applyZhSizeAttr();
+        }
+        function selectZhFont(el) {
+            const v = el && el.dataset ? el.dataset.font : "default";
+            try { localStorage.setItem(ZH_FONT_KEY, ZH_FONT_CHOICES.includes(v) ? v : "default"); } catch (e) {}
+            applyZhFontAttr();
+            if (ZH_PACKS[v]) zhPackDownload(v, { user: true }); // v594: save the whole font for offline (resumable; no-op when already saved)
+        }
+
+        // ---- v594: offline copy of the Chinese handwriting fonts ("Saved for offline") --------------------
+        // Long Cang / Ma Shan Zheng are cut into 88 slices each, and the browser only fetches a slice when a
+        // character in it is shown — so a character you have never seen before needs a connection. This block
+        // lets the person download the WHOLE font (every slice + the shared Klee One fallback) once:
+        //  * resumable — what is already in the font cache is never fetched again; an interrupted download only
+        //    fetches what is missing; at most ZH_PACK_CONCURRENCY requests at a time (one pack at a time);
+        //  * "saved" means every slice is really in the cache (a response only counts once cache.put succeeded);
+        //  * the status line reads the saved state in localStorage (ZH_PACK_KEY) so it is right the moment the
+        //    picker opens, then a background check against the cache downgrades it if slices went missing
+        //    (the browser may evict the cache under storage pressure) — the state is the fast answer, the cache
+        //    is the truth;
+        //  * font-version.js says which version of the font FILES is current; a saved copy recorded at an older
+        //    version is "stale": still used offline, refreshed quietly (only) when the picker is opened or the
+        //    font is used while online — never just because the app version changed;
+        //  * "Remove offline copy" (⋯ menu) deletes a font's slices but keeps the Klee One fallback while the
+        //    other font still has a copy.
+        // Device-only, like the font choice: not in the backup, does not sync.
+        const ZH_PACK_KEY = "ledgerZhFontPack";
+        const ZH_PACKS = {
+            longcang:    { families: ["Long Cang", "Klee One ZH"],     short: "Long Cang",     mb: "4.6" },
+            mashanzheng: { families: ["Ma Shan Zheng", "Klee One ZH"], short: "Ma Shan Zheng", mb: "5.0" }
+        };
+        const ZH_PACK_CONCURRENCY = 3;
+        const ZH_PACK_AUTO_RETRY_MS = 10 * 60 * 1000; // quiet (non-tap) retries at most this often
+        const zhPackRun = {};      // pack -> { running, done, total, cancel, promise } (in memory only)
+        const zhPackUrlCache = {};
+        let zhPackChain = Promise.resolve(); // one pack downloads at a time -> total concurrency stays <= 3
+        let zhPackMenuOpen = false;
+
+        function zhFontCacheName() { return self.LEDGER_FONT_CACHE || "ledger-fonts-v1"; }
+        function zhFontVersion() { return self.LEDGER_FONT_VERSION || "f1"; }
+        function zhPackAll() {
+            let o = {};
+            try { o = JSON.parse(localStorage.getItem(ZH_PACK_KEY) || "{}") || {}; } catch (e) { o = {}; }
+            return (o && typeof o === "object") ? o : {};
+        }
+        function zhPackGet(pack) { const s = zhPackAll()[pack]; return (s && typeof s === "object") ? s : { s: "none" }; }
+        function zhPackSet(pack, st) {
+            const all = zhPackAll();
+            all[pack] = st;
+            try { localStorage.setItem(ZH_PACK_KEY, JSON.stringify(all)); } catch (e) {}
+        }
+        // The font files of a pack = the url() of its @font-face rules (single source of truth: index.html).
+        function zhPackUrls(pack) {
+            if (zhPackUrlCache[pack]) return zhPackUrlCache[pack];
+            const fams = ZH_PACKS[pack] ? ZH_PACKS[pack].families : [];
+            const set = new Set();
+            try {
+                for (const sheet of Array.from(document.styleSheets)) {
+                    let rules;
+                    try { rules = sheet.cssRules; } catch (e) { continue; }
+                    for (const r of Array.from(rules)) {
+                        if (!(r instanceof CSSFontFaceRule) && r.type !== 5) continue;
+                        const fam = (r.style.getPropertyValue("font-family") || "").replace(/["']/g, "").trim();
+                        if (!fams.includes(fam)) continue; // exact names only: the "... L" / "... XL" size copies reuse the same files
+                        for (const m of (r.style.getPropertyValue("src") || "").matchAll(/url\(\s*["']?([^"')]+?)["']?\s*\)/g)) {
+                            try { set.add(new URL(m[1], document.baseURI).href); } catch (e) {}
+                        }
+                    }
+                }
+            } catch (e) {}
+            const list = Array.from(set);
+            if (list.length) zhPackUrlCache[pack] = list;
+            return list;
+        }
+        async function zhPackPresent(cache) {
+            const c = cache || await caches.open(zhFontCacheName());
+            return new Set((await c.keys()).map(k => k.url));
+        }
+        // What the status line should say, from the saved state (+ a running download, if any).
+        function zhPackView(pack) {
+            const run = zhPackRun[pack];
+            if (run && run.running) return { k: "saving", done: run.done, total: run.total };
+            const st = zhPackGet(pack);
+            if (st.s === "saved") return { k: st.fv === zhFontVersion() ? "saved" : "stale", err: st.err };
+            if (st.s === "partial") return { k: "partial", n: st.n || 0, t: st.t || 0, err: st.err };
+            return { k: "none", err: st.err };
+        }
+        function zhPackErrText(err) {
+            if (err === "offline") return " Connect to the internet to save. 联网后再保存。";
+            if (err === "storage") return " Not enough storage space. 存储空间不足。";
+            if (err === "missing") return " Font files not found on the server. 服务器上找不到字体文件。";
+            if (err === "net") return " Network problem — will retry. 网络问题，稍后重试。";
+            return "";
+        }
+        function renderZhPackStatus() {
+            const row = document.getElementById("zhPackRow");
+            const textEl = document.getElementById("zhPackText");
+            if (!row || !textEl) return;
+            const sel = getZhFont();
+            const selPack = ZH_PACKS[sel] ? sel : null;
+            const anyCopy = Object.keys(ZH_PACKS).some(p => zhPackView(p).k !== "none");
+            row.classList.toggle("show", !!(selPack || anyCopy));
+            let state = "none", txt = "";
+            if (selPack) {
+                const v = zhPackView(selPack);
+                state = v.k;
+                if (v.k === "saving") txt = v.total ? `Saving for offline… ${v.done}/${v.total} · 正在保存供离线使用` : "Saving for offline… · 正在保存供离线使用";
+                else if (v.k === "saved") txt = "Saved for offline · 已保存，可离线使用";
+                else if (v.k === "stale") txt = "Saved for offline (older font files) — will update when online · 离线可用，联网时会自动更新" + zhPackErrText(v.err);
+                else if (v.k === "partial") txt = `Not saved yet (${v.n}/${v.t}) — will retry when online · 还没保存完整，联网时会自动重试` + zhPackErrText(v.err);
+                else txt = "Not saved for offline · 未保存离线副本" + zhPackErrText(v.err);
+            } else if (anyCopy) {
+                state = "copies";
+                const parts = Object.keys(ZH_PACKS).filter(p => zhPackView(p).k !== "none").map(p => {
+                    const k = zhPackView(p).k;
+                    return ZH_PACKS[p].short + (k === "saved" ? " ✓" : k === "stale" ? " ✓ (older)" : k === "saving" ? " …" : " (incomplete)");
+                });
+                txt = "Offline font copies: " + parts.join(", ") + " · 离线字体副本";
+            }
+            textEl.textContent = txt;
+            textEl.dataset.state = state;
+            renderZhPackMenu();
+        }
+        function renderZhPackMenu() {
+            const menu = document.getElementById("zhPackMenu");
+            const btn = document.getElementById("zhPackMore");
+            if (!menu) return;
+            menu.hidden = !zhPackMenuOpen;
+            if (btn) btn.setAttribute("aria-expanded", zhPackMenuOpen ? "true" : "false");
+            if (!zhPackMenuOpen) return;
+            const items = [];
+            const sel = getZhFont();
+            if (ZH_PACKS[sel]) {
+                const v = zhPackView(sel);
+                if (v.k === "none" || v.k === "partial" || v.k === "stale") {
+                    const verb = v.k === "none" ? "Save for offline now" : v.k === "partial" ? "Resume saving" : "Update offline copy";
+                    items.push(`<button type="button" class="zh-pack-menu-btn" data-click="zhPackSaveNow" data-pack="${sel}">⬇ ${verb} (≈${ZH_PACKS[sel].mb} MB)</button>`);
+                }
+            }
+            for (const p of Object.keys(ZH_PACKS)) {
+                if (zhPackView(p).k !== "none") items.push(`<button type="button" class="zh-pack-menu-btn" data-click="zhPackRemoveCopy" data-pack="${p}">🗑 Remove offline copy — ${ZH_PACKS[p].short} 删除离线副本</button>`);
+            }
+            if (!items.length) items.push('<span class="zh-pack-menu-note">No offline copy saved. 没有离线副本。</span>');
+            menu.innerHTML = items.join("");
+        }
+        function toggleZhPackMenu() { zhPackMenuOpen = !zhPackMenuOpen; renderZhPackMenu(); }
+
+        // Download (or resume, or refresh) every file of a pack. Resolves when finished; never throws.
+        function zhPackDownload(pack, opts) {
+            if (!ZH_PACKS[pack]) return Promise.resolve();
+            const cur = zhPackRun[pack];
+            if (cur && cur.running) return cur.promise;
+            const run = { running: true, done: 0, total: 0, cancel: false, promise: null };
+            zhPackRun[pack] = run;
+            renderZhPackStatus();
+            run.promise = zhPackChain = zhPackChain
+                .then(() => zhPackDownloadNow(pack, opts || {}, run))
+                .catch(() => {})
+                .then(() => { run.running = false; renderZhPackStatus(); });
+            return run.promise;
+        }
+        async function zhPackDownloadNow(pack, opts, run) {
+            const urls = zhPackUrls(pack);
+            const st = zhPackGet(pack);
+            const now = Date.now();
+            if (!urls.length || !("caches" in window)) { zhPackSet(pack, Object.assign({}, st, { la: now, err: "unsupported" })); return; }
+            if (!navigator.onLine) { zhPackSet(pack, Object.assign({}, st, { la: now, err: "offline" })); return; }
+            const ver = zhFontVersion();
+            // Recorded at an older font version -> refresh every file (cache:"reload"); resumable via st.rf.d.
+            const outdated = (st.s === "saved" || st.s === "partial") && !!st.fv && st.fv !== ver;
+            let rf = null, todo;
+            const cache = await caches.open(zhFontCacheName());
+            const indexed = urls.map((u, i) => ({ u, i }));
+            if (outdated) {
+                rf = { fv: ver, d: (st.rf && st.rf.fv === ver && Array.isArray(st.rf.d)) ? st.rf.d.slice() : [] };
+                const done = new Set(rf.d);
+                todo = indexed.filter(x => !done.has(x.i));
+            } else {
+                const present = await zhPackPresent(cache);
+                todo = indexed.filter(x => !present.has(x.u));
+            }
+            run.total = urls.length;
+            run.done = urls.length - todo.length;
+            renderZhPackStatus();
+            let next = 0, failed = 0, missing = 0, fatal = null;
+            const worker = async () => {
+                while (!fatal && !run.cancel) {
+                    if (!navigator.onLine) { fatal = "offline"; return; }
+                    const j = next++;
+                    if (j >= todo.length) return;
+                    const item = todo[j];
+                    let ok = false, status = 0;
+                    for (let attempt = 0; attempt < 2 && !ok && !fatal && !run.cancel; attempt++) {
+                        try {
+                            const resp = await fetch(item.u, { cache: "reload" });
+                            status = resp.status;
+                            if (resp.ok && !/text\/html/i.test(resp.headers.get("Content-Type") || "")) {
+                                await cache.put(item.u, resp); // counts only once it is really in the cache
+                                ok = true;
+                            } else if (resp.status === 404) break; // not on the server — a retry will not help
+                        } catch (e) {
+                            if (e && (e.name === "QuotaExceededError" || /quota/i.test(String(e.message || "")))) { fatal = "storage"; break; }
+                        }
+                    }
+                    if (ok) { run.done++; if (rf) rf.d.push(item.i); }
+                    else { failed++; if (status === 404) missing++; }
+                    renderZhPackStatus();
+                }
+            };
+            await Promise.all(Array.from({ length: ZH_PACK_CONCURRENCY }, worker));
+            if (run.cancel) return;
+            const finishedAll = !fatal && failed === 0;
+            if (finishedAll) {
+                zhPackSet(pack, { s: "saved", fv: ver, n: urls.length, t: urls.length, ts: Date.now(), la: Date.now() });
+                if (outdated) await zhPackPruneOrphans(cache);
+            } else {
+                const err = fatal || (missing ? "missing" : "net");
+                if (outdated) zhPackSet(pack, Object.assign({}, st, { rf, la: Date.now(), err })); // stays a usable (stale) copy; resumes from rf
+                else zhPackSet(pack, { s: run.done > 0 ? "partial" : "none", fv: ver, n: run.done, t: urls.length, la: Date.now(), err });
+            }
+        }
+        // After a refresh: drop cached font files that no @font-face rule uses any more (renamed / removed slices).
+        async function zhPackPruneOrphans(cache) {
+            try {
+                const keep = new Set();
+                Object.keys(ZH_PACKS).forEach(p => zhPackUrls(p).forEach(u => keep.add(u)));
+                for (const k of await cache.keys()) if (!keep.has(k.url)) await cache.delete(k);
+            } catch (e) {}
+        }
+        // The truth check: compare the saved state with what is really in the cache; downgrade if slices are gone.
+        async function zhPackVerify(pack) {
+            const st = zhPackGet(pack);
+            if (st.s !== "saved" && st.s !== "partial") return;
+            const run = zhPackRun[pack];
+            if ((run && run.running) || !("caches" in window)) return;
+            const urls = zhPackUrls(pack);
+            if (!urls.length) return;
+            let present;
+            try { present = await zhPackPresent(); } catch (e) { return; }
+            const n = urls.filter(u => present.has(u)).length;
+            if (st.s === "saved" && n < urls.length) {
+                const next = Object.assign({}, st, { s: "partial", n, t: urls.length });
+                delete next.rf;
+                zhPackSet(pack, next);
+            } else if (st.s === "partial" && n === urls.length && (!st.fv || st.fv === zhFontVersion())) {
+                zhPackSet(pack, { s: "saved", fv: zhFontVersion(), n, t: urls.length, ts: Date.now(), la: st.la || 0 });
+            } else if (st.s === "partial" && n !== st.n) {
+                zhPackSet(pack, Object.assign({}, st, { n, t: urls.length }));
+            }
+        }
+        function zhPackAutoOk() {
+            if (!navigator.onLine) return false;
+            const c = navigator.connection;
+            return !(c && (c.saveData || /(^|-)2g$/.test(c.effectiveType || "")));
+        }
+        // Quiet retry for the font that is in use: only for a copy that is missing / incomplete / outdated, only online,
+        // not in data-saver, not if the person removed the copy, and not more often than every 10 minutes.
+        function zhPackMaybeAuto(pack) {
+            if (!ZH_PACKS[pack] || !zhPackAutoOk()) return;
+            const st = zhPackGet(pack);
+            const k = zhPackView(pack).k;
+            const needs = k === "partial" || k === "stale" || (k === "none" && !st.removed);
+            if (!needs) return;
+            if (st.la && Date.now() - st.la < ZH_PACK_AUTO_RETRY_MS) return;
+            zhPackDownload(pack, { user: false });
+        }
+        async function zhPackRemove(pack) {
+            if (!ZH_PACKS[pack] || !("caches" in window)) return;
+            const run = zhPackRun[pack];
+            if (run && run.running) { run.cancel = true; try { await run.promise; } catch (e) {} }
+            const keep = new Set(); // files another font that still has a copy needs (the shared Klee One fallback)
+            Object.keys(ZH_PACKS).filter(p => p !== pack && zhPackView(p).k !== "none").forEach(p => zhPackUrls(p).forEach(u => keep.add(u)));
+            try {
+                const cache = await caches.open(zhFontCacheName());
+                for (const u of zhPackUrls(pack)) if (!keep.has(u)) await cache.delete(u);
+            } catch (e) {}
+            zhPackSet(pack, { s: "none", removed: true });
+            renderZhPackStatus();
+        }
+        function zhPackSaveNow(el) { const p = el && el.dataset ? el.dataset.pack : ""; zhPackMenuOpen = false; zhPackDownload(p, { user: true }); }
+        function zhPackRemoveCopy(el) { const p = el && el.dataset ? el.dataset.pack : ""; zhPackMenuOpen = false; return zhPackRemove(p); }
+        // Opening the Background Theme page: show the saved state at once, verify against the cache, then maybe retry quietly.
+        async function zhPackOnPickerOpen() {
+            try {
+                renderZhPackStatus();
+                for (const p of Object.keys(ZH_PACKS)) await zhPackVerify(p);
+                renderZhPackStatus();
+                const sel = getZhFont();
+                if (ZH_PACKS[sel]) zhPackMaybeAuto(sel);
+            } catch (e) {}
+        }
+        // App start: if a Chinese handwriting font is in use, check its copy and retry quietly when needed.
+        function zhPackAutoOnStart() {
+            const sel = getZhFont();
+            if (!ZH_PACKS[sel]) return;
+            zhPackVerify(sel).then(() => { renderZhPackStatus(); zhPackMaybeAuto(sel); }).catch(() => {});
+        }
+        window.addEventListener("load", () => setTimeout(zhPackAutoOnStart, 4000));
+        function selectAppFont(el) {
+            const v = el && el.dataset ? el.dataset.font : "default";
+            try { localStorage.setItem(APP_FONT_KEY, APP_FONT_CHOICES.includes(v) ? v : "default"); } catch (e) {}
+            applyAppFontAttr();
+            applyZhFontAttr(); // v584
+        }
+
         // v250: Privacy Mode — see the CSS comment on html[data-privacy-mode="on"] in
         // index.html for how the blur itself works. This block only owns the on/off state, the
         // header button's icon, and per-figure reveal/reblur. Default is ON (blurred) — an
@@ -9270,6 +10804,7 @@
         function openMemberFormModal() {
             document.getElementById("editMemberId").value = "";
             document.getElementById("newMemberName").value = "";
+            document.getElementById("newMemberIsPrimary").checked = false;
             document.getElementById("memberFormHeaderTitle").textContent = "Add Member";
             document.getElementById("memberFormSubmitBtn").textContent = "Add Member";
             document.getElementById("memberFormDeleteBtn").style.display = "none";
@@ -9283,6 +10818,7 @@
             if (!member) return;
             document.getElementById("editMemberId").value = member.id;
             document.getElementById("newMemberName").value = member.name;
+            document.getElementById("newMemberIsPrimary").checked = !!member.isPrimary;
             document.getElementById("memberFormHeaderTitle").textContent = "Edit Member";
             document.getElementById("memberFormSubmitBtn").textContent = "Save Changes";
             document.getElementById("memberFormDeleteBtn").style.display = "block";
@@ -9296,8 +10832,21 @@
             const color = document.getElementById("newMemberColor").value || MEMBER_COLORS[0];
             const id = document.getElementById("editMemberId").value || "mem_" + Date.now();
 
+            // v512: isPrimary marks the ONE member whose name is used in backup file names
+            // (see backupFileOwnerPart). Independent of list order. Ticking it here clears the
+            // flag on every other member, so at most one member is ever primary.
+            const isPrimary = !!document.getElementById("newMemberIsPrimary").checked;
+
             try {
-                await writeDB(STORES.MEMBERS, { id, name, color });
+                const existing = getMemberById(id) || {};
+                if (isPrimary) {
+                    for (const other of membersCache) {
+                        if (other.id !== id && other.isPrimary) {
+                            await writeDB(STORES.MEMBERS, { ...other, isPrimary: false });
+                        }
+                    }
+                }
+                await writeDB(STORES.MEMBERS, { ...existing, id, name, color, isPrimary });
             } catch (err) {
                 alert("Could not save member: " + (err && err.message ? err.message : err));
                 return;
@@ -9461,7 +11010,13 @@
         // expandedAccountSubrows (the Accounts-page fund/currency/FD subrow toggle, v62). The two
         // toggles look similar but control unrelated parts of the UI (sidebar drawer vs. main
         // content list) and were built to stay fully independent of each other.
-        let sidebarAccountShortcutsExpanded = true;
+        // v474: the choice is remembered per device (localStorage, like the other UI preferences), so closing
+        // the app or locking and logging back in keeps the last expand / collapse instead of resetting to
+        // expanded every time. No saved value → expanded, as before.
+        const SIDEBAR_ACCOUNTS_EXPANDED_KEY = "ledger.sidebarAccountShortcutsExpanded";
+        let sidebarAccountShortcutsExpanded = (() => {
+            try { return localStorage.getItem(SIDEBAR_ACCOUNTS_EXPANDED_KEY) !== "0"; } catch (e) { return true; }
+        })();
 
         async function renderSidebarAccountTypeShortcuts() {
             const wrap = document.getElementById("sidebarAccountTypeShortcuts");
@@ -9505,6 +11060,7 @@
         // active.
         function toggleSidebarAccountShortcuts() {
             sidebarAccountShortcutsExpanded = !sidebarAccountShortcutsExpanded;
+            try { localStorage.setItem(SIDEBAR_ACCOUNTS_EXPANDED_KEY, sidebarAccountShortcutsExpanded ? "1" : "0"); } catch (e) {}
             const wrap = document.getElementById("sidebarAccountTypeShortcuts");
             if (wrap) wrap.classList.toggle("hidden", !sidebarAccountShortcutsExpanded);
             const toggleBtn = document.getElementById("sidebarAccountShortcutsToggle");
@@ -9565,8 +11121,10 @@
         // else. Same includeInNetWorth opt-out as summarizeAccountsNetWorth, so a property
         // excluded from Net Worth is excluded here too (from both the Real Estate and Total
         // figures — it simply doesn't contribute to either side of the split).
-        function summarizeOwnerAssetSplit(accountsSubset, nativeBalances) {
-            let realEstate = 0, total = 0;
+        // v488: optional 3rd argument = insurance surrender value (base currency) to count as a
+        // financial asset — see insSvNetWorth(); omitted/0 leaves the result exactly as before.
+        function summarizeOwnerAssetSplit(accountsSubset, nativeBalances, insSvBase = 0) {
+            let realEstate = 0, total = insSvBase || 0;
             accountsSubset.forEach(a => {
                 if (a.includeInNetWorth === false) return;
                 const val = accountBaseValue(a, nativeBalances);
@@ -9583,7 +11141,9 @@
         // only for the Grand Total row and % of Net Worth column. Same includeInNetWorth opt-out
         // and Real Estate group-based split as summarizeOwnerAssetSplit, so a currency row here
         // always reconciles against that report's Real Estate total for the same account subset.
-        function summarizeCurrencySplit(accountsSubset, nativeBalances) {
+        // v488: optional 3rd argument = insSvNetWorth() scope; its policies' native net surrender
+        // values are added to each currency's Financial figure (and to totalBase).
+        function summarizeCurrencySplit(accountsSubset, nativeBalances, insScope = null) {
             const byCurrency = {};
             let totalBase = 0;
             const bump = (curr, amt, isRealEstate) => {
@@ -9605,11 +11165,18 @@
                     bump(a.currency, amt, isRealEstate);
                 }
             });
+            if (insScope) {
+                const ins = insSvNetWorth(insScope);
+                Object.entries(ins.byCurrency).forEach(([curr, amt]) => bump(curr, amt, false));
+                totalBase += ins.base;
+            }
             return { byCurrency, totalBase };
         }
 
         // Sums a subset of accounts into { total (in baseCurrency), currencyTotals { CODE: nativeAmt } }
-        function summarizeAccountsNetWorth(accountsSubset, nativeBalances) {
+        // v488: optional 3rd argument = insSvNetWorth() scope (a member id / "unassigned"); the
+        // matching policies' net surrender value is added to the total and the per-currency chips.
+        function summarizeAccountsNetWorth(accountsSubset, nativeBalances, insScope = null) {
             let total = 0;
             const currencyTotals = {};
             accountsSubset.forEach(a => {
@@ -9628,6 +11195,11 @@
                     currencyTotals[a.currency] = (currencyTotals[a.currency] || 0) + (nativeBalances[a.id] || 0);
                 }
             });
+            if (insScope) {
+                const ins = insSvNetWorth(insScope);
+                total += ins.base;
+                Object.entries(ins.byCurrency).forEach(([curr, amt]) => { currencyTotals[curr] = (currencyTotals[curr] || 0) + amt; });
+            }
             return { total, currencyTotals };
         }
 
@@ -9698,13 +11270,16 @@
                 };
             };
             const assets = build(assetDefs);
+            // v518: the insurance surrender value is NOT part of Assets any more — it is returned separately
+            // and shown as an information row under MY NET WORTH.
+            const insSv = insSvNetWorth("all", true);
             const liabilities = build(liabDefs);          // total is already negative (or 0)
             const netCurrentAssets = assets.total + liabilities.total;
             const realEstateTotal = sumGroup("Real Estate");
             const hasRealEstate = included.some(a => (a.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate");
             const fixedRows = Math.abs(realEstateTotal) >= 0.005 ? [{ label: "Real Estate", group: "Real Estate", subgroup: "", amount: realEstateTotal }] : [];
             return {
-                assets, liabilities, netCurrentAssets,
+                assets, liabilities, netCurrentAssets, insSv,
                 fixed: { rows: fixedRows, total: realEstateTotal, show: hasRealEstate },
                 finalNetWorth: netCurrentAssets + realEstateTotal
             };
@@ -9712,7 +11287,12 @@
 
         async function renderNetWorthStatementPage() {
             const d = await computeNetWorthStatementData();
-            const nwsRow = r => `
+            const nwsRow = r => r.noClick ? `
+                <div class="statement-row" style="cursor:default;">
+                    <span>${escapeHtml(r.label)}</span>
+                    <span style="font-weight:700;">${formatBalanceHTML(r.amount, baseCurrency)}</span>
+                </div>
+            ` : `
                 <div class="statement-row" data-click="sidebarFilterAccountsByType" data-group="${escapeHtml(r.group)}" data-subgroup="${escapeHtml(r.subgroup)}" data-label="${escapeHtml(r.label)}">
                     <span>${escapeHtml(r.label)}</span>
                     <span style="font-weight:700;">${formatBalanceHTML(r.amount, baseCurrency)}</span>
@@ -9735,6 +11315,17 @@
             document.getElementById("nwsFixedAssetsTotal").innerHTML = formatBalanceHTML(d.fixed.total, baseCurrency);
 
             document.getElementById("nwsFinalNetWorth").innerHTML = formatBalanceHTML(d.finalNetWorth, baseCurrency);
+            { // v518: memo row — information only, not in any total above
+                const memo = document.getElementById("nwsInsMemo");
+                if (memo) {
+                    const iv = d.insSv;
+                    memo.style.display = (iv && iv.count > 0) ? "block" : "none";
+                    if (iv && iv.count > 0) {
+                        document.getElementById("nwsInsMemoValue").innerHTML = formatBalanceHTML(iv.base, baseCurrency);
+                        document.getElementById("nwsInsMemoCount").textContent = `${iv.count} in-force ${iv.count === 1 ? "policy" : "policies"}`;
+                    }
+                }
+            }
         }
 
         // v464: 📤 on the Net Worth Statement page — the statement as it stands today, one row per
@@ -9759,7 +11350,8 @@
                     ...d.fixed.rows.map(r => line("Fixed Assets", r.label, r.amount)),
                     line("Fixed Assets", "Total Fixed Assets", d.fixed.total)
                 ] : []),
-                line("My Net Worth", "My Net Worth", d.finalNetWorth)
+                line("My Net Worth", "My Net Worth", d.finalNetWorth),
+                ...((d.insSv && d.insSv.count > 0) ? [line("Memo (not counted)", "Insurance surrender value", d.insSv.base)] : []) // v518: information only
             ];
             const header = ["As of", "Section", "Item", `Amount (${baseCurrency})`];
             const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
@@ -9794,6 +11386,9 @@
         // Draws the dashboard's "Net Worth by Member" report: one row per member (solo-owned
         // accounts only), one row per distinct joint-owned account group, and — only if any exist
         // — a final "Unassigned" row so the breakdown always ties out to the grand total above it.
+        // v564: true when an amount would be DISPLAYED as 0.00 (rounds to zero at 2 decimals; also covers -0.00 and float dust).
+        function isZeroAmount(n) { return !Number.isFinite(n) || Math.abs(n) < 0.005; }
+
         function renderMemberNetWorthRows(accounts, nativeBalances) {
             const section = document.getElementById("memberNetWorthSection");
             // With only 0 or 1 members configured, this breakdown is either empty or a pointless
@@ -9811,7 +11406,8 @@
             let html = "";
             membersCache.forEach(m => {
                 const subset = filterAccountsByOwnership(accounts, "member", [m.id]);
-                const { total } = summarizeAccountsNetWorth(subset, nativeBalances);
+                const { total } = summarizeAccountsNetWorth(subset, nativeBalances, m.id);
+                if (isZeroAmount(total)) return; // v564: hide members whose amount shows as 0.00
                 html += `
                     <div class="member-networth-row" data-click="sidebarGoMember" data-key="m:${m.id}">
                         <div class="member-row-left">
@@ -9836,6 +11432,7 @@
                 const ids = key.split(",");
                 const subset = filterAccountsByOwnership(accounts, "joint", ids);
                 const { total } = summarizeAccountsNetWorth(subset, nativeBalances);
+                if (isZeroAmount(total)) return; // v564: same rule for joint groups
                 html += `
                     <div class="member-networth-row" data-click="sidebarGoMember" data-key="j:${key}">
                         <div class="member-row-left">
@@ -9851,8 +11448,8 @@
             });
 
             const unassigned = accounts.filter(a => !Array.isArray(a.memberIds) || a.memberIds.length === 0);
-            if (unassigned.length > 0) {
-                const { total } = summarizeAccountsNetWorth(unassigned, nativeBalances);
+            if (unassigned.length > 0 || insSvNetWorth("unassigned").count > 0) {
+                const { total } = summarizeAccountsNetWorth(unassigned, nativeBalances, "unassigned");
                 html += `
                     <div class="member-networth-row" style="cursor:default;">
                         <div class="member-row-left">
@@ -9867,7 +11464,7 @@
                 `;
             }
 
-            wrap.innerHTML = html;
+            wrap.innerHTML = html || `<div class="member-row-sub" style="padding:10px 4px;">All members are at 0.00.</div>`;
         }
 
         // Renders page-member: the filtered net worth card (with an optional per-currency
@@ -9877,7 +11474,7 @@
             const { type, ids } = activeMemberFilter;
             const { accounts, txs, nativeBalances } = await computeAccountBalances();
             const subset = filterAccountsByOwnership(accounts, type, ids);
-            const { total, currencyTotals } = summarizeAccountsNetWorth(subset, nativeBalances);
+            const { total, currencyTotals } = summarizeAccountsNetWorth(subset, nativeBalances, type === "member" ? ids[0] : null); // v488: member's insurance SV
             // v186: same fund/FD-placement subrow data the global Accounts page builds (see
             // renderAccountsPage) — needed here now that this page's cards match that page's
             // card style/arrangement (accountAvatarHTML, group headers, subrows) instead of the
@@ -9992,11 +11589,11 @@
                 // Real Estate (v53): same "excluded from Net Worth" flag renderAccountsPage()
                 // already shows on the global Accounts page.
                 const excludedLine = a.includeInNetWorth === false
-                    ? `<br><span style="font-size:0.7rem; color:#991b1b; font-weight:600;">🚫 Excluded from Net Worth</span>`
+                    ? `<br><span class="acct-excl-line" style="font-size:0.7rem; font-weight:600;">🚫 Excluded from Net Worth</span>`
                     : "";
 
                 const acctRefLine = a.accountRef
-                    ? `<div class="account-card-refline">${escapeHtml(a.accountRef)}</div>`
+                    ? `<div class="account-card-refline">${accountRefDisplayHTML(a)}</div>`
                     : "";
                 const extraInfoLine = accountExtraInfoLine(a, nativeBalances, false, accounts);
 
@@ -10004,7 +11601,7 @@
                 // page (renderAccountsPage) — see that copy's comment for what amountDue means.
                 const ccAmountDue = a.type === "creditcard" ? Math.max(0, -(nativeBalances[a.id] || 0)) : 0;
                 const ccAmountDueLine = ccAmountDue > 0.005
-                    ? `<br><span style="font-size:0.72rem; color:#9d174d; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
+                    ? `<br><span class="acct-cc-line" style="font-size:0.72rem; font-weight:700;">💳 Amount due: ${formatBalanceHTML(ccAmountDue, a.currency)}</span>`
                     : "";
                 const ccPayBtnHTML = ccAmountDue > 0.005
                     ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">💳 Pay</button>`
@@ -11510,7 +13107,33 @@
             const topTier = currencyCandidates.concat(cnySuffixCandidates);
             const pool = topTier.length ? topTier : bareCandidates;
             if (pool.length) {
-                const chosen = pool.reduce((best, c) => (!best || c.value > best.value) ? c : best, null);
+                let chosen = pool.reduce((best, c) => (!best || c.value > best.value) ? c : best, null);
+                // v609: with 2+ bare numbers and no currency/块 marker, "biggest wins" breaks when a
+                // merchant name itself starts/ends with a number ("99 Speed Mart": typing
+                // "99 9.5" or "9.5 99" took 99 as the amount). So when there is a tie-break to
+                // make, try each bare number as the amount in turn and prefer the one whose
+                // LEFTOVER text matches a saved description in the user's own history (exact
+                // match first, then loose match; larger value first within each). If nothing
+                // matches history, behaviour is unchanged (largest wins).
+                if (!topTier.length && pool.length > 1) {
+                    const leftoverFor = (c) => {
+                        let t = text.slice(0, c.index) + text.slice(c.index + c.length);
+                        const d = parseRelativeDate(t);
+                        if (d) t = t.slice(0, d.index) + t.slice(d.index + d.length);
+                        return t.replace(/\s{2,}/g, " ").trim();
+                    };
+                    const byValueDesc = pool.slice().sort((a, b) => b.value - a.value);
+                    let exactPick = null, loosePick = null;
+                    for (const c of byValueDesc) {
+                        const left = leftoverFor(c);
+                        if (left.length < 2) continue;
+                        const hits = findHistoryCandidates(left);
+                        if (!hits.length) continue;
+                        if (!exactPick && hits.some(h => h.desc.toLowerCase() === left.toLowerCase())) exactPick = c;
+                        if (!loosePick) loosePick = c;
+                    }
+                    if (exactPick || loosePick) chosen = exactPick || loosePick;
+                }
                 result.amount = chosen.value;
                 text = text.slice(0, chosen.index) + text.slice(chosen.index + chosen.length);
             }
@@ -11549,40 +13172,63 @@
             return result;
         }
 
-        // v353: given the leftover text after amount/date have been stripped, returns every
-        // distinct-description history entry whose text overlaps it (exact match, or either
-        // string contains the other — same loose-substring rule v351/v352 used), ranked exact
-        // matches first then by recency (dynamicDescHistoryEntries is already newest-first per
-        // description, and Array.prototype.sort is stable, so recency order survives within each
-        // rank group), then DEDUPED by (category, account) — not by description text — since two
-        // different descriptions ("PETRONAS Nosob" / "PETRONAS Nosob (R)") can be the exact same
-        // real-world category+account and shouldn't produce two chips for that case, while two
-        // matches that genuinely used different accounts (e.g. paid via TNG one time, Visa
-        // another) are kept as separate candidates on purpose — that's the whole point of this
-        // being an array instead of v351/v352's single-best-match lookup. Capped to 3 so a very
-        // common short fragment (like "pe") can't flood the chip row.
+        // Still used by parseQuickAddText() (v609 amount tie-break: does the leftover text match
+        // a saved description?). Chip rendering no longer uses it — see findMerchantCandidates().
         function findHistoryCandidates(cleaned) {
             if (cleaned.length < 2) return [];
-            const key = cleaned.toLowerCase();
+            const key = normQA(cleaned);
             const matches = dynamicDescHistoryEntries.filter(e => {
-                const k = e.desc.toLowerCase();
+                const k = normQA(e.desc);
                 return k === key || k.includes(key) || key.includes(k);
             });
-            matches.sort((a, b) => {
-                const aExact = a.desc.toLowerCase() === key ? 0 : 1;
-                const bExact = b.desc.toLowerCase() === key ? 0 : 1;
-                return aExact - bExact;
-            });
+            matches.sort((a, b) => (normQA(a.desc) === key ? 0 : 1) - (normQA(b.desc) === key ? 0 : 1));
             const seen = new Set();
             const out = [];
             for (const m of matches) {
-                const dedupeKey = m.cat + "||" + m.src;
-                if (seen.has(dedupeKey)) continue;
-                seen.add(dedupeKey);
+                const dk = m.cat + "||" + m.src;
+                if (seen.has(dk)) continue;
+                seen.add(dk);
                 out.push(m);
                 if (out.length >= 3) break;
             }
             return out;
+        }
+
+        // v611: Quick Add now matches MERCHANTS (descriptions), not category+account combos.
+        // normQA() makes "Tenom's" / "Tenom’s" / extra spaces / case compare equal.
+        function normQA(str) {
+            return String(str || "").replace(/[\u2018\u2019\u02BC`]/g, "'").replace(/\s+/g, " ").trim().toLowerCase();
+        }
+
+        // Returns merchants (grouped by normalised description) whose name matches the leftover
+        // typed text, each as { desc, count, lastDate, combos:[{cat,type,src,count,lastDate}] }.
+        // Rank: exact > prefix > word-start > contains > typed-text-contains-name, then newest.
+        // Only the first 5 are returned so a very short fragment can't flood the row.
+        function findMerchantCandidates(cleaned, type) {
+            const key = normQA(cleaned);
+            if (key.length < 2) return [];
+            const groups = new Map();
+            for (const e of dynamicDescHistoryEntries) {
+                if (type && e.type !== type) continue;
+                const k = normQA(e.desc);
+                let rank = -1;
+                if (k === key) rank = 0;
+                else if (k.startsWith(key)) rank = 1;
+                else if (k.split(/[\s\-\/&(),.]+/).some(w => w.startsWith(key))) rank = 2;
+                else if (k.includes(key)) rank = 3;
+                else if (key.includes(k)) rank = 4;
+                if (rank === -1) continue;
+                let g = groups.get(k);
+                if (!g) { g = { desc: e.desc, rank, count: 0, lastDate: "", combos: [] }; groups.set(k, g); }
+                g.count += e.count || 1;
+                if ((e.lastDate || "") > g.lastDate) g.lastDate = e.lastDate || "";
+                g.combos.push({ cat: e.cat, type: e.type, src: e.src, count: e.count || 1, lastDate: e.lastDate || "" });
+            }
+            const out = [...groups.values()];
+            out.sort((a, b) => (a.rank - b.rank) || b.lastDate.localeCompare(a.lastDate) || (b.count - a.count));
+            // Combos: most used first, newest as tie-break.
+            out.forEach(g => g.combos.sort((a, b) => (b.count - a.count) || b.lastDate.localeCompare(a.lastDate)));
+            return out.slice(0, 5);
         }
 
         // Looks up an <option>'s own text for a compact chip label — e.g. "Wallet TNG (MYR) — VF"
@@ -11595,92 +13241,69 @@
             return opt.textContent.split(" (")[0].trim();
         }
 
-        // Renders the (already type-filtered, already deduped) candidate list as tappable chips,
-        // each labelled "Category" alone (keyword guess, no account attached) or "Category ·
-        // AccountShortName" (history match). A single surviving candidate renders as a single
-        // chip — deliberately not special-cased into old v351/v352's different plain-category
-        // look, so the tap behavior (confirms category AND account together, see
-        // applyQuickAddSuggestion()) is the same regardless of how many candidates there were;
-        // the user just happens to see one option instead of several.
-        function renderQuickAddCandidates(candidates, hideEntirely) {
+        // v611: two-step chip row. Stage "merchant": one chip per matching merchant (name only,
+        // with a small ×N use count when it has several category/account combos). Tapping a
+        // merchant fills Description with ITS saved name; if it has exactly one combo that is
+        // applied immediately, otherwise stage "combo" shows that merchant's own Category ·
+        // Account combos to pick from. Stage "keyword": the old category-only keyword guess,
+        // used only when no merchant matched. State lives on the DOM node (wrap._qa) so a
+        // re-render can never leave a chip pointing at stale data.
+        function renderQuickAddChips(qa) {
             const wrap = document.getElementById("txQuickAddCatSuggest");
-            if (hideEntirely || candidates.length === 0) {
+            if (!qa || !qa.items || qa.items.length === 0) {
                 wrap.style.display = "none";
                 wrap.innerHTML = "";
-                wrap._quickAddCandidates = null;
+                wrap._qa = null;
                 return;
             }
-            wrap.innerHTML = candidates.map((c, i) => {
+            let html = "";
+            if (qa.stage === "combo") {
+                html += `<button type="button" class="quickadd-chip" style="background:transparent; border:1.5px solid var(--border-color); color:var(--text-muted);" data-click="applyQuickAddSuggestion" data-idx="back">‹ ${escapeHtml(qa.merchant)}</button>`;
+            }
+            html += qa.items.map((c, i) => {
+                if (qa.stage === "merchant") {
+                    const n = c.combos.length;
+                    const hint = n > 1 ? ` <span class="qc-source">×${n}</span>` : "";
+                    const icon = c.combos[0] ? getCategoryIcon(c.combos[0].cat, c.combos[0].type) : "";
+                    return `<button type="button" class="quickadd-chip" data-click="applyQuickAddSuggestion" data-idx="${i}">${icon} ${escapeHtml(c.desc)}${hint}</button>`;
+                }
                 const acctLabel = shortAccountLabel(c.src);
                 const label = acctLabel ? `${c.cat} · ${acctLabel}` : c.cat;
                 return `<button type="button" class="quickadd-chip" data-click="applyQuickAddSuggestion" data-idx="${i}">${getCategoryIcon(c.cat, c.type)} ${escapeHtml(label)}</button>`;
             }).join("");
-            // Candidates are stashed on the DOM node itself rather than a module-level variable
-            // so a fast retype that re-renders this row between a chip's render and its tap can
-            // never apply a stale, no-longer-displayed candidate — whatever's on-screen is always
-            // exactly what dataset.idx indexes into.
-            wrap._quickAddCandidates = candidates;
+            wrap.innerHTML = html;
+            wrap._qa = qa;
             wrap.style.display = "flex";
         }
 
-        // Wired as data-input on #txQuickAdd (index.html). Live-fills Amount/Date always (both
-        // unambiguous once matched). Description: filled immediately ONLY when there's exactly
-        // one surviving history candidate (same as v352 — a single match's own saved name is a
-        // safe auto-complete); with zero or several candidates, Description is left as whatever
-        // was actually typed, since with several candidates there's no single "correct" full name
-        // to guess at (see the v353 chat discussion — "pe" matching three different PETRONAS
-        // Nosob entries has no one obviously-right completion). Category AND Account are NEVER
-        // auto-filled here (a v353 change from v351/v352, which silently pre-set Account on an
-        // exact history match) — both now only ever get set together, by tapping a chip
-        // (applyQuickAddSuggestion() below), so the one confirm gesture always covers both of the
-        // fields that actually change how a transaction is classified.
+        // Wired as data-input on #txQuickAdd (index.html). Live-fills Amount/Date. Description
+        // mirrors what's typed (never silently replaced by a guess — v611: even a single match
+        // now waits for a tap). Merchant chips come from the user's own history first; the
+        // keyword map is only a fallback (category only) when no merchant matched.
         function handleQuickAddInput(el) {
             const raw = el.value;
-            if (!raw.trim()) { renderQuickAddCandidates([], true); return; }
+            if (!raw.trim()) { renderQuickAddChips(null); return; }
 
             const parsed = parseQuickAddText(raw);
-
             if (parsed.amount !== null) document.getElementById("txAmount").value = parsed.amount;
             if (parsed.date) document.getElementById("txDate").value = parsed.date;
+            if (parsed.desc) document.getElementById("txDesc").value = parsed.desc;
 
-            // The Category row/select only exists (and is only populated) for whichever type
-            // this specific form instance was opened as — openTransactionForm() takes a fixed
-            // `type` per open, there's no live Income/Expense toggle inside an already-open form.
-            // So a candidate only survives when it agrees with the type already open; a
-            // same-text-different-type guess (e.g. "salary" typed while an Expense form is open)
-            // is silently dropped rather than shown as an unusable chip — same reasoning as never
-            // guessing an Account from scratch: an option the user can't actually act on here
-            // isn't worth surfacing. If NO history candidate survives that filter, the
-            // keyword-map guess is offered instead (still type-filtered) — same priority order as
-            // v351/v352, just expressed over a list instead of a single result.
             const currentType = document.getElementById("txType").value;
-            let candidates = parsed.historyCandidates.filter(c => c.type === currentType);
-            if (candidates.length === 0 && parsed.keywordGuess && parsed.keywordGuess.type === currentType) {
-                candidates = [parsed.keywordGuess];
-            }
+            if (currentType === "transfer") { renderQuickAddChips(null); return; }
 
-            if (candidates.length === 1 && candidates[0].desc) {
-                document.getElementById("txDesc").value = candidates[0].desc;
-            } else if (parsed.desc) {
-                document.getElementById("txDesc").value = parsed.desc;
+            const merchants = findMerchantCandidates(parsed.desc, currentType);
+            if (merchants.length) {
+                renderQuickAddChips({ stage: "merchant", items: merchants, all: merchants });
+            } else if (parsed.keywordGuess && parsed.keywordGuess.type === currentType) {
+                renderQuickAddChips({ stage: "keyword", items: [parsed.keywordGuess] });
+            } else {
+                renderQuickAddChips(null);
             }
-
-            renderQuickAddCandidates(candidates, currentType === "transfer");
         }
 
-        // Tapping a candidate chip applies its category AND account together (a v353 change —
-        // see handleQuickAddInput()'s comment for why these two are no longer set at different
-        // times) via the same select+dispatch-change+syncAccountPickerButtonText pattern every
-        // other direct-set in this file uses. Also fills Description with that specific
-        // candidate's own saved name, which matters most for the multi-candidate case: picking
-        // the "Fuel · Wallet TNG" chip over "Fuel · Hlbb Visa" also resolves which of several
-        // saved descriptions ("PETRONAS Nosob" vs "PETRONAS Nosob (R)") actually belongs with it.
-        function applyQuickAddSuggestion(el) {
-            const wrap = document.getElementById("txQuickAddCatSuggest");
-            const candidates = wrap._quickAddCandidates || [];
-            const c = candidates[parseInt(el.dataset.idx, 10)];
-            if (!c) return;
-
+        // Sets Category + Account (via the same select+change+sync pattern as elsewhere).
+        function applyQuickAddCombo(c) {
             const catSelect = document.getElementById("txCategory");
             if ([...catSelect.options].some(o => o.value === c.cat)) {
                 catSelect.value = c.cat;
@@ -11694,9 +13317,35 @@
                     syncAccountPickerButtonText("srcAccount");
                 }
             }
-            if (c.desc) document.getElementById("txDesc").value = c.desc;
+        }
 
-            renderQuickAddCandidates([], true);
+        function applyQuickAddSuggestion(el) {
+            const wrap = document.getElementById("txQuickAddCatSuggest");
+            const qa = wrap._qa;
+            if (!qa) return;
+
+            // "‹ Merchant" chip: back to the merchant list.
+            if (el.dataset.idx === "back") {
+                renderQuickAddChips({ stage: "merchant", items: qa.all, all: qa.all });
+                return;
+            }
+            const c = qa.items[parseInt(el.dataset.idx, 10)];
+            if (!c) return;
+
+            if (qa.stage === "merchant") {
+                document.getElementById("txDesc").value = c.desc;
+                closeDescSuggestions();
+                if (c.combos.length === 1) {
+                    applyQuickAddCombo(c.combos[0]);
+                    renderQuickAddChips(null);
+                } else {
+                    renderQuickAddChips({ stage: "combo", merchant: c.desc, items: c.combos, all: qa.all });
+                }
+                return;
+            }
+            // combo or keyword stage: apply and finish.
+            applyQuickAddCombo(c);
+            renderQuickAddChips(null);
         }
 
         // --- TRANSACTION CREATION / EDITOR CORE ---
@@ -11723,6 +13372,7 @@
             // occurrence — no extra sort/lookup needed. Order here (dedup-by-desc, newest first)
             // is exactly what findHistoryCandidates() relies on for its own recency ranking.
             const historyEntries = [];
+            const histIndex = {};
             const histSeen = new Set(); // separate from `seen` above: if the newest occurrence of
             // a description happens to have no category (t.cat falsy — an old malformed row, or
             // an in-progress migration), the original v351 map-based version still fell through to
@@ -11734,9 +13384,24 @@
                     seen.add(key);
                     out.push(t.desc.trim());
                 }
-                if (!histSeen.has(key) && t.cat) {
-                    histSeen.add(key);
-                    historyEntries.push({ desc: t.desc.trim(), cat: t.cat, type: t.type, src: t.src });
+                // v608: one history entry per description + category + account (was: per
+                // description only). The v353 chips are meant to separate the same merchant paid
+                // from different accounts (Cash vs TNG), but this loop kept only the newest
+                // occurrence of each description, so the second account never reached
+                // findHistoryCandidates() and only one chip could ever appear for it.
+                // v611: also count how often each combination was used and remember its newest
+                // date (`sorted` is newest-first, so the first sighting is the newest) — the
+                // Quick Add combo chips rank by this.
+                const hKey = key + "||" + t.cat + "||" + (t.src || "");
+                if (t.cat) {
+                    if (!histSeen.has(hKey)) {
+                        const entry = { desc: t.desc.trim(), cat: t.cat, type: t.type, src: t.src, count: 1, lastDate: t.date || "" };
+                        histSeen.add(hKey);
+                        histIndex[hKey] = entry;
+                        historyEntries.push(entry);
+                    } else {
+                        histIndex[hKey].count++;
+                    }
                 }
             }
             dynamicDescSuggestions = out;
@@ -11802,7 +13467,7 @@
             document.getElementById("txQuickAdd").value = "";
             document.getElementById("txQuickAddCatSuggest").style.display = "none";
             document.getElementById("txQuickAddCatSuggest").innerHTML = "";
-            document.getElementById("txQuickAddCatSuggest")._quickAddCandidates = null;
+            document.getElementById("txQuickAddCatSuggest")._qa = null;
             document.getElementById("txQuickAddRow").style.display = existingTxId === null ? "flex" : "none";
 
             const accounts = await readAllDB(STORES.ACCOUNTS);
@@ -11919,6 +13584,7 @@
                 resetTxTagsChips(tx.tags || []);
                 refreshTxPolicyRow(tx.policyId || null); // v468
 
+                txManualFxTouched = true; // v547: existing records are never auto-locked
                 document.getElementById("txManualFxToggle").checked = !!tx.manualFxRate;
                 document.getElementById("txManualFxRate").value = tx.manualFxRate || "";
                 document.getElementById("txManualFxRateRow").style.display = tx.manualFxRate ? "block" : "none";
@@ -12042,6 +13708,7 @@
                 document.getElementById("txInventoryFieldsWrap").style.display = "none";
                 document.getElementById("txInvSerialNumber").value = "";
                 document.getElementById("txInvModel").value = "";
+                fillInvCategorySelect("txInvCategory", "");
                 document.getElementById("txInvWarrantyRows").innerHTML = "";
                 updateTxTagsRowVisibility();
                 resetTxTagsChips([]);
@@ -12141,6 +13808,7 @@
                 document.getElementById("txFdLinkPlacement").innerHTML = "";
                 document.getElementById("txFdLinkPlacement").value = "";
 
+                txManualFxTouched = false; txManualFxLastAuto = ""; // v547: new entry starts in auto-lock mode
                 document.getElementById("txManualFxToggle").checked = false;
                 document.getElementById("txManualFxRate").value = "";
                 document.getElementById("txManualFxRateRow").style.display = "none";
@@ -12563,6 +14231,20 @@
         // Resizes + re-encodes an image as JPEG to keep IndexedDB storage usage reasonable.
         // Receipts don't need full camera resolution to stay legible. Also reused at a small
         // size/quality to build the inline preview thumbnail kept on the transaction record.
+        // v613: photos taken with the "Take Photo"/"Camera" button arrive with a long internal name
+        // (e.g. 17932735966518197010...). Rename them like the phone's own camera: IMG_YYYYMMDD_HHMMSS.jpg
+        // in LOCAL time (a second photo in the same batch gets _2, _3 ...). Gallery / file picks keep their own name.
+        function camPhotoNames(count) {
+            const d = new Date(), p = n => String(n).padStart(2, "0");
+            const stamp = `IMG_${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+            return Array.from({ length: count }, (_, i) => `${stamp}${count > 1 ? "_" + (i + 1) : ""}.jpg`);
+        }
+        function attNamesFor(event, files) {
+            const fromCam = !!(event && event.target && /CameraInput$/.test(event.target.id || ""));
+            const camNames = fromCam ? camPhotoNames(files.length) : null;
+            return file => (camNames && (file.type || "").startsWith("image/")) ? camNames[files.indexOf(file)] : file.name;
+        }
+
         function compressImage(dataUrl, maxDimension, quality) {
             return new Promise((resolve, reject) => {
                 const img = new Image();
@@ -12638,6 +14320,7 @@
         // save (handleTransactionSubmitMobile) — cancelling the form discards these.
         async function handleTxAttachmentsSelected(event) {
             const files = Array.from(event.target.files || []);
+            const attName = attNamesFor(event, files);
             for (const file of files) {
                 const isImage = file.type.startsWith("image/");
                 const isPdf = file.type === "application/pdf";
@@ -12668,7 +14351,7 @@
                 }
 
                 tempTxAttachments.push({
-                    name: file.name,
+                    name: attName(file),
                     mime: isImage ? "image/jpeg" : "application/pdf",
                     data,
                     thumb,
@@ -13283,6 +14966,17 @@
         // Fixed Deposit accounts keep separate per-currency baskets with no conversion, and
         // Transfers have two account legs (src + dest currency), so a single rate would be
         // ambiguous — out of scope here.
+        // v547: a NEW foreign-currency Income/Expense entry now starts LOCKED (tick on, rate prefilled with
+        // today's table rate, editable). Why: once paid, the amount the account actually received/paid
+        // is a fact; following the live table means a later "Save FX Values" silently rewrites it.
+        // Untick = follow the live rate (explicit choice). Editing an EXISTING record never auto-locks
+        // (that would stamp today's rate onto an old entry) — txManualFxTouched is set on edit-load.
+        let txManualFxTouched = false;   // user has ticked/unticked the lock in this form session
+        let txManualFxLastAuto = "";     // last auto-prefilled rate text (so we only overwrite untouched values)
+        function fmtFxRateInput(r) {
+            if (!isFinite(r) || r <= 0) return "";
+            return r >= 1 ? r.toFixed(6) : String(Number(r.toPrecision(7)));
+        }
         async function updateTxManualFxVisibility() {
             const wrap = document.getElementById("txManualFxWrap");
             const type = document.getElementById("txType").value;
@@ -13307,13 +15001,23 @@
             wrap.style.display = "block";
             document.getElementById("txManualFxRateLabel").textContent = `Rate (1 ${txCurr} = ? ${account.currency})`;
             const liveRate = convertCurrency(1, txCurr, account.currency);
+            if (document.getElementById("txId").value === "" && !txManualFxTouched && isFinite(liveRate) && liveRate > 0) {
+                document.getElementById("txManualFxToggle").checked = true;
+                document.getElementById("txManualFxRateRow").style.display = "block";
+                const rateEl = document.getElementById("txManualFxRate");
+                if (!rateEl.value || rateEl.value === txManualFxLastAuto) {
+                    txManualFxLastAuto = fmtFxRateInput(liveRate);
+                    rateEl.value = txManualFxLastAuto;
+                }
+            }
             document.getElementById("txManualFxAutoHint").textContent = document.getElementById("txManualFxToggle").checked
-                ? ""
+                ? "🔒 Locked: later changes in Currency & FX Rates will not touch this entry. If you know the rate your bank/card really used, type it in. Untick to follow the live rate instead."
                 : `Auto: currently ${liveRate.toFixed(4)} (today's rate from Currency & FX Rates). This is recalculated live — if that rate changes later, this transaction's effect on the account balance changes with it.`;
             recalcTxManualFxPreview();
         }
 
         function toggleTxManualFx() {
+            txManualFxTouched = true;
             const on = document.getElementById("txManualFxToggle").checked;
             document.getElementById("txManualFxRateRow").style.display = on ? "block" : "none";
             if (on && !document.getElementById("txManualFxRate").value) {
@@ -13321,7 +15025,7 @@
                 readAllDB(STORES.ACCOUNTS).then(accounts => {
                     const account = accounts.find(a => a.id === document.getElementById("srcAccount").value);
                     if (account) {
-                        document.getElementById("txManualFxRate").value = convertCurrency(1, txCurr, account.currency).toFixed(6);
+                        document.getElementById("txManualFxRate").value = fmtFxRateInput(convertCurrency(1, txCurr, account.currency));
                         recalcTxManualFxPreview();
                     }
                 });
@@ -13742,7 +15446,7 @@
             if (document.getElementById("txManualFxWrap").style.display !== "none" && document.getElementById("txManualFxToggle").checked) {
                 const manualRateVal = parseFloat(document.getElementById("txManualFxRate").value);
                 if (isNaN(manualRateVal) || manualRateVal <= 0) {
-                    alert("Please enter a valid manual FX rate greater than zero, or turn off manual FX to use the auto rate.");
+                    alert("Please enter a valid manual FX rate greater than zero, or untick the lock to use the live rate.");
                     return;
                 }
             }
@@ -13885,7 +15589,7 @@
                 // read while the "Policy" row is actually showing (see refreshTxPolicyRow()). Listed
                 // here explicitly for the same reason as splitGroupId/isRefund below: this record is
                 // built field-by-field, so a field left out is silently wiped on every edit.
-                policyId: (document.getElementById("txType").value === "expense" && document.getElementById("txPolicyRow").style.display !== "none")
+                policyId: ((document.getElementById("txType").value === "expense" || (document.getElementById("txType").value === "income" && pendingRefundOf === null)) && document.getElementById("txPolicyRow").style.display !== "none") // v510: an Income entry can be linked too (policy cashback)
                     ? (document.getElementById("txPolicyId").value || null)
                     : undefined,
                 // v92 fix: writeDB() does a full put() that replaces the entire stored record, so
@@ -14035,6 +15739,7 @@
                         vendor: desc,
                         name: document.getElementById("txNotes").value.trim(),
                         note: null,
+                        category: document.getElementById("txInvCategory").value || null,
                         purchaseDate: dateVal,
                         purchasePrice: parsedAmount,
                         currency: record.currency,
@@ -14241,6 +15946,7 @@
 
             const expiring = await getExpiringWarrantyItems();
             wrap.style.display = expiring.length ? "" : "none";
+            setTodoBadge("dashboardWarrantyWidget", expiring.length, expiring.some(({ w }) => warrantyProgressInfo(w).daysLeft <= 0) ? "red" : "orange");
             if (!expiring.length) return;
 
             list.innerHTML = expiring.map(({ item, w }) => {
@@ -14273,14 +15979,20 @@
             if (atts.length === 1) { openAttachment(atts[0], null); return; }
 
             const list = document.getElementById("txAttachmentsPickerList");
-            list.innerHTML = atts.map((att, idx) => `
-                <div class="tx-att-item" data-click="openAttachmentFromPicker" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:8px; cursor:pointer;">
-                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--chip-bg); font-size:1.1rem;">
-                        ${att.thumb ? `<img src="${att.thumb}" alt="" style="width:100%; height:100%; object-fit:cover;">` : ((att.mime || "").startsWith("image/") ? "🖼️" : "📄")}
+            list.innerHTML = atts.map((att, idx) => ((att.mime || "").startsWith("image/") && !/\.pdf$/i.test(att.name || "")) ? `
+                <div class="tx-att-item" data-click="openAttachmentFromPicker" data-idx="${idx}" style="background:var(--chip-bg); border:1px solid var(--border-color); border-radius:10px; overflow:hidden; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;">
+                    <div style="display:flex; align-items:center; justify-content:center; min-height:80px; line-height:0;">
+                        ${(att.thumb || att.data) ? `<img data-att-img="p${idx}" src="${att.data || att.thumb}" alt="" style="display:block; width:100%; max-height:240px; object-fit:contain;">` : `<span style="font-size:1.6rem; line-height:1; padding:24px;">🖼️</span>`}
                     </div>
+                    <div style="padding:6px 10px; border-top:1px solid var(--border-color); font-size:0.78rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
+                </div>
+            ` : `
+                <div class="tx-att-item" data-click="openAttachmentFromPicker" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:8px; cursor:pointer; user-select:none; -webkit-user-select:none;">
+                    <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--chip-bg); font-size:1.1rem;">📄</div>
                     <div style="flex:1; min-width:0; font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
                 </div>
             `).join("");
+            hydrateInlineAttImages(list, atts.slice(), "p");
             txAttachmentsPickerCurrent = atts;
             openModal("txAttachmentsPickerModal");
         }
@@ -14288,22 +16000,52 @@
         // --- Inventory page ---
 
         let inventoryStatusFilter = "all"; // "all" | "active" | "disposed" | "lost"
+        // v558: category field + grouping. Categories are a fixed list (stored as the plain name on
+        // item.category; an item whose stored name is not in the list still groups under that name).
+        const INV_CATEGORIES = ["Electronics", "Appliances", "Furniture & Storage", "Musical Instruments", "Luggage & Travel", "Tools", "Kitchen & Dining", "Home Accessories", "Toys", "Other"];
+        const INV_CATEGORY_ICONS = { "Electronics": "💻", "Appliances": "🔌", "Furniture & Storage": "🪑", "Musical Instruments": "🎹", "Luggage & Travel": "🧳", "Tools": "🔧", "Kitchen & Dining": "🍽️", "Home Accessories": "🏡", "Toys": "🧸", "Other": "📦" };
+        let inventoryCategoryFilter = ""; // "" = All | a category name | "__none__" = Uncategorised
+        function fillInvCategorySelect(id, selected) {
+            const sel = document.getElementById(id);
+            if (!sel) return;
+            const extra = selected && !INV_CATEGORIES.includes(selected) ? `<option value="${escapeHtml(selected)}">${escapeHtml(selected)}</option>` : "";
+            sel.innerHTML = `<option value="">— None —</option>` + INV_CATEGORIES.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("") + extra;
+            sel.value = selected || "";
+        }
+        function inventoryCategoryChip(el) {
+            inventoryCategoryFilter = el.dataset.cat || "";
+            renderInventoryPage();
+        }
+        // Inline "set category" on an uncategorised row (category view) — quick one-tap sorting of old items.
+        async function inventorySetCategory(el) {
+            const val = el.value;
+            if (!val) return;
+            const items = await readAllDB(STORES.INVENTORY);
+            const it = items.find(x => x.id === el.dataset.id);
+            if (!it) return;
+            it.category = val;
+            it.updated = todayLocalStr();
+            await writeDB(STORES.INVENTORY, it);
+            showToast(`${INV_CATEGORY_ICONS[val] || "📦"} ${it.name || "Item"} → ${val}`);
+            renderInventoryPage();
+        }
 
         function navigateToInventoryPage() {
             showPage("page-inventory");
             pushVirtualState("inventory");
+            inventoryCategoryFilter = "";
             renderInventoryPage();
         }
 
         function inventorySetStatusFilter(el) {
             inventoryStatusFilter = el.dataset.status;
-            document.querySelectorAll('#page-inventory .nav-view-toggle-btn').forEach(b => b.classList.toggle("active", b.dataset.status === inventoryStatusFilter));
+            document.querySelectorAll('#page-inventory .nav-view-toggle-btn[data-status]').forEach(b => b.classList.toggle("active", b.dataset.status === inventoryStatusFilter));
             renderInventoryPage();
         }
 
         function inventoryWarrantyStripTap() {
             inventoryStatusFilter = "active";
-            document.querySelectorAll('#page-inventory .nav-view-toggle-btn').forEach(b => b.classList.toggle("active", b.dataset.status === "active"));
+            document.querySelectorAll('#page-inventory .nav-view-toggle-btn[data-status]').forEach(b => b.classList.toggle("active", b.dataset.status === "active"));
             renderInventoryPage();
         }
 
@@ -14329,6 +16071,8 @@
             const listEl = document.getElementById("inventoryPageList");
             const footerEl = document.getElementById("inventoryPageFooter");
             if (filtered.length === 0) {
+                const chipEl0 = document.getElementById("inventoryCatChips");
+                if (chipEl0) chipEl0.innerHTML = "";
                 listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:40px 0;">No inventory items yet. Add one from an Expense entry ("📦 Add to Inventory"), or tap + below.</p>`;
                 footerEl.style.display = "none";
                 return;
@@ -14341,26 +16085,63 @@
             // Purchase Price across whatever's currently filtered (All/Active/Disposed/Lost),
             // converted to base currency at today's live rate (purchase-time FX isn't stored on
             // an inventory item, unlike a transaction's optional manualFxRate).
-            const totalBase = filtered.reduce((sum, it) => sum + convertCurrency(it.purchasePrice || 0, it.currency || baseCurrency, baseCurrency), 0);
+            // v551: base-currency value per item. An item created from a rate-locked expense (linkedTxId) uses that
+            // locked rate (shown with 🔒); everything else is a live conversion (shown with ≈). Row and footer share it.
+            // NOTE: linkedTxId is never actually filled in (the new transaction's id isn't known when the item is
+            // created — see handleTransactionSubmit's v318 comment), so the source expense is found by content:
+            // same account + date + currency + amount, and preferably the same vendor/description + name/notes.
+            const needsTx = items.some(it => (it.currency || baseCurrency) !== baseCurrency);
+            const lockedExpenses = needsTx
+                ? (await readAllDB(STORES.TRANSACTIONS)).filter(t => t.type === "expense" && !t.isRefund && t.manualFxRate)
+                : [];
+            const findSourceTx = it => {
+                const cur = it.currency || baseCurrency;
+                if (it.linkedTxId) {
+                    const byId = lockedExpenses.find(t => String(t.id) === String(it.linkedTxId));
+                    if (byId) return byId;
+                }
+                const base = lockedExpenses.filter(t => t.src === it.srcAccountId && t.date === it.purchaseDate && t.currency === cur && t.amount === it.purchasePrice);
+                const strict = base.filter(t => (t.desc || "") === (it.vendor || "") && (t.notes || "").trim() === (it.name || "").trim());
+                if (strict.length) return strict[0];
+                return base.length === 1 ? base[0] : null;
+            };
+            const invBase = it => {
+                const cur = it.currency || baseCurrency, price = it.purchasePrice || 0;
+                if (cur === baseCurrency) return { base: price, locked: true, foreign: false };
+                const tx = findSourceTx(it);
+                if (tx && tx.manualFxRate && tx.currency === cur) {
+                    const acc = accounts.find(a => a.id === tx.src);
+                    if (acc && acc.type !== "multi" && acc.type !== "fd" && acc.currency && acc.currency !== cur) {
+                        return { base: convertCurrency(price * tx.manualFxRate, acc.currency, baseCurrency), locked: acc.currency === baseCurrency, foreign: true };
+                    }
+                }
+                return { base: convertCurrency(price, cur, baseCurrency), locked: false, foreign: true };
+            };
+            const totalBase = filtered.reduce((sum, it) => sum + invBase(it).base, 0);
             footerEl.style.display = "flex";
-            footerEl.innerHTML = `
-                <span style="font-family:'Kalam', cursive; font-size:1rem; color:var(--text-muted); font-weight:800;">Total Value (${INV_STATUS_LABELS[inventoryStatusFilter] || "All"})</span>
-                <span style="font-family:'Kalam', cursive; font-size:1.15rem; font-weight:700; color:var(--text-main);">${formatCurrency(totalBase, baseCurrency)}</span>
-            `;
 
-            listEl.innerHTML = filtered.map(it => {
+            // v558: account is printed per row only when it differs from the (clear) majority — otherwise a single
+            // line above the list says it once. Category is printed per row in date view only.
+            const catOf = it => (it.category && String(it.category).trim()) || "";
+            const accCount = {};
+            filtered.forEach(it => { const k = it.srcAccountId || ""; accCount[k] = (accCount[k] || 0) + 1; });
+            const domAcc = Object.keys(accCount).sort((x, y) => accCount[y] - accCount[x])[0];
+            const hideDomAcc = !!domAcc && filtered.length >= 3 && accCount[domAcc] / filtered.length >= 0.6;
+            const quickCatHTML = it => `<div data-click="invNoop"><select class="form-input inv-quickcat" data-change="inventorySetCategory" data-id="${escapeHtml(it.id)}" aria-label="Set category"><option value="">＋ Set category…</option>${INV_CATEGORIES.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("")}</select></div>`;
+            const rowHTML = (it, ctx) => {
                 const specsBits = [];
                 if (it.model) specsBits.push(escapeHtml(it.model));
                 if (it.serialNumber) specsBits.push("SN " + escapeHtml(it.serialNumber));
                 const specsLine = specsBits.length ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${specsBits.join(" · ")}</span>` : "";
 
                 const accName = accountName(it.srcAccountId);
-                const accountLine = accName ? ` · 🏠 ${accName}` : "";
+                const accountLine = (accName && !(hideDomAcc && it.srcAccountId === domAcc)) ? ` · 🏠 ${accName}` : "";
+                const catLine = (ctx.showCat && catOf(it)) ? ` · ${INV_CATEGORY_ICONS[catOf(it)] || "🏷️"} ${escapeHtml(catOf(it))}` : "";
 
                 const noteLine = it.note ? `<span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">📝 ${escapeHtml(it.note)}</span>` : "";
 
                 const attCount = (it.attachments || []).length;
-                const attLine = attCount ? `<span class="item-meta" data-click="openInvAttachmentsBadge" data-attachments="${escapeHtml(JSON.stringify(it.attachments || []))}" style="display:block; margin-top:2px; color:var(--primary); cursor:pointer; text-decoration:underline; text-underline-offset:2px;">📎 ${attCount} attachment${attCount === 1 ? "" : "s"}</span>` : "";
+                const attBadge = attCount ? ` · <span data-click="openInvAttachmentsBadge" data-attachments="${escapeHtml(JSON.stringify(it.attachments || []))}" style="color:var(--primary); cursor:pointer; text-decoration:underline; text-underline-offset:2px;">📎 ${attCount} attachment${attCount === 1 ? "" : "s"}</span>` : "";
 
                 const w = getRepresentativeWarranty(it);
                 let warrantyHTML = "";
@@ -14375,7 +16156,7 @@
                             <span style="display:inline-block; margin-top:6px; padding:3px 9px; border-radius:999px; background:#fee2e2; color:#b91c1c; font-size:0.7rem; font-weight:700;">⏱️ ${escapeHtml(w.label)} expired ${Math.abs(info.daysLeft)}d ago</span>
                         `;
                     } else {
-                        const barColor = info.expiringSoon ? "var(--expense-color)" : "var(--income-color)";
+                        const barColor = info.daysLeft > 180 ? "var(--income-color)" : info.daysLeft > 90 ? "#f59e0b" : "var(--expense-color)"; // v559: >180d green, 91–180d amber, ≤90d red
                         const statusText = `${w.label} — ${info.daysLeft}d left (ends ${w.endDate})`;
                         warrantyHTML = `
                             <div class="progress-bar-container" style="height:6px; margin-top:6px;"><div class="progress-bar-fill" style="width:${info.pct}%; background:${barColor};"></div></div>
@@ -14389,22 +16170,75 @@
                         <div class="tx-row-body">
                             <div class="item-left">
                                 <span class="item-name">${escapeHtml(it.name || "(unnamed item)")}</span>
-                                <span class="item-meta">[${escapeHtml(it.vendor || "—")}]${accountLine}</span>
+                                <span class="item-meta">[${escapeHtml(it.vendor || "—")}]${accountLine}${catLine}</span>
                                 ${specsLine}
-                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🗓️ ${escapeHtml(it.purchaseDate || "—")}</span>
+                                <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🗓️ ${escapeHtml(it.purchaseDate || "—")}${attBadge}</span>
                                 ${noteLine}
-                                ${attLine}
                                 ${warrantyHTML}
+                                ${ctx.quickCat && !catOf(it) ? quickCatHTML(it) : ""}
                             </div>
                             <div class="item-right">
-                                <div class="item-value" style="font-weight:bold;">${formatCurrency(it.purchasePrice || 0, it.currency || baseCurrency)}</div>
-                                <span style="font-size:0.68rem; font-weight:700; color:${INV_STATUS_COLORS[it.status] || "var(--text-muted)"}; text-transform:uppercase;">${INV_STATUS_LABELS[it.status] || it.status}</span>
+                                <div style="text-align:right;">
+                                    <div class="item-value" style="font-weight:bold;">${formatCurrency(it.purchasePrice || 0, it.currency || baseCurrency)}</div>
+                                    ${(() => { const v = invBase(it); return v.foreign ? `<span class="converted-subtext tagrep-amt">${v.locked ? "🔒 " : "≈ "}${formatCurrency(v.base, baseCurrency)}</span>` : ""; })()}
+                                </div>
+                                ${it.status && it.status !== "active" ? `<span style="font-size:0.68rem; font-weight:700; color:${INV_STATUS_COLORS[it.status] || "var(--text-muted)"}; text-transform:uppercase;">${INV_STATUS_LABELS[it.status] || it.status}</span>` : ""}
                             </div>
                         </div>
-                        <span class="tx-side-bar" style="background:${INV_STATUS_COLORS[it.status] || "var(--text-muted)"};"></span>
+                        ${it.status && it.status !== "active" ? `<span class="tx-side-bar" style="background:${INV_STATUS_COLORS[it.status] || "var(--text-muted)"};"></span>` : ""}
                     </div>
                 `;
-            }).join("");
+            };
+
+            const hintHTML = hideDomAcc ? `<p style="font-size:0.72rem; color:var(--text-muted); margin:0 4px 10px;">🏠 Paid from ${accountName(domAcc)} unless shown on the item.</p>` : "";
+            // v559: category chips (All + one per category present under the current status filter, biggest
+            // subtotal first, Uncategorised last). A chip filters the list to that category.
+            const buckets = new Map();
+            filtered.forEach(it => { const c = catOf(it); if (!buckets.has(c)) buckets.set(c, []); buckets.get(c).push(it); });
+            const cats = [...buckets.entries()]
+                .map(([c, its]) => ({ c, its, key: c || "__none__", total: its.reduce((sum, it) => sum + invBase(it).base, 0) }))
+                .sort((x, y) => ((x.c === "") - (y.c === "")) || (y.total - x.total));
+            if (inventoryCategoryFilter && !cats.some(g => g.key === inventoryCategoryFilter)) inventoryCategoryFilter = ""; // chosen category empty under this status
+            const chipEl = document.getElementById("inventoryCatChips");
+            if (chipEl) {
+                const chip = (key, label, n, plainName) => `<button type="button" class="inv-chip${inventoryCategoryFilter === key ? " active" : ""}" data-click="inventoryCategoryChip" data-cat="${escapeHtml(key)}"${plainName ? ` title="${escapeHtml(plainName)}" aria-label="${escapeHtml(plainName)} (${n})"` : ""}>${label}<span class="inv-chip-n">${n}</span></button>`;
+                chipEl.innerHTML = cats.length > 1 || inventoryCategoryFilter
+                    ? `<span class="inv-chips-label">Category</span>` + chip("", "All", filtered.length) + cats.map(g => chip(g.key, g.c ? `<span class="inv-chip-ic">${INV_CATEGORY_ICONS[g.c] || "🏷️"}</span><span class="inv-chip-nm"> ${escapeHtml(g.c)}</span>` : `<span class="inv-chip-ic">🗂️</span><span class="inv-chip-nm"> Uncategorised</span>`, g.its.length, g.c || "Uncategorised")).join("")
+                    : "";
+            }
+
+            const sel = inventoryCategoryFilter ? cats.find(g => g.key === inventoryCategoryFilter) : null;
+            // v560/v562: the Total Value footer follows what the list shows (status AND category). Plain app font for the
+            // whole row — the handwriting font's "5" looks like an "S" (RM51,073.45 read as "RMS1,073.45") and mixing it
+            // with a plain amount looked inconsistent. Hierarchy: amount strongest, "Total Value" next, scope weakest.
+            const statusPart = inventoryStatusFilter === "all" ? "" : (INV_STATUS_LABELS[inventoryStatusFilter] || inventoryStatusFilter);
+            const scopeText = sel
+                ? [statusPart, sel.c || "Uncategorised"].filter(Boolean).join(" · ")
+                : (statusPart ? `${statusPart} items` : "All items");
+            footerEl.innerHTML = `
+                <div style="flex:1; min-width:0; padding-right:12px;">
+                    <div style="font-size:0.95rem; font-weight:700; color:var(--text-muted);">Total Value</div>
+                    <div style="font-size:0.75rem; font-weight:600; color:var(--text-muted); opacity:0.85; margin-top:1px;">${escapeHtml(scopeText)}</div>
+                </div>
+                <span style="font-size:1.25rem; font-weight:800; font-variant-numeric:tabular-nums; color:var(--text-main); white-space:nowrap;">${escapeHtml(formatCurrency(sel ? sel.total : totalBase, baseCurrency))}</span>
+            `;
+            if (!sel) {
+                listEl.innerHTML = hintHTML + filtered.map(it => rowHTML(it, { showCat: true, quickCat: false })).join("");
+                return;
+            }
+            // one category selected: a single card — slim header (count + share of total; the name is on the active
+            // pill and the amount is in the Total Value footer, so neither is repeated here) + its rows
+            const pct = totalBase > 0 ? Math.min(100, (sel.total / totalBase) * 100) : null;
+            const sub = `${sel.its.length} item${sel.its.length === 1 ? "" : "s"}${pct === null ? "" : ` · ${pct < 1 ? "<1" : Math.round(pct)}% of total`}${sel.c ? "" : " · set a category below"}`;
+            listEl.innerHTML = hintHTML + `<div class="tagrep-month">
+                <div class="tagrep-month-head">
+                    <div class="tagrep-mh-top">
+                        <div class="tagrep-mh-sub" style="margin:0; font-size:0.8rem;">${sub}</div>
+                    </div>
+                    ${pct === null ? "" : `<div class="tagrep-share"><i style="width:${pct.toFixed(1)}%"></i></div>`}
+                </div>
+                <div class="tagrep-rows">${sel.its.map(it => rowHTML(it, { showCat: false, quickCat: !sel.c })).join("")}</div>
+            </div>`;
         }
 
         // v329: CSV export for Inventory — same csvEscape()/BOM convention as exportLedgerCsv()
@@ -14421,7 +16255,9 @@
             ]);
             const accountName = id => { if (!id) return ""; const a = accounts.find(acc => acc.id === id); return a ? accountOptionLabel(a, accounts) : "(deleted account)"; };
 
+            const catWanted = inventoryCategoryFilter === "__none__" ? "" : inventoryCategoryFilter;
             const filtered = items.filter(it => inventoryStatusFilter === "all" || it.status === inventoryStatusFilter)
+                .filter(it => !inventoryCategoryFilter || ((it.category && String(it.category).trim()) || "") === catWanted) // v560: same scope as the page
                 .sort((a, b) => (b.purchaseDate || "").localeCompare(a.purchaseDate || ""));
 
             if (filtered.length === 0) {
@@ -14433,9 +16269,10 @@
                 .map(w => `${w.label || "Warranty"} (ends ${w.endDate || "?"})`)
                 .join("; ");
 
-            const header = ["Name", "Vendor", "Model", "Serial Number", "Purchase Date", "Purchase Price", "Currency", "Status", "Paid From", "Note", "Warranty", "Attachments"];
+            const header = ["Name", "Category", "Vendor", "Model", "Serial Number", "Purchase Date", "Purchase Price", "Currency", "Status", "Paid From", "Note", "Warranty", "Attachments"];
             const rows = filtered.map(it => [
                 it.name || "",
+                it.category || "",
                 it.vendor || "",
                 it.model || "",
                 it.serialNumber || "",
@@ -14454,7 +16291,8 @@
             // correctly instead of garbling non-ASCII text (e.g. a vendor name or note).
             const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
             const url = URL.createObjectURL(blob);
-            const scopeLabel = inventoryStatusFilter === "all" ? "all" : inventoryStatusFilter;
+            const catSlug = inventoryCategoryFilter ? "_" + (inventoryCategoryFilter === "__none__" ? "uncategorised" : inventoryCategoryFilter).replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").toLowerCase() : "";
+            const scopeLabel = (inventoryStatusFilter === "all" ? "all" : inventoryStatusFilter) + catSlug;
             const a = document.createElement("a");
             a.href = url;
             a.download = `inventory_export_${scopeLabel}_${todayLocalStr()}.csv`;
@@ -14467,6 +16305,56 @@
 
         let invExistingAttachments = [];
         let invTempAttachments = [];
+
+        // v613: read-only detail page for an inventory item (tap a row). Shows the photos large + all the facts;
+        // the Edit button inside opens the existing edit form. Nothing here writes data.
+        let invDetailAtts = [];
+        async function openInventoryDetail(id) {
+            const [items, accounts] = await Promise.all([readAllDB(STORES.INVENTORY), readAllDB(STORES.ACCOUNTS)]);
+            const it = items.find(x => x.id === id);
+            if (!it) return;
+            invDetailAtts = (it.attachments || []).slice();
+            const isImg = a => (a.mime || "").startsWith("image/") && !/\.pdf$/i.test(a.name || "");
+            const cur = it.currency || baseCurrency;
+            const acc = it.srcAccountId ? accounts.find(a => a.id === it.srcAccountId) : null;
+            const cat = (it.category && String(it.category).trim()) || "";
+            const status = it.status || "active";
+            const row = (label, value) => value ? `<div class="invd-row"><span class="invd-k">${label}</span><span class="invd-v">${value}</span></div>` : "";
+
+            const photos = invDetailAtts.map((a, i) => isImg(a) ? `
+                <div class="invd-photo" data-click="openInvDetailAttachment" data-idx="${i}" title="Tap to open">
+                    ${(a.thumb || a.data) ? `<img data-att-img="d${i}" src="${a.data || a.thumb}" alt="${escapeHtml(a.name || "Photo")}">` : `<span style="font-size:1.8rem;">🖼️</span>`}
+                </div>` : "").join("");
+            const files = invDetailAtts.map((a, i) => !isImg(a) ? `
+                <div class="invd-file" data-click="openInvDetailAttachment" data-idx="${i}">📄 <span>${escapeHtml(a.name || "Attachment")}</span></div>` : "").join("");
+
+            const warranties = (it.warranties || []).map(w => {
+                const info = warrantyProgressInfo(w);
+                const txt = info.expired ? `expired ${Math.abs(info.daysLeft)}d ago` : `${info.daysLeft}d left`;
+                const color = info.expired ? "#b91c1c" : (info.expiringSoon ? "var(--expense-color)" : "var(--text-muted)");
+                return `<div class="invd-row"><span class="invd-k">⏱️ ${escapeHtml(w.label || "Warranty")}</span><span class="invd-v" style="color:${color};">${escapeHtml(w.endDate || "—")} · ${txt}</span></div>`;
+            }).join("");
+
+            const specs = [row("Model", escapeHtml(it.model || "")), row("Serial no.", escapeHtml(it.serialNumber || ""))].join("");
+            document.getElementById("inventoryDetailTitle").textContent = it.name || "Inventory Item";
+            document.getElementById("inventoryDetailBody").innerHTML = `
+                ${photos ? `<div class="invd-photos">${photos}</div>` : ""}
+                <div class="invd-price">${escapeHtml(formatCurrency(it.purchasePrice || 0, cur))}${status !== "active" ? `<span class="invd-status" style="color:${INV_STATUS_COLORS[status] || "var(--text-muted)"};">${escapeHtml(INV_STATUS_LABELS[status] || status)}</span>` : ""}</div>
+                <div class="invd-card">
+                    ${row("Category", cat ? `${INV_CATEGORY_ICONS[cat] || "🏷️"} ${escapeHtml(cat)}` : "")}
+                    ${row("Vendor", escapeHtml(it.vendor || ""))}
+                    ${row("Purchased", escapeHtml(it.purchaseDate || ""))}
+                    ${row("Paid from", acc ? "🏠 " + escapeHtml(accountOptionLabel(acc, accounts)) : (it.srcAccountId ? "(deleted account)" : ""))}
+                    ${specs}
+                    ${row("Note", it.note ? escapeHtml(it.note).replace(/\n/g, "<br>") : "")}
+                </div>
+                ${warranties ? `<div class="invd-card">${warranties}</div>` : ""}
+                ${files ? `<div class="invd-files">${files}</div>` : ""}
+                ${it.updated ? `<p class="invd-updated">Last updated ${escapeHtml(it.updated)}</p>` : ""}`;
+            document.getElementById("inventoryDetailEditBtn").dataset.id = it.id;
+            openModal("inventoryDetailModal");
+            hydrateInlineAttImages(document.getElementById("inventoryDetailBody"), invDetailAtts, "d");
+        }
 
         async function openInventoryItemModal(id) {
             document.getElementById("invId").value = id || "";
@@ -14493,6 +16381,7 @@
                 document.getElementById("invVendor").value = it.vendor || "";
                 document.getElementById("invName").value = it.name || "";
                 document.getElementById("invNote").value = it.note || "";
+                fillInvCategorySelect("invCategory", it.category || "");
                 document.getElementById("invPurchaseDate").value = it.purchaseDate || "";
                 document.getElementById("invPurchasePrice").value = it.purchasePrice != null ? it.purchasePrice : "";
                 document.getElementById("invSerialNumber").value = it.serialNumber || "";
@@ -14509,6 +16398,7 @@
                 document.getElementById("invVendor").value = "";
                 document.getElementById("invName").value = "";
                 document.getElementById("invNote").value = "";
+                fillInvCategorySelect("invCategory", "");
                 document.getElementById("invPurchaseDate").value = todayLocalStr();
                 document.getElementById("invPurchasePrice").value = "";
                 document.getElementById("invSerialNumber").value = "";
@@ -14533,6 +16423,7 @@
                 vendor: document.getElementById("invVendor").value.trim() || null,
                 name,
                 note: document.getElementById("invNote").value.trim() || null,
+                category: document.getElementById("invCategory").value || null,
                 purchaseDate: document.getElementById("invPurchaseDate").value || null,
                 purchasePrice: parseFloat(document.getElementById("invPurchasePrice").value) || 0,
                 currency: baseCurrency,
@@ -14583,6 +16474,7 @@
 
         async function handleInvAttachmentsSelected(event) {
             const files = Array.from(event.target.files || []);
+            const attName = attNamesFor(event, files);
             for (const file of files) {
                 const isImage = file.type.startsWith("image/");
                 const isPdf = file.type === "application/pdf";
@@ -14601,20 +16493,67 @@
                     if (!data) { alert(`Couldn't read "${file.name}" — it wasn't added.`); continue; }
                     thumb = null;
                 }
-                invTempAttachments.push({ id: makeAttId(), name: file.name, mime: isImage ? "image/jpeg" : "application/pdf", data, thumb, size: data.length });
+                invTempAttachments.push({ id: makeAttId(), name: attName(file), mime: isImage ? "image/jpeg" : "application/pdf", data, thumb, size: data.length });
             }
             renderInvAttachmentPreview();
             document.getElementById("invCameraInput").value = "";
             document.getElementById("invFilesInput").value = "";
         }
 
+        // v544: inventory attachments show images as large inline previews (same idea as Quick View):
+        // tap the picture to open the full viewer; the ✕ below it still removes the attachment.
+        // PDFs keep the compact row. `key` ("e0"/"t0") ties an <img> to its attachment for hydration.
+        function renderInvAttachmentCard(att, key, kind, idx, removeDataClick) {
+            const isImage = (att.mime || "").startsWith("image/") && !/\.pdf$/i.test(att.name || "");
+            if (!isImage) return `<div style="flex:1 1 100%; min-width:0;">${renderTxAttachmentRow(att, removeDataClick)}</div>`;
+            const src = att.data || att.thumb || "";
+            return `
+                <div class="tx-att-item" style="flex:1 1 100%; min-width:0; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:10px; overflow:hidden;">
+                    <div data-click="openInvFormAttachment" data-kind="${kind}" data-idx="${idx}" title="Tap to open" style="cursor:pointer; display:flex; align-items:center; justify-content:center; min-height:80px; line-height:0; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;">
+                        ${src ? `<img data-att-img="${key}" src="${src}" alt="${escapeHtml(att.name || "Attachment")}" style="display:block; width:100%; max-height:240px; object-fit:contain;">` : `<span style="font-size:1.6rem; line-height:1; padding:24px;">🖼️</span>`}
+                    </div>
+                    <div style="display:flex; align-items:center; gap:8px; padding:6px 10px; border-top:1px solid var(--border-color);">
+                        <div style="flex:1; min-width:0;">
+                            <div style="font-size:0.78rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
+                            <div style="font-size:0.68rem; color:var(--text-muted);">${formatAttBytes(att.size)}</div>
+                        </div>
+                        <button type="button" data-click="${removeDataClick}" style="border:none; background:none; color:var(--expense-color); font-weight:700; font-size:1rem; cursor:pointer; padding:2px 6px; flex-shrink:0;">✕</button>
+                    </div>
+                </div>
+            `;
+        }
+
+        // v544: swaps the 96px stored thumb for the full-resolution image (read from
+        // STORES.ATTACHMENTS) in every <img data-att-img="<prefix><idx>"> under `container`.
+        // Skips imgs that were re-rendered away while the read was in flight; failures keep the thumb.
+        async function hydrateInlineAttImages(container, atts, prefix) {
+            if (!container) return;
+            for (let idx = 0; idx < atts.length; idx++) {
+                const att = atts[idx];
+                if (!att || att.data || !att.id || !(att.mime || "").startsWith("image/")) continue;
+                const img = container.querySelector(`img[data-att-img="${prefix}${idx}"]`);
+                if (!img) continue;
+                try {
+                    const rec = await readKeyDB(STORES.ATTACHMENTS, att.id);
+                    if (rec && rec.data && img.isConnected) img.src = rec.data;
+                } catch (err) { /* keep thumb */ }
+            }
+        }
+
+        function openInvFormAttachment(el) {
+            const idx = parseInt(el.dataset.idx, 10);
+            const att = (el.dataset.kind === "temp" ? invTempAttachments : invExistingAttachments)[idx];
+            if (att) openAttachment(att, null);
+        }
+
         function renderInvAttachmentPreview() {
             const wrap = document.getElementById("invAttachmentPreview");
             const items = [];
-            invExistingAttachments.forEach((att, idx) => items.push(renderTxAttachmentRow(att, `removeExistingInvAttachment" data-idx="${idx}`)));
-            invTempAttachments.forEach((att, idx) => items.push(renderTxAttachmentRow(att, `removeTempInvAttachment" data-idx="${idx}`)));
+            invExistingAttachments.forEach((att, idx) => items.push(renderInvAttachmentCard(att, "e" + idx, "existing", idx, `removeExistingInvAttachment" data-idx="${idx}`)));
+            invTempAttachments.forEach((att, idx) => items.push(renderInvAttachmentCard(att, "t" + idx, "temp", idx, `removeTempInvAttachment" data-idx="${idx}`)));
             wrap.innerHTML = items.join("");
             wrap.style.display = items.length ? "flex" : "none";
+            hydrateInlineAttImages(wrap, invExistingAttachments.slice(), "e");
         }
 
         function removeExistingInvAttachment(el) {
@@ -14744,7 +16683,7 @@
                 payment.notes = document.getElementById("txNotes").value.trim();
                 // v468: keep the Insurance link in step with what was just confirmed on the form.
                 const polRowEl = document.getElementById("txPolicyRow");
-                if (polRowEl && polRowEl.style.display !== "none") payment.policyId = document.getElementById("txPolicyId").value || null;
+                if (polRowEl && polRowEl.style.display !== "none") payment.policyId = document.getElementById("txPolicyId").value || null; // v468 (premium) / v511 (cashback income)
                 payment.attachments = [];
                 // v359: backfill anchorDay for a record created before it existed (v357/v358) —
                 // one-time, using its current dueDate's day as the best available reconstruction
@@ -14854,8 +16793,18 @@
                 recur,
                 createdAt: todayLocalStr()
             };
+            // v511: the Policy row on the form was ignored here before. A premium plan (expense) and a cashback plan (income)
+            // can each be linked to a policy; a plan of the same kind already linked to it is released, as in the picker.
+            const polRowEl = document.getElementById("txPolicyRow");
+            const polId = (polRowEl && polRowEl.style.display !== "none") ? (document.getElementById("txPolicyId").value || null) : null;
+            if (polId) record.policyId = polId;
             try {
                 await writeDB(STORES.PLANNED_PAYMENTS, record);
+                if (polId) {
+                    for (const other of await readAllDB(STORES.PLANNED_PAYMENTS)) {
+                        if (other.id !== record.id && other.policyId === polId && (other.type || "expense") === type) { other.policyId = null; await writeDB(STORES.PLANNED_PAYMENTS, other); }
+                    }
+                }
             } catch (err) {
                 const msg = (err && err.name === "QuotaExceededError")
                     ? "Not enough storage space to save this planned payment. Try removing an attachment or freeing up space."
@@ -14927,6 +16876,7 @@
                 return daysDiff <= 3; // includes overdue (negative) and "due today" (0)
             });
             wrap.style.display = payments.length ? "" : "none";
+            setTodoBadge("dashboardPlannedPaymentsWidget", payments.length, payments.some(p => p.dueDate < today) ? "red" : "orange");
             if (!payments.length) return;
 
             list.innerHTML = payments.map(p => renderPlannedPaymentRowHtml(p, today)).join("");
@@ -15164,22 +17114,36 @@
         // policyNo, type, status, insuredMemberId, startDate, maturityDate, currency, premium,
         // frequency, historyCutoff, statementTotal, premiumHistory: [{id,date,amount,note}],
         // coverages: [{id,label,sumAssured}], surrenderHistory: [{id,date,guaranteed,dividend,terminal,total}],
-        // loanOutstanding, notes, createdAt, updated }.
+        // loanOutstanding, notes, createdAt, updated, [v510: cashbackPct, cashbackBase, cashbackFirstYear, cashbackHistory: [{id,date,amount,note}]] }.
         // A Planned Payment is linked to a policy through ITS OWN optional `policyId` field (one
         // planned payment per policy), so the policy's "next due" is read from that single record
         // rather than being stored a second time here. A recurring planned payment keeps its
         // policyId across "Mark as Paid" (see advanceOrDeletePlannedPaymentAfterConfirm()).
-        const INS_TYPES = { life: "Life / Whole Life", savings: "Savings / Endowment", term: "Term", medical: "Medical", critical: "Critical Illness", accident: "Personal Accident", investment: "Investment-linked", other: "Other" };
-        const INS_TYPE_ICONS = { life: "🛡️", savings: "🏦", term: "⏳", medical: "🏥", critical: "🎗️", accident: "🩹", investment: "📈", other: "📄" };
+        // v511: one planned payment per policy AND kind — an expense plan is the premium ("Next premium"), an income plan is
+        // the cashback ("Next cashback"); Save as Planned stores the Policy row's choice too.
+        const INS_TYPES = { life: "Life / Whole Life", savings: "Savings / Endowment", term: "Term", medical: "Medical", critical: "Critical Illness", accident: "Personal Accident", investment: "Investment-linked", car: "Car", home: "Home / Fire", travel: "Travel", other: "Other" };
+        const INS_TYPE_ICONS = { life: "🛡️", savings: "🏦", term: "⏳", medical: "🏥", critical: "🎗️", accident: "🩹", investment: "📈", car: "🚗", home: "🏠", travel: "✈️", other: "📄" };
+        // Preset coverage types for the rows of "Coverage(s) in this policy" (a bundled plan can carry several):
+        // kind -> [name in the picker, short name on the policy, icon]. "other" takes a free-text name.
+        // A coverage saved by v468–v471 has only a free-text `label` (no `kind`); it opens as "Other".
+        const INS_COV_KINDS = {
+            life: ["Life (Whole Life)", "Life", "🛡️"], term: ["Term Life", "Term Life", "⏳"],
+            medical: ["Health / Medical", "Health/Medical", "🏥"], critical: ["Critical Illness", "Critical Illness", "🎗️"],
+            accident: ["Personal Accident", "Personal Accident", "🩹"], car: ["Car", "Car", "🚗"],
+            home: ["Home / Fire", "Home/Fire", "🏠"], travel: ["Travel", "Travel", "✈️"], other: ["Other", "Other", "📄"]
+        };
         const INS_STATUSES = { active: "In force", paidup: "Paid-up", lapsed: "Lapsed", surrendered: "Surrendered", matured: "Matured" };
         const INS_LIVE_STATUSES = ["active", "paidup"];
         // [label, payments per year] — a single-premium policy has no yearly premium to project.
         const INS_FREQ = { monthly: ["Monthly", 12], quarterly: ["Quarterly", 4], halfyearly: ["Half-yearly", 2], yearly: ["Yearly", 1], single: ["Single payment", 0] };
         const INS_INSURANCE_CAT_RE = /insur|takaful|保险|保險/i;
+        // v510: income categories that offer the "Policy cashback" link (the row also shows for any insurance-looking category)
+        const INS_CASHBACK_CAT_RE = /cash ?back|payout|rebate|返现|返還|回赠|回馈|派息/i;
 
         let insuranceCache = [];
         let activeInsuranceId = null;
         let insuranceStatusFilter = "active"; // "active" | "ended" | "all"
+        let insuranceGroup = "person"; // v521: Policies list grouping: "person" | "insurer" | "none"
         let insRowCounter = 0;
 
         function makeInsuranceId() {
@@ -15197,6 +17161,40 @@
 
         function insIsLive(p) {
             return INS_LIVE_STATUSES.includes(p.status || "active");
+        }
+
+        // v488: the insurance part of Net Worth, behind the Setting > Net Worth Card toggle
+        // (includeInsuranceSvInNetWorth, off by default). A policy counts only while it is still in
+        // force (In force / Paid-up — a Lapsed, Surrendered or Matured policy has no cash value left to
+        // count), only if it has a surrender value on file, at its LATEST surrender value less any policy
+        // loan outstanding (the same "net SV" the policy detail shows). Protection policies (term,
+        // medical, car, home, travel) have no surrender value, so they drop out by themselves.
+        // `scope`: "all" | "joint" | "unassigned" | <memberId> — a policy belongs to its insured
+        // member (insuredMemberId); one with no (or a deleted) member is Unassigned; none is Joint.
+        // Returns { base (in baseCurrency), byCurrency {CODE: native}, count }; all zero when the toggle is off.
+        // v489: `ignoreToggle` = work the figure out even while the switch is off (the dashboard chip
+        // uses it to show what turning it on would add).
+        function insSvNetWorth(scope, ignoreToggle = false) {
+            const out = { base: 0, byCurrency: {}, count: 0 };
+            if (!includeInsuranceSvInNetWorth && !ignoreToggle) return out;
+            (insuranceCache || []).forEach(p => {
+                if (!insIsLive(p)) return;
+                if (p.excludeFromNetWorth) return; // v500: someone else's policy (e.g. a child's) - never counted here
+                const latest = (p.surrenderHistory || []).filter(r => r && r.date)
+                    .slice().sort((a, b) => b.date.localeCompare(a.date))[0];
+                const sv = insSvValue(latest);
+                if (sv == null) return;
+                const hasMember = !!(p.insuredMemberId && getMemberById(p.insuredMemberId));
+                if (scope === "joint") return;
+                if (scope === "unassigned" && hasMember) return;
+                if (scope && scope !== "all" && scope !== "unassigned" && p.insuredMemberId !== scope) return;
+                const cur = p.currency || baseCurrency;
+                const native = sv - (parseFloat(p.loanOutstanding) || 0);
+                out.base += insConvert(native, cur, baseCurrency);
+                out.byCurrency[cur] = (out.byCurrency[cur] || 0) + native;
+                out.count++;
+            });
+            return out;
         }
 
         function insMemberName(p) {
@@ -15289,11 +17287,20 @@
             const history = (policy.premiumHistory || []).filter(r => r && r.date)
                 .slice().sort((a, b) => b.date.localeCompare(a.date));
             const historyTotal = history.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
-            const ledgerRows = (txs || []).filter(t => t.policyId === policy.id && t.type === "expense")
-                .map(t => ({ date: t.date || "", amount: insConvert(t.amount, t.currency || cur, cur), tx: t }))
+            // A refund (income + isRefund, made from ⋮ → Refund on the premium) carries no policyId of its
+            // own: it is subtracted from the policy that the expense it refunds (refundOf / refundOfIds)
+            // belongs to, so refunding a premium in the ledger lowers "Premiums paid" with no extra step.
+            const policyExpenseIds = new Set((txs || []).filter(t => t.policyId === policy.id && t.type === "expense").map(t => t.id));
+            const refundsThisPolicy = (t) => t.type === "income" && t.isRefund
+                && [t.refundOf, ...(Array.isArray(t.refundOfIds) ? t.refundOfIds : [])].some(id => id != null && policyExpenseIds.has(id));
+            const ledgerRows = (txs || []).filter(t => (t.policyId === policy.id && t.type === "expense") || refundsThisPolicy(t))
+                .map(t => ({ date: t.date || "", amount: (t.type === "income" ? -1 : 1) * insConvert(t.amount, t.currency || cur, cur), tx: t }))
                 .sort((a, b) => b.date.localeCompare(a.date));
             const ledgerTotal = ledgerRows.reduce((s, r) => s + r.amount, 0);
             const paid = historyTotal + ledgerTotal;
+            // v491: split of "Premiums paid" — history rows tagged paidBy:"parent" vs everything else (own rows + linked expenses)
+            const parentTotal = history.filter(r => r.paidBy === "parent").reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+            const hasParentSplit = history.some(r => r.paidBy === "parent");
             const svs = (policy.surrenderHistory || []).filter(r => r && r.date)
                 .slice().sort((a, b) => b.date.localeCompare(a.date));
             const latestSv = svs[0] || null;
@@ -15303,20 +17310,141 @@
             const svAgeDays = latestSv
                 ? Math.round((new Date(today + "T00:00:00") - new Date(latestSv.date + "T00:00:00")) / 86400000)
                 : null;
+            // v475: premiums paid only up to the latest surrender-value date, so the Savings comparison
+            // sets the SV against what had been paid by then (not against premiums paid since).
+            const paidToSv = latestSv
+                ? history.filter(r => r.date <= latestSv.date).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
+                    + ledgerRows.filter(r => (r.date || "") <= latestSv.date).reduce((s, r) => s + r.amount, 0)
+                : null;
+            // v510: cashback received — earlier years typed into the policy (cashbackHistory) + Income entries linked to the
+            // policy (policyId on an Income). A refund is never cashback (it is subtracted from the premium instead).
+            const cbHistory = (policy.cashbackHistory || []).filter(r => r && r.date)
+                .slice().sort((a, b) => b.date.localeCompare(a.date));
+            const cbHistoryTotal = cbHistory.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+            const cbLedgerRows = (txs || []).filter(t => t.policyId === policy.id && t.type === "income" && !t.isRefund)
+                .map(t => ({ date: t.date || "", amount: insConvert(t.amount, t.currency || cur, cur), tx: t }))
+                .sort((a, b) => b.date.localeCompare(a.date));
+            const cbLedgerTotal = cbLedgerRows.reduce((s, r) => s + r.amount, 0);
+            const cbTotal = cbHistoryTotal + cbLedgerTotal;
+            const cbCount = cbHistory.length + cbLedgerRows.length;
+            const cbToSv = latestSv
+                ? cbHistory.filter(r => r.date <= latestSv.date).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
+                    + cbLedgerRows.filter(r => (r.date || "") <= latestSv.date).reduce((s, r) => s + r.amount, 0)
+                : 0;
             const loan = parseFloat(policy.loanOutstanding) || 0;
             const freq = INS_FREQ[policy.frequency];
             const premium = parseFloat(policy.premium) || 0;
             return {
-                cur, history, historyTotal, ledgerRows, ledgerTotal, paid, svs, latestSv, svValue, svGuaranteed, svParts, svAgeDays,
+                cur, history, historyTotal, cbHistory, cbHistoryTotal, cbLedgerRows, cbLedgerTotal, cbTotal, cbCount, cbToSv, parentTotal, hasParentSplit, selfTotal: paid - parentTotal, ledgerRows, ledgerTotal, paid, paidToSv, svs, latestSv, svValue, svGuaranteed, svParts, svAgeDays,
                 // A surrender value older than a year is probably out of date — insurers send a
                 // fresh statement every year — so the card flags it instead of presenting it as current.
                 svStale: svAgeDays != null && svAgeDays > 365,
                 loan,
                 netSv: svValue == null ? null : svValue - loan,
-                paybackPct: (svValue != null && paid > 0) ? (svValue / paid) * 100 : null,
+                paybackPct: (svValue != null && paid > 0) ? ((svValue + cbTotal) / paid) * 100 : null, // v510: cashback already received counts as money back
+                paybackPctSvOnly: (svValue != null && paid > 0) ? (svValue / paid) * 100 : null,
                 annual: (freq && freq[1] > 0 && premium > 0) ? premium * freq[1] : 0,
-                plan: (planned || []).find(p => p.policyId === policy.id) || null
+                plan: (planned || []).find(x => x.policyId === policy.id && x.type !== "income") || null, // the premium plan (an expense)
+                cbPlan: (planned || []).find(x => x.policyId === policy.id && x.type === "income") || null // v511: the cashback plan (an income)
             };
+        }
+
+        // v482: reducing-cover schedule. A coverage row may carry schedule: [{date:"YYYY-MM-DD", amount}] — the
+        // sum insured steps down on those dates (reducing term / mortgage cover). The CURRENT sum insured is the
+        // latest step dated on or before today; before the first step (or with no schedule) it is the row's own
+        // Sum insured. Everything that shows or adds up a sum insured goes through insCovSum().
+        function insCovSchedule(c) {
+            return (c && Array.isArray(c.schedule) ? c.schedule : [])
+                .filter(r => r && r.date && typeof r.amount === "number")
+                .slice().sort((a, b) => a.date.localeCompare(b.date));
+        }
+        function insCovCurrent(c) {
+            const today = todayLocalStr();
+            const steps = insCovSchedule(c);
+            let cur = null, next = null;
+            steps.forEach(st => { if (st.date <= today) cur = st; else if (!next) next = st; });
+            const base = (c && typeof c.sumAssured === "number") ? c.sumAssured : null;
+            return { amount: cur ? cur.amount : base, from: cur ? cur.date : null, next, steps, today };
+        }
+        function insCovSum(c) { return insCovCurrent(c).amount; }
+
+        // v482: collapsed accordion with the reducing schedule as a small table (Date | Sum insured | Change).
+        // The step in force today is highlighted; the next one is flagged.
+        function insSchedAccordionHtml(c, money) {
+            const cc = insCovCurrent(c);
+            if (!cc.steps.length) return "";
+            const base = (typeof c.sumAssured === "number") ? c.sumAssured : null;
+            let prev = base;
+            const rows = [];
+            if (base != null) rows.push({ date: "Start", amount: base, change: null, state: cc.from ? "" : "now" });
+            cc.steps.forEach(st => {
+                const change = prev != null ? st.amount - prev : null;
+                prev = st.amount;
+                rows.push({ date: st.date, amount: st.amount, change, state: st.date === cc.from ? "now" : (cc.next && st.date === cc.next.date ? "next" : "") });
+            });
+            const td = "padding:5px 6px; font-size:0.74rem;";
+            return `<details class="ins-sched" style="margin-top:8px;">
+                <summary>↘ Reducing cover schedule (${cc.steps.length} ${cc.steps.length === 1 ? "step" : "steps"})</summary>
+                <div style="overflow-x:auto;"><table style="width:100%; border-collapse:collapse; margin-top:6px;">
+                    <thead><tr style="text-align:left; color:var(--text-muted); font-size:0.62rem; text-transform:uppercase;"><th style="${td}">Date</th><th style="${td} text-align:right;">Sum insured</th><th style="${td} text-align:right;">Change</th></tr></thead>
+                    <tbody>${rows.map(r => `<tr style="border-top:1px solid var(--border-color);${r.state === "now" ? " background:rgba(99,102,241,0.10); font-weight:800;" : ""}">
+                        <td style="${td}">${escapeHtml(r.date)}${r.state === "now" ? ` <span class="ins-rider-pill">now</span>` : (r.state === "next" ? ` <span class="ins-rider-pill" style="background:rgba(245,158,11,0.18); color:#b45309;">next</span>` : "")}</td>
+                        <td style="${td} text-align:right;">${money(r.amount)}</td>
+                        <td style="${td} text-align:right; color:var(--text-muted);">${r.change == null ? "—" : (r.change < 0 ? "−" : "+") + money(Math.abs(r.change))}</td>
+                    </tr>`).join("")}</tbody>
+                </table></div>
+            </details>`;
+        }
+
+        // v502: riders (the policy's own "Riders" list: name + optional until-date) were only visible in the
+        // detail sheet. This shows them on the policy card (a "Riders" block under Sum insured, max 2 then
+        // "+N more", a long name clamps to 2 lines) and, via insRiderItemsOf(), in the By person report.
+        function insRiderItemsOf(p) {
+            return (p.riders || []).filter(r => r && r.name);
+        }
+        function insRiderUntilHtml(r) {
+            if (!r.endDate) return "";
+            const ended = r.endDate < localDateStr(new Date());
+            return `<span style="flex:0 0 auto; white-space:nowrap; color:${ended ? "var(--expense-color)" : "var(--text-muted)"};">${ended ? "Ended " : "Until "}${escapeHtml(r.endDate)}</span>`;
+        }
+        function insCardRidersHtml(p) {
+            const riders = insRiderItemsOf(p);
+            if (!riders.length) return "";
+            const row = (r) => `<div style="display:flex; gap:8px; align-items:baseline; justify-content:space-between; font-size:0.72rem; line-height:1.4;"><span style="min-width:0; color:var(--text-main); font-weight:600; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${escapeHtml(r.name)}</span>${insRiderUntilHtml(r)}</div>`;
+            return `<div style="margin-top:4px;"><div style="font-size:0.62rem; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted);">Riders (${riders.length})</div>${riders.slice(0, 2).map(row).join("")}${riders.length > 2 ? `<div style="font-size:0.7rem; font-weight:700; color:var(--text-muted);">+${riders.length - 2} more</div>` : ""}</div>`;
+        }
+
+        // v478: one line of cover for a policy card — "Sum insured  Life RM100,000 · Critical Illness RM50,000".
+        // Coverage rows of the same type are merged (summed) so a rider doesn't repeat; each item shows in the
+        // POLICY's own currency (no conversion — it is that policy's own figure, not a total). Health / Medical
+        // shows its annual limit (else lifetime limit / sum) because that is the number that matters for it.
+        // At most 2 items, the rest folded into "+N" (full list is in the detail sheet). A live policy with no
+        // amount at all gets a muted "Sum insured not set ⚠️" so a missing entry is visible, not blank.
+        function insCardCoverHtml(p, cur) {
+            const groups = new Map();
+            const reducing = [];
+            (p.coverages || []).filter(c => c && (c.kind || c.label)).forEach(c => {
+                const k = INS_COV_KINDS[c.kind];
+                const name = (k && c.kind !== "other") ? k[1] : (c.label || (k ? k[1] : "Cover"));
+                let amount = null, tag = "";
+                if (c.kind === "medical" && typeof c.annualLimit === "number") { amount = c.annualLimit; tag = " annual limit"; }
+                else if (typeof insCovSum(c) === "number") amount = insCovSum(c);
+                else if (c.kind === "medical" && typeof c.lifetimeLimit === "number") { amount = c.lifetimeLimit; tag = " lifetime limit"; }
+                if (amount == null) return;
+                const key = name + tag;
+                groups.set(key, (groups.get(key) || 0) + amount);
+                const cc = insCovCurrent(c);
+                if (cc.steps.length && cc.next) reducing.push({ name, next: cc.next });
+            });
+            const wrap = (inner, color) => `<span style="font-size:0.72rem; font-weight:700; color:${color || "var(--text-muted)"};">${inner}</span>`;
+            if (!groups.size) {
+                return insIsLive(p) ? wrap("Sum insured not set ⚠️") : "";
+            }
+            // v481: one cover per row (a second cover used to wrap mid-line, leaving its amount orphaned on
+            // the next line). Up to 4 rows, the rest as "+N more"; amount sits right after its name.
+            const entries = [...groups.entries()];
+            const row = ([name, amt]) => `<div style="display:flex; gap:8px; align-items:baseline; font-size:0.72rem; line-height:1.4;"><span style="color:var(--text-muted); font-weight:600;">${escapeHtml(name)}</span><span style="font-weight:800; color:var(--text-main);">${formatCurrency(amt, cur)}</span></div>`;
+            return `<div style="margin-top:2px;"><div style="font-size:0.62rem; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted);">Sum insured</div>${entries.slice(0, 4).map(row).join("")}${entries.length > 4 ? `<div style="font-size:0.7rem; font-weight:700; color:var(--text-muted);">+${entries.length - 4} more</div>` : ""}${reducing.slice(0, 1).map(r => `<div style="font-size:0.68rem; font-weight:600; color:var(--text-muted);">↘ Reducing · next ${formatCurrency(r.next.amount, cur)} from ${escapeHtml(r.next.date)}</div>`).join("")}</div>`;
         }
 
         // --- Transaction form: "Policy" row ---
@@ -15333,15 +17461,27 @@
             const catEl = document.getElementById("txCategory");
             const catText = (catEl && catEl.selectedIndex >= 0)
                 ? (catEl.options[catEl.selectedIndex].textContent + " " + catEl.value) : "";
+            const type = document.getElementById("txType").value;
             const policies = insuranceCache
                 .filter(p => insIsLive(p) || p.id === current)
                 .slice().sort((a, b) => policyLabel(a).localeCompare(policyLabel(b)));
-            sel.innerHTML = `<option value="">🛡️ Policy (Optional) — none</option>`
+            // v510: on an Income entry the same row links the money to a policy as cashback received.
+            sel.innerHTML = `<option value="">${type === "income" ? "🛡️ Policy cashback (Optional) — none" : "🛡️ Policy (Optional) — none"}</option>`
                 + policies.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(policyLabel(p))}</option>`).join("");
             sel.value = policies.some(p => p.id === current) ? current : "";
-            const type = document.getElementById("txType").value;
-            const show = type === "expense" && policies.length > 0 && (INS_INSURANCE_CAT_RE.test(catText) || !!sel.value);
+            const show = policies.length > 0 && (
+                (type === "expense" && (INS_INSURANCE_CAT_RE.test(catText) || !!sel.value))
+                || (type === "income" && pendingRefundOf === null && (INS_INSURANCE_CAT_RE.test(catText) || INS_CASHBACK_CAT_RE.test(catText) || !!sel.value)));
             row.style.display = show ? "flex" : "none";
+        }
+
+        // "Premium currently paid via Accumulated Cash Bonus": the insurer deducts the premium from the
+        // policy's accumulated dividend instead of the owner paying cash — so no cash payment, no planned
+        // payment, and the policy is left out of the cash "Yearly premium" figure. Shown on the list
+        // card and on the detail sheet.
+        function insBonusBannerHtml(p, compact) {
+            if (!p.paidByBonus) return "";
+            return `<div style="background:rgba(245,158,11,0.14); border:1px solid rgba(245,158,11,0.35); border-radius:10px; padding:7px 10px; font-size:0.74rem; font-weight:700; margin:${compact ? "0" : "0 0 10px"};">💰 Premium currently paid via Accumulated Cash Bonus${p.paidByBonusSince ? " · since " + escapeHtml(p.paidByBonusSince) : ""}</div>`;
         }
 
         // --- Insurance page ---
@@ -15354,7 +17494,20 @@
 
         function insuranceSetStatusFilter(el) {
             insuranceStatusFilter = el.dataset.status;
-            document.querySelectorAll('#page-insurance .nav-view-toggle-btn').forEach(b => b.classList.toggle("active", b.dataset.status === insuranceStatusFilter));
+            document.querySelectorAll('#insuranceStatusToggle .nav-view-toggle-btn').forEach(b => b.classList.toggle("active", b.dataset.status === insuranceStatusFilter));
+            renderInsurancePage();
+        }
+
+        function insuranceSetGroup(el) {
+            insuranceGroup = el.dataset.group;
+            document.querySelectorAll("#insuranceGroupToggle .nav-view-toggle-btn").forEach(b => b.classList.toggle("active", b.dataset.group === insuranceGroup));
+            renderInsurancePage();
+        }
+        // v522: phone — the Group pills are replaced by one chip on the Show row; each tap goes Person -> Insurer -> None.
+        function insuranceCycleGroup() {
+            const order = ["person", "insurer", "none"];
+            insuranceGroup = order[(order.indexOf(insuranceGroup) + 1) % order.length];
+            document.querySelectorAll("#insuranceGroupToggle .nav-view-toggle-btn").forEach(b => b.classList.toggle("active", b.dataset.group === insuranceGroup));
             renderInsurancePage();
         }
 
@@ -15364,63 +17517,1004 @@
             const summary = document.getElementById("insuranceSummary");
             if (!list || !empty || !summary) return;
             await loadInsuranceCache();
+            // Tabs: "Policies" is this list; "By person" and "Car · Home · Travel" are the two reports.
+            const reportEl = document.getElementById("insuranceReport");
+            const statusToggle = document.getElementById("insuranceStatusToggle");
+            const isReport = insuranceView !== "policies";
+            reportEl.style.display = isReport ? "block" : "none";
+            // v495: the In force / Ended / All filter now also drives Car · Home · Travel (so an ended car
+            // policy can still be found); only "By person" (in-force cover totals) has no filter.
+            const showStatusFilter = insuranceView !== "people";
+            const filterRow = document.getElementById("insuranceFilterRow");
+            if (filterRow) filterRow.style.display = showStatusFilter ? "flex" : "none";
+            if (statusToggle) statusToggle.style.display = showStatusFilter ? "" : "none";
+            if (filterRow) filterRow.classList.toggle("has-group", insuranceView === "policies"); // v522: phone Group chip
+            const gChip = document.getElementById("insuranceGroupChip");
+            if (gChip) gChip.textContent = ({ person: "👤 Person", insurer: "🏢 Insurer", none: "☰ None" })[insuranceGroup] || "👤 Person";
+            const groupRow = document.getElementById("insuranceGroupRow"); // v521: grouping only applies to the Policies list
+            if (groupRow) groupRow.style.display = insuranceView === "policies" ? "flex" : "none";
+            if (isReport) {
+                list.innerHTML = "";
+                list.style.paddingBottom = "0"; // v479: its 90px bottom padding sat as a blank gap above the reports
+                empty.style.display = "none";
+                summary.style.display = "none";
+                const attOff = document.getElementById("insuranceAttention");
+                if (attOff) { attOff.style.display = "none"; attOff.innerHTML = ""; } // v515: it leaked onto the By person / Car · Home · Travel tabs
+                const svPanelOff = document.getElementById("insuranceSavingsSummary");
+                if (svPanelOff) svPanelOff.style.display = "none";
+                reportEl.innerHTML = insuranceView === "people" ? insReportPeopleHtml() : insReportAssetsHtml();
+                return;
+            }
+            list.style.paddingBottom = "90px";
             const [txs, planned] = await Promise.all([readAllDB(STORES.TRANSACTIONS), readAllDB(STORES.PLANNED_PAYMENTS)]);
 
-            const filtered = insuranceCache.filter(p => insuranceStatusFilter === "all" ? true
+            // v495: car / home / travel policies are listed only under their own tab, so no policy is
+            // shown twice and the summary figures below add up exactly what this list shows.
+            const personalPolicies = insuranceCache.filter(p => !INS_ASSET_TYPES.includes(p.type));
+            const filtered = personalPolicies.filter(p => insuranceStatusFilter === "all" ? true
                 : (insuranceStatusFilter === "ended" ? !insIsLive(p) : insIsLive(p)))
-                .sort((a, b) => (insMemberName(a) + "|" + (a.product || "")).localeCompare(insMemberName(b) + "|" + (b.product || "")));
+                .sort((a, b) => {
+                    // v521: grouped by person -> members in their own order (not-set last) before anything else
+                    if (insuranceGroup === "person") {
+                        const rk = (p) => { const i = p.insuredMemberId ? membersCache.findIndex(m => m.id === p.insuredMemberId) : -1; return i < 0 ? 9999 : i; };
+                        if (rk(a) !== rk(b)) return rk(a) - rk(b);
+                    }
+                    // Insurer first (blank insurer last), then type in the order of the Type list
+                    // (Life before Medical…), then plan name.
+                    const ia = (a.insurer || "").trim().toLowerCase(), ib = (b.insurer || "").trim().toLowerCase();
+                    if (ia !== ib) return !ia ? 1 : (!ib ? -1 : ia.localeCompare(ib));
+                    const typeOrder = Object.keys(INS_TYPES);
+                    const ta = typeOrder.indexOf(a.type || "other"), tb = typeOrder.indexOf(b.type || "other");
+                    if (ta !== tb) return ta - tb;
+                    return (a.product || "").localeCompare(b.product || "");
+                });
 
             empty.style.display = filtered.length ? "none" : "block";
             empty.textContent = insuranceCache.length === 0
                 ? "No policies yet — tap + to add one."
-                : (insuranceStatusFilter === "ended" ? "No ended policies." : "No policies match this filter.");
+                : (personalPolicies.length === 0
+                    ? "No life or medical policies yet — car, home and travel policies are under the Car · Home · Travel tab."
+                    : (insuranceStatusFilter === "ended" ? "No ended policies." : "No policies match this filter."));
 
-            let annualBase = 0, paidBase = 0, svBase = 0, svCount = 0;
+            // v513: three separate readings instead of two bare numbers — what the policies ASK for each year
+            // (obligation: cash + premiums the insurer takes from the accumulated bonus), what actually LEFT
+            // the pocket (cash out: premiums paid − paid by a parent − cashback received) and what the
+            // policies are WORTH (surrender value of your in-force policies — information only, not part of Net Worth).
+            const todayStr = todayLocalStr();
+            const daysUntil = (d) => Math.round((Date.parse(d + "T00:00:00Z") - Date.parse(todayStr + "T00:00:00Z")) / 86400000);
+            const figOf = new Map(insuranceCache.map(p => [p.id, computePolicyFigures(p, txs, planned)]));
+            let oblCash = 0, oblAcb = 0, oblAcbCount = 0, oblAcbMissing = 0, oblNotNw = 0, oblCount = 0;
+            let paidBase = 0, parentBase = 0, cbBase = 0;
+            let svCount = 0, svCounted = 0, svCountedN = 0, svNot = 0, svNotN = 0;
+            let savPaidBase = 0, savSvBase = 0, savCbBase = 0, savMinDate = null, savMaxDate = null;
+            const savByPerson = new Map(); // v506: insuredMemberId ("" = not set) -> { paid, sv, n }
             const rows = filtered.map(p => {
-                const f = computePolicyFigures(p, txs, planned);
-                annualBase += insConvert(f.annual, f.cur, baseCurrency);
-                paidBase += insConvert(f.paid, f.cur, baseCurrency);
-                if (f.svValue != null) { svBase += insConvert(f.netSv, f.cur, baseCurrency); svCount++; }
-                const icon = INS_TYPE_ICONS[p.type] || INS_TYPE_ICONS.other;
-                const metaParts = [];
-                if (p.product && p.insurer) metaParts.push(escapeHtml(p.insurer));
-                const who = insMemberName(p);
-                if (who) metaParts.push(escapeHtml(who));
-                if (!insIsLive(p)) metaParts.push(escapeHtml(INS_STATUSES[p.status] || p.status));
-                let dueLine = "";
-                if (f.plan && !f.plan.paused) {
-                    const dd = Math.round((new Date(f.plan.dueDate + "T00:00:00") - new Date(todayLocalStr() + "T00:00:00")) / 86400000);
-                    dueLine = `<span style="font-size:0.72rem; font-weight:700; color:${dd < 0 ? "var(--expense-color)" : "var(--text-muted)"};">Next premium ${escapeHtml(f.plan.dueDate)} · ${dd < 0 ? "overdue " + Math.abs(dd) + "d" : (dd === 0 ? "today" : dd + "d left")}</span>`;
+                const f = figOf.get(p.id);
+                if (insIsLive(p)) {
+                    const a = insConvert(f.annual, f.cur, baseCurrency);
+                    if (p.paidByBonus) { oblAcb += a; oblAcbCount++; if (!(a > 0)) oblAcbMissing++; }
+                    else { oblCash += a; if (a > 0) oblCount++; }
+                    if (p.excludeFromNetWorth) oblNotNw += a;
                 }
-                const svText = f.svValue == null ? "No surrender value yet"
-                    : `SV ${formatCurrency(f.svValue, f.cur)} · ${escapeHtml(f.latestSv.date)}${f.svStale ? " ⚠️" : ""}`;
-                return `
-                    <div class="config-item" data-click="insurancePolicyTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-tap-highlight-color:transparent; ${insIsLive(p) ? "" : "opacity:0.65;"}">
-                        <span class="category-display-badge" style="min-width:0;">
-                            <span>${icon}</span>
-                            <span style="display:flex; flex-direction:column; min-width:0;">
-                                <strong>${escapeHtml(p.product || p.insurer || "Policy")}</strong>
-                                ${metaParts.length ? `<span style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">${metaParts.join(" · ")}</span>` : ""}
-                                ${dueLine}
-                            </span>
+                paidBase += insConvert(f.paid, f.cur, baseCurrency);
+                parentBase += insConvert(f.parentTotal || 0, f.cur, baseCurrency);
+                cbBase += insConvert(f.cbTotal || 0, f.cur, baseCurrency);
+                if (f.svValue != null) {
+                    svCount++;
+                    const netSvB = insConvert(f.netSv, f.cur, baseCurrency);
+                    if (insIsLive(p) && !p.excludeFromNetWorth) { svCounted += netSvB; svCountedN++; } else { svNot += netSvB; svNotN++; }
+                    // v475: Savings / investment comparison — only policies that have a surrender value.
+                    savPaidBase += insConvert(f.paidToSv, f.cur, baseCurrency);
+                    savSvBase += netSvB;
+                    savCbBase += insConvert(f.cbToSv || 0, f.cur, baseCurrency); // v510
+                    {
+                        const pk = p.insuredMemberId && getMemberById(p.insuredMemberId) ? p.insuredMemberId : "";
+                        if (!savByPerson.has(pk)) savByPerson.set(pk, { paid: 0, sv: 0, n: 0 });
+                        const sp = savByPerson.get(pk);
+                        sp.paid += insConvert(f.paidToSv, f.cur, baseCurrency);
+                        sp.sv += netSvB;
+                        sp.n++;
+                    }
+                    if (!savMinDate || f.latestSv.date < savMinDate) savMinDate = f.latestSv.date;
+                    if (!savMaxDate || f.latestSv.date > savMaxDate) savMaxDate = f.latestSv.date;
+                }
+                return insPolicyCardHtml(p, f, daysUntil, { hideWho: insuranceGroup === "person", hideInsurer: insuranceGroup === "insurer" });
+            });
+            // v521: group headers (avatar + name + policy count + yearly obligation of the in-force ones)
+            if (insuranceGroup === "none" || !filtered.length) list.innerHTML = rows.join("");
+            else {
+                const groups = new Map();
+                filtered.forEach((p, i) => {
+                    let key, label, m = null;
+                    if (insuranceGroup === "person") { key = p.insuredMemberId && getMemberById(p.insuredMemberId) ? p.insuredMemberId : ""; m = key ? getMemberById(key) : null; label = m ? m.name : "Insured person not set"; }
+                    else { const ins = (p.insurer || "").trim(); key = ins.toLowerCase(); label = ins || "No insurer"; }
+                    if (!groups.has(key)) groups.set(key, { label, m, idx: [], yearly: 0 });
+                    const g = groups.get(key);
+                    g.idx.push(i);
+                    if (insIsLive(p)) { const ff = figOf.get(p.id); g.yearly += insConvert(ff.annual, ff.cur, baseCurrency); }
+                });
+                list.innerHTML = [...groups.values()].map(g => {
+                    const color = g.m && /^#[0-9a-f]{6}$/i.test(g.m.color || "") ? g.m.color : "#94a3b8";
+                    const initial = ([...String(g.label).trim()][0] || "?").toUpperCase();
+                    const unset = insuranceGroup === "person" && !g.m;
+                    return `<div class="insp-ghead" style="--pc:${color};"><span class="insp-avatar sm">${unset ? "?" : escapeHtml(initial)}</span><span class="insp-who"><span class="insp-who-n"${unset ? ' style="color:var(--text-muted);"' : ""}>${escapeHtml(g.label)}</span><span class="insp-who-s">${g.idx.length} ${g.idx.length === 1 ? "policy" : "policies"}</span></span>${g.yearly > 0 ? `<span class="insp-prem"><b>${formatCurrency(g.yearly, baseCurrency)}</b><span>per year</span></span>` : ""}</div>${g.idx.map(i => rows[i]).join("")}`;
+                }).join("");
+            }
+
+            // ---- "Needs attention" strip (v513): the things that used to hide inside individual cards ----
+            const attEl = document.getElementById("insuranceAttention");
+            if (attEl) {
+                const items = [];
+                const who = (p) => { const m = insMemberName(p); return escapeHtml(p.product || p.insurer || "Policy") + (m ? ` <span style="color:var(--text-muted); font-weight:600;">· ${escapeHtml(m)}</span>` : ""); };
+                insuranceCache.filter(insIsLive).forEach(p => {
+                    const f = figOf.get(p.id);
+                    if (f.plan && !f.plan.paused && f.plan.dueDate) {
+                        const dd = daysUntil(f.plan.dueDate);
+                        if (dd < 0) items.push({ sev: 0, key: dd, p, msg: `Premium overdue ${Math.abs(dd)} day${Math.abs(dd) === 1 ? "" : "s"} (due ${escapeHtml(f.plan.dueDate)})` });
+                        else if (dd <= 30) items.push({ sev: 3, key: dd, p, msg: `Premium due in ${dd} day${dd === 1 ? "" : "s"} (${escapeHtml(f.plan.dueDate)})` });
+                    }
+                    const nx = insCashbackNext(p, f);
+                    if (nx && nx.overdue && nx.date) items.push({ sev: 2, key: daysUntil(nx.date), p, msg: `Cashback payout due ${escapeHtml(nx.date)} is not recorded yet` });
+                    if (f.svValue != null && f.svStale) items.push({ sev: 1, key: -f.svAgeDays, p, msg: `Surrender value is from ${escapeHtml(f.latestSv.date)} — over a year old` });
+                    if (!insCoverGroups(p).entries.length) items.push({ sev: 5, key: 0, p, msg: "Sum insured not set" });
+                    insRiderItemsOf(p).forEach(r => {
+                        if (r.endDate && r.endDate >= todayStr) { const dd = daysUntil(r.endDate); if (dd <= 60) items.push({ sev: 4, key: dd, p, msg: `Rider “${escapeHtml(r.name.length > 40 ? r.name.slice(0, 40) + "…" : r.name)}” ends in ${dd} day${dd === 1 ? "" : "s"}` }); }
+                    });
+                });
+                items.sort((a, b) => (a.sev - b.sev) || (a.key - b.key));
+                if (!items.length || insuranceStatusFilter === "ended") {
+                    attEl.style.display = "none";
+                    attEl.innerHTML = "";
+                } else {
+                    const red = items.filter(i => i.sev <= 1).length;
+                    const row = (i) => `<div class="ins-att-row" data-click="insurancePolicyTap" data-id="${escapeHtml(i.p.id)}"><span class="ins-att-dot ${i.sev <= 1 ? "red" : "amber"}"></span><div style="min-width:0; flex:1;"><div style="font-weight:800; overflow-wrap:anywhere;">${who(i.p)}</div><div style="color:${i.sev <= 1 ? "var(--expense-color)" : "var(--text-muted)"}; font-weight:700;">${i.msg}</div></div><span style="color:var(--text-muted); font-weight:800;">›</span></div>`;
+                    const shown = items.slice(0, 4), rest = items.slice(4);
+                    attEl.className = "ins-att" + (red ? " hasred" : "");
+                    attEl.style.display = "block";
+                    attEl.innerHTML = `<summary><span>${red ? "🔴" : "🟠"} Needs attention (${items.length})</span><span style="color:var(--text-muted); font-weight:700;">${red ? red + " urgent" : "heads-up"} <span class="ins-att-chev">▾</span></span></summary>${shown.map(row).join("")}${rest.length ? `<details class="ins-more" style="border-top:1px solid var(--border-color);"><summary style="text-align:center;"><span class="ins-more-show">Show ${rest.length} more ▾</span><span class="ins-more-hide">Show less ▴</span></summary>${rest.map(row).join("")}</details>` : ""}`;
+                    if (attEl.dataset.init !== "1") { attEl.dataset.init = "1"; attEl.open = !!red; }
+                }
+            }
+
+            // ---- Three-reading summary ----
+            const bd = (label, value, cls, color) => `<div class="ins-bd-row${cls ? " " + cls : ""}"><span>${label}</span><b${color ? ` style="color:${color};"` : ""}>${value}</b></div>`;
+            const fmtB = (v) => formatCurrency(v, baseCurrency);
+            const scopeWord = insuranceStatusFilter === "all" ? "all policies" : (insuranceStatusFilter === "ended" ? "ended policies" : "in-force policies");
+            const oblTotal = oblCash + oblAcb;
+            const bdObl = `<div class="ins-bd-sec">${bd("Paid in cash", fmtB(oblCash))}
+                    ${oblAcbCount ? bd(`Paid via ACB (${oblAcbCount} ${oblAcbCount === 1 ? "policy" : "policies"})`, oblAcb > 0 ? fmtB(oblAcb) : "—") : ""}
+                    ${bd("Total obligation", fmtB(oblTotal), "tot")}
+                    ${oblNotNw > 0 ? bd(`of which ${INS_NO_NW_ICON}Not mine`, fmtB(oblNotNw)) : ""}
+                    <div class="ins-bd-note">In-force policies only${oblAcbMissing ? `; ${oblAcbMissing} ACB ${oblAcbMissing === 1 ? "policy has" : "policies have"} no premium amount entered, so ${oblAcbMissing === 1 ? "it is" : "they are"} not counted` : ""}. Single-payment policies add nothing here.</div></div>`;
+            const btn = (k) => `<button type="button" class="ins-bd-btn${insSumOpen === k ? " on" : ""}" data-click="insSumToggle" data-k="${k}">Breakdown ${insSumOpen === k ? "▴" : "▾"}</button>`;
+            // v521: each card = label (+ ⓘ with the full explanation), the figure, ONE short line, Breakdown at the bottom
+            const infoBtn = `<button type="button" class="ins-info-btn" data-click="insSumInfo" aria-label="What is this?">i</button>`;
+            const cardObl = `<div class="ins-sum-card${insSumOpen === "obl" ? " on" : ""}" data-k="obl">
+                <div class="ins-sum-k"><span>Obligation · per year</span>${infoBtn}</div>
+                <div class="ins-sum-v">${fmtB(oblTotal)}</div>
+                <div class="ins-sum-n">${oblAcbCount ? "Cash + ACB premiums due" : "Cash premiums due"} each year</div>
+                <div class="ins-sum-help">What the policies ask for each year: cash${oblAcbCount ? " + premiums taken from accumulated bonus (ACB)" : ""}.</div>
+                ${btn("obl")}
+            </div>`;
+            const netCash = paidBase - parentBase - cbBase;
+            const bdCash = `<div class="ins-bd-sec">${bd("Premiums paid", fmtB(paidBase))}
+                    ${parentBase > 0 ? bd("− Paid by parent", fmtB(parentBase)) : ""}
+                    ${cbBase > 0 ? bd("− Cashback received", fmtB(cbBase), "", "var(--income-color)") : ""}
+                    ${bd("Net cash out", fmtB(netCash), "tot")}
+                    <div class="ins-bd-note">Typed-in history plus premiums recorded in the ledger, for ${scopeWord}. Premiums taken from accumulated bonus are not cash and are not in here.</div></div>`;
+            const cardCash = `<div class="ins-sum-card${insSumOpen === "cash" ? " on" : ""}" data-k="cash">
+                <div class="ins-sum-k"><span>Cash out · so far</span>${infoBtn}</div>
+                <div class="ins-sum-v">${fmtB(netCash)}</div>
+                <div class="ins-sum-n">Premiums paid${parentBase > 0 ? " − parent" : ""}${cbBase > 0 ? " − cashback" : ""}</div>
+                <div class="ins-sum-help">What really left your pocket: premiums paid${parentBase > 0 ? " − paid by parent" : ""}${cbBase > 0 ? " − cashback received" : ""}.</div>
+                ${btn("cash")}
+            </div>`;
+            let cardVal = "", bdVal = "";
+            let personBreak = "";
+            if (svCount) {
+                const net = savSvBase - savPaidBase;
+                const pct = savPaidBase > 0 ? (savSvBase / savPaidBase) * 100 : null;
+                const netColor = net >= 0 ? "var(--income-color)" : "var(--expense-color)";
+                const oldestSvAge = Math.round((new Date(todayStr + "T00:00:00") - new Date(savMinDate + "T00:00:00")) / 86400000);
+                const svDateLabel = savMinDate === savMaxDate ? `as of ${savMinDate}` : `dated ${savMinDate} to ${savMaxDate}`;
+                if (savByPerson.size > 1) {
+                    const pOrder = [...membersCache.map(m => m.id).filter(id => savByPerson.has(id)), ...(savByPerson.has("") ? [""] : [])];
+                    const pRow = (key) => {
+                        const d = savByPerson.get(key), m = key ? getMemberById(key) : null;
+                        const pn = d.sv - d.paid, pp = d.paid > 0 ? (d.sv / d.paid) * 100 : null;
+                        const col = pn >= 0 ? "var(--income-color)" : "var(--expense-color)";
+                        const nm = m ? `<span class="member-color-dot" style="background:${m.color}; display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px;"></span>${escapeHtml(m.name)}` : "Insured person not set";
+                        return `<div class="ins-pp">
+                            <div class="ins-pp-top"><span style="font-weight:800;">${nm} <span style="font-weight:600; color:var(--text-muted); font-size:0.68rem;">· ${d.n} ${d.n === 1 ? "policy" : "policies"}</span></span><b style="color:${col};">${pn >= 0 ? "+" : "−"}${fmtB(Math.abs(pn))}${pp != null ? ` · ${pp.toFixed(0)}%` : ""}</b></div>
+                            <div class="ins-pp-sub">Paid ${fmtB(d.paid)} → SV <b>${fmtB(d.sv)}</b></div>
+                        </div>`;
+                    };
+                    personBreak = `<div class="ins-bd-h" style="margin-top:0;">By person · net</div>${pOrder.map(pRow).join("")}`;
+                }
+                bdVal = `<div class="ins-bd-grid">
+                        <div class="ins-bd-sec">
+                            <div class="ins-bd-h" style="margin-top:0;">What counts</div>
+                            ${bd(`Your in-force policies (${svCountedN})`, fmtB(svCounted))}
+                            ${svNotN ? bd(`Left out — ${INS_NO_NW_ICON}Not mine or ended (${svNotN})`, fmtB(svNot)) : ""}
+                            ${bd(`All surrender values (${svCount})`, fmtB(svCounted + svNot), "tot")}
+                        </div>
+                        <div class="ins-bd-sec">
+                            <div class="ins-bd-h" style="margin-top:0;">Like for like — all ${svCount} with a surrender value</div>
+                            ${bd("Premiums paid to each SV date", fmtB(savPaidBase))}
+                            ${bd("Surrender value", fmtB(savSvBase))}
+                            ${bd("Net", `${net >= 0 ? "+" : "−"}${fmtB(Math.abs(net))}`, "tot", netColor)}
+                            ${pct != null ? bd("SV ÷ premiums paid", `${pct.toFixed(1)}%`) : ""}
+                            ${(savCbBase > 0 && savPaidBase > 0) ? bd("🎁 + cashback → SV + cashback", `${(((savSvBase + savCbBase) / savPaidBase) * 100).toFixed(1)}%`, "", "var(--income-color)") : ""}
+                        </div>
+                        ${personBreak ? `<div class="ins-bd-sec">${personBreak}</div>` : ""}
+                    </div>
+                    <div class="ins-bd-note">Premiums are counted only up to each policy's SV date. Net is a rough guide, not an investment return (riders, bonuses and fund prices move). A policy whose premium now comes from ACB stops adding premiums, so its % reads high.</div>`;
+                cardVal = `<div class="ins-sum-card${insSumOpen === "val" ? " on" : ""}" data-k="val">
+                    <div class="ins-sum-k"><span>Value · surrender</span>${infoBtn}</div>
+                    <div class="ins-sum-v">${fmtB(svCounted)}</div>
+                    <div class="ins-sum-n">${svCountedN ? `${svCountedN} in-force ${svCountedN === 1 ? "policy" : "policies"} · info only` : "None is yours and in force"}</div>
+                    <div class="ins-sum-n">${oldestSvAge > 365 ? `<span class="ins-sum-warn">⚠ Oldest ${escapeHtml(savMinDate)}</span>` : `Statements ${escapeHtml(svDateLabel)}`}</div>
+                    <div class="ins-sum-help">${svCountedN ? `Surrender value of ${svCountedN} in-force ${svCountedN === 1 ? "policy" : "policies"} that ${svCountedN === 1 ? "is" : "are"} yours. Information only — not part of Net Worth.` : "None of these policies is yours and in force."} Statements ${escapeHtml(svDateLabel)}${oldestSvAge > 365 ? " — the oldest is over a year old" : ""}.</div>
+                    ${btn("val")}
+                </div>`;
+            }
+            insSumPanels = { obl: insuranceStatusFilter === "ended" ? "" : `<div style="max-width:460px;">${bdObl}</div>`, cash: `<div style="max-width:460px;">${bdCash}</div>`, val: bdVal };
+            summary.style.display = filtered.length ? "block" : "none";
+            const keepScroll = (summary.querySelector(".ins-sum3") || {}).scrollLeft || 0;
+            summary.innerHTML = `<div class="ins-sum3">${insuranceStatusFilter === "ended" ? "" : cardObl}${cardCash}${cardVal}</div><div class="ins-sum-helpbar" style="display:none;"></div><div class="ins-bd-panel" style="display:none;"></div><div class="ins-sum-scope">Life, medical &amp; other personal policies — car, home &amp; travel are on their own tab</div>`;
+            { const row = summary.querySelector(".ins-sum3"); if (row) row.scrollLeft = keepScroll; }
+            insSumApplyOpen(false);
+
+            // The old separate Savings panel now lives inside the Value card.
+            const savEl = document.getElementById("insuranceSavingsSummary");
+            if (savEl) { savEl.style.display = "none"; savEl.innerHTML = ""; }
+        }
+
+        // v513: compact "Sum insured" for the card — up to 2 covers on one wrapping line, the rest as "+N".
+        // Same merge rules as insCardCoverHtml (same-type rows summed; a medical row shows its annual limit).
+        function insCoverGroups(p) {
+            const groups = new Map(), kinds = new Map(); // v521: kinds (name -> cover kind) for the tinted badges
+            (p.coverages || []).filter(c => c && (c.kind || c.label)).forEach(c => {
+                const k = INS_COV_KINDS[c.kind];
+                const name = (k && c.kind !== "other") ? k[1] : (c.label || (k ? k[1] : "Cover"));
+                let amount = null, tag = "";
+                if (c.kind === "medical" && typeof c.annualLimit === "number") { amount = c.annualLimit; tag = " annual limit"; }
+                else if (typeof insCovSum(c) === "number") amount = insCovSum(c);
+                else if (c.kind === "medical" && typeof c.lifetimeLimit === "number") { amount = c.lifetimeLimit; tag = " lifetime limit"; }
+                if (amount == null) return;
+                groups.set(name + tag, (groups.get(name + tag) || 0) + amount);
+                if (!kinds.has(name + tag)) kinds.set(name + tag, INS_COV_KINDS[c.kind] ? c.kind : "other");
+            });
+            return { entries: [...groups.entries()], kinds };
+        }
+
+        // v514: "Not mine" marker (renamed v518; the stored field is still excludeFromNetWorth) — a small hollow dashed circle in the muted text colour (the red
+        // circle-slash looked alarming for something that is just a setting).
+        const INS_NO_NW_ICON = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true" style="vertical-align:-1px; margin-right:3px;"><circle cx="6" cy="6" r="4.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-dasharray="2.2 1.6"/></svg>';
+        let insSumOpen = null; // v514: which summary card's breakdown panel is open: "obl" | "cash" | "val" | null
+        let insSumPanels = {}; // v515: the three panels' HTML, kept so a tap swaps the panel in place (no re-render, so the card row keeps its horizontal scroll)
+        function insSumApplyOpen(scrollToCard) {
+            const root = document.getElementById("insuranceSummary");
+            if (!root) return;
+            const panel = root.querySelector(".ins-bd-panel");
+            const html = insSumOpen ? (insSumPanels[insSumOpen] || "") : "";
+            if (!html) insSumOpen = null;
+            root.querySelectorAll(".ins-sum-card").forEach(c => {
+                const on = c.dataset.k === insSumOpen;
+                c.classList.toggle("on", on);
+                const b = c.querySelector(".ins-bd-btn");
+                if (b) { b.classList.toggle("on", on); b.textContent = "Breakdown " + (on ? "▴" : "▾"); }
+                if (on && scrollToCard) c.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+            });
+            if (panel) { panel.style.display = html ? "block" : "none"; panel.innerHTML = html; }
+        }
+
+        // v513: the slimmed policy card. Three layers: (1) name + insurer/person + ONE figure on the right
+        // (SV for a savings policy, premiums paid for a protection policy), (2) up to two covers + small
+        // chips (riders count, ACB, cashback, attachments, note), (3) one footer line: the next premium.
+        // Everything else (riders in full, agent, notes, attachments, history) is one tap away in the detail sheet.
+        // v521: Policies list redesign. Group headers (by person / insurer), a tinted icon badge, ONE labelled
+        // main figure on the right (Surrender value for savings / investment, Premium / year for protection,
+        // "Paid so far" when there is no premium on record), sum-insured as small tinted badges, fewer and
+        // clearer chips, and a due-date pill in the footer (grey > 30 days, amber within 30, red overdue).
+        const INS_TYPE_TINT = { life: "59,130,246", savings: "59,130,246", investment: "59,130,246", term: "139,92,246", medical: "20,184,166", critical: "244,63,94", accident: "245,158,11", other: "100,116,139" };
+        function insPolicyCardHtml(p, f, daysUntil, ctx) {
+            ctx = ctx || {};
+            const live = insIsLive(p);
+            const icon = INS_TYPE_ICONS[p.type] || INS_TYPE_ICONS.other;
+            const tint = INS_TYPE_TINT[p.type] || INS_TYPE_TINT.other;
+            const metaParts = [];
+            if (p.product && p.insurer && !ctx.hideInsurer) metaParts.push(escapeHtml(p.insurer));
+            if (!ctx.hideWho && p.insuredMemberId && getMemberById(p.insuredMemberId)) metaParts.push(accountOwnerTagHTML({ memberIds: [p.insuredMemberId] }));
+            if (live) { const py = insPolicyYear(p); if (py) metaParts.push(`<span title="Policy year — next anniversary ${escapeHtml(py.next)}">Year ${py.year}${py.of ? " / " + py.of : ""}</span>`); }
+            if (!live) metaParts.push(escapeHtml(INS_STATUSES[p.status] || p.status));
+            if (p.excludeFromNetWorth) metaParts.push(`<span class="insp-nm" title="Not mine — left out of the Value total">${INS_NO_NW_ICON}Not mine</span>`);
+
+            // Right-hand figure: always says what the number is.
+            let fig;
+            if (f.svValue != null) {
+                const svBasis = (f.paidToSv != null && f.paidToSv > 0) ? f.paidToSv : (f.paid > 0 ? f.paid : null);
+                const svPct = svBasis ? (f.svValue / svBasis) * 100 : null;
+                const chip = svPct == null ? "" : ` <span class="ins-pct ${svPct >= 100 ? "up" : ""}"${p.paidByBonus ? ' title="Premium now comes from accumulated bonus, so this % reads high"' : ""}>${svPct.toFixed(0)}%</span>`;
+                fig = `<div class="insp-fig-k">Surrender value</div>
+                       <div class="ins-card-big">${formatCurrency(f.svValue, f.cur)}</div>
+                       <div class="ins-card-sub" style="${f.svStale ? "color:var(--expense-color); font-weight:700;" : ""}">as of ${escapeHtml(f.latestSv.date)}${f.svStale ? " ⚠️" : ""}</div>
+                       <div class="ins-card-sub">Paid ${formatCurrency(f.paid, f.cur)}${chip}</div>`;
+            } else if (live && f.annual > 0) {
+                fig = `<div class="insp-fig-k">${p.paidByBonus ? "Via ACB · year" : "Premium · year"}</div>
+                       <div class="ins-card-big">${formatCurrency(f.annual, f.cur)}</div>
+                       ${f.paid > 0 ? `<div class="ins-card-sub">Paid ${formatCurrency(f.paid, f.cur)} so far</div>` : ""}`;
+            } else {
+                fig = `<div class="insp-fig-k">Paid so far</div><div class="ins-card-big ins-muted">${formatCurrency(f.paid, f.cur)}</div>`;
+            }
+
+            // Sum insured: small tinted badges (up to 3), the rest as "+N"
+            const cgd = insCoverGroups(p), cg = cgd.entries;
+            let cover = "";
+            if (cg.length) {
+                const badge = ([n, a]) => `<span class="insp-badge" style="--bt:${INS_TYPE_TINT[cgd.kinds.get(n)] || INS_TYPE_TINT.other};">${escapeHtml(n)} <b>${formatCurrency(a, f.cur)}</b></span>`;
+                cover = `<div class="insp-cov"><span class="ins-card-cover-k">Sum insured</span>${cg.slice(0, 3).map(badge).join("")}${cg.length > 3 ? `<span class="insp-more">+${cg.length - 3} more</span>` : ""}</div>`;
+            } else if (live) {
+                cover = `<div class="insp-cov"><span class="insp-badge" style="--bt:245,158,11;">Sum insured not set ⚠️</span></div>`;
+            }
+
+            // Chips (each one says what it is): riders, ACB, cashback (received + next in ONE chip), files, note
+            const chips = [];
+            const riders = insRiderItemsOf(p);
+            if (riders.length) chips.push(`<span class="ins-chip">🧩 ${riders.length} rider${riders.length === 1 ? "" : "s"}</span>`);
+            if (p.paidByBonus) chips.push(`<span class="ins-chip amber">💰 Premium via ACB${p.paidByBonusSince ? " since " + escapeHtml(String(p.paidByBonusSince).slice(0, 4)) : ""}</span>`);
+            const nx = insCashbackNext(p, f);
+            const nxOk = !!(nx && nx.date && nx.amount != null);
+            const cbParts = [];
+            if (f.cbCount > 0) cbParts.push(`${formatCurrency(f.cbTotal, f.cur)} received`);
+            if (nxOk) cbParts.push(nx.overdue ? `payout due ${escapeHtml(nx.date)}` : `next ${formatCurrency(nx.amount, f.cur)} on ${escapeHtml(nx.date)}`);
+            if (cbParts.length) chips.push(`<span class="ins-chip wrap ${nxOk ? (nx.overdue ? "amber" : "green") : ""}">🎁 Cashback ${cbParts.join(" · ")}</span>`);
+            if (insAttCount(p)) chips.push(`<span class="ins-chip">📎 ${insAttCount(p)} file${insAttCount(p) === 1 ? "" : "s"}</span>`);
+            if (p.notes) chips.push(`<span class="ins-chip">📝 Note</span>`);
+
+            // Footer: next premium + due pill
+            let foot = "";
+            const hasPlan = !!(f.plan && !f.plan.paused && f.plan.dueDate);
+            const dd = hasPlan ? daysUntil(f.plan.dueDate) : 0;
+            if (hasPlan) {
+                const cls = dd < 0 ? "late" : (dd <= 30 ? "soon" : "ok");
+                const txt = dd < 0 ? `Overdue ${Math.abs(dd)}d` : (dd === 0 ? "Due today" : (dd <= 30 ? `Due in ${dd}d` : `${dd}d left`));
+                foot = `<span>Next premium ${escapeHtml(f.plan.dueDate)}</span><span class="insp-foot-r"><span class="insp-due ${cls}">${txt}</span><span>›</span></span>`;
+            }
+            const overdue = hasPlan && dd < 0;
+
+            return `
+                <div class="config-item ins-pc${overdue ? " alert" : ""}${live ? "" : " ended"}${p.excludeFromNetWorth ? " ins-nm-card" : ""}" data-click="insurancePolicyTap" data-id="${escapeHtml(p.id)}">
+                    <div class="ins-card-head">
+                        <span class="insp-pico" style="background:rgba(${tint},0.14);">${icon}</span>
+                        <div class="ins-card-title"><strong>${escapeHtml(p.product || p.insurer || "Policy")}</strong>${metaParts.length ? `<div class="ins-card-meta">${metaParts.map(x => `<span class="ins-mp">${x}</span>`).join("")}</div>` : ""}</div>
+                        <div class="ins-card-fig">${fig}</div>
+                    </div>
+                    ${cover}
+                    ${chips.length ? `<div class="ins-chips">${chips.join("")}</div>` : ""}
+                    ${foot ? `<div class="ins-card-foot">${foot}</div>` : ""}
+                </div>`;
+        }
+
+        // --- Reports (the other two tabs of the Insurance page) ---
+        // "By person": what each insured person is covered for, by type — the Sum insured of every coverage
+        // row of their IN-FORCE policies added up per type (Life, Term, Medical, Critical Illness, Personal
+        // Accident…) in the base currency, the policies behind each total listed underneath; Medical rows
+        // also add up the annual / lifetime limits. "Car · Home · Travel": policies of those types are about
+        // things (or a trip), not people's lives, so they get their own report — sum insured, yearly premium
+        // and renewal date per policy — and stay out of the per-person one.
+        const INS_ASSET_TYPES = ["car", "home", "travel"];
+        const INS_COV_ORDER = ["life", "term", "medical", "critical", "accident", "other", "car", "home", "travel"];
+        let insuranceView = "policies"; // "policies" | "people" | "assets"
+
+        function insuranceSetView(el) {
+            insuranceView = el.dataset.view;
+            document.querySelectorAll("#insuranceViewTabs .nav-view-toggle-btn").forEach(b => b.classList.toggle("active", b.dataset.view === insuranceView));
+            renderInsurancePage();
+        }
+
+        // Yearly CASH premium of a policy in the base currency (0 when it is paid from accumulated bonus).
+        function insAnnualCashBase(p) {
+            if (p.paidByBonus) return 0;
+            const freq = INS_FREQ[p.frequency], prem = parseFloat(p.premium) || 0;
+            if (!freq || !(freq[1] > 0) || !(prem > 0)) return 0;
+            return insConvert(prem * freq[1], p.currency || baseCurrency, baseCurrency);
+        }
+
+        function insKindData() {
+            return { sum: 0, hasSum: false, annual: 0, hasAnnual: false, life: 0, hasLife: false, rem: 0, hasRem: false, items: [] };
+        }
+
+        function insAddCoverage(d, p, c) {
+            const cur = p.currency || baseCurrency;
+            if (typeof insCovSum(c) === "number") { d.sum += insConvert(insCovSum(c), cur, baseCurrency); d.hasSum = true; }
+            if (typeof c.annualLimit === "number") { d.annual += insConvert(c.annualLimit, cur, baseCurrency); d.hasAnnual = true; }
+            if (typeof c.lifetimeLimit === "number") { d.life += insConvert(c.lifetimeLimit, cur, baseCurrency); d.hasLife = true; }
+            if (typeof c.lifetimeRemaining === "number") { d.rem += insConvert(c.lifetimeRemaining, cur, baseCurrency); d.hasRem = true; }
+            d.items.push({ p, c });
+        }
+
+        // v520: By person redesign — each coverage type is one tappable row (icon badge, name, policy count,
+        // total on the right); the policies behind the total fold open underneath. Riders get the same row.
+        const INS_KIND_TINT = { life: "59,130,246", term: "139,92,246", medical: "20,184,166", critical: "244,63,94", accident: "245,158,11", other: "100,116,139", riders: "99,102,241" };
+        function inspRowHtml(kind, icon, label, subHtml, amtHtml, capHtml, bodyHtml) {
+            const t = INS_KIND_TINT[kind] || INS_KIND_TINT.other;
+            return `<details class="insp-kind ins-kind-row">
+                <summary>
+                    <span class="insp-ico" style="background:rgba(${t},0.14);">${icon}</span>
+                    <span class="insp-ttl"><span class="insp-name">${escapeHtml(label)}</span><span class="insp-sub">${subHtml}</span></span>
+                    <span class="insp-amt">${amtHtml}${capHtml ? `<span class="insp-cap">${capHtml}</span>` : ""}</span>
+                    <span class="insp-chev">›</span>
+                </summary>
+                <div class="insp-body">${bodyHtml}</div>
+            </details>`;
+        }
+
+        function insKindRowHtml(kind, d, withItems) {
+            const k = INS_COV_KINDS[kind];
+            const money = (n) => formatCurrency(n, baseCurrency);
+            const chips = [];
+            if (kind === "medical") {
+                if (d.hasAnnual) chips.push(`<span class="insp-chip"><b>Annual limit</b> ${money(d.annual)}</span>`);
+                if (d.hasRem) chips.push(`<span class="insp-chip"><b>Lifetime remaining</b> ${money(d.rem)}${d.hasLife ? " / " + money(d.life) : ""}</span>`);
+                else if (d.hasLife) chips.push(`<span class="insp-chip"><b>Lifetime limit</b> ${money(d.life)}</span>`);
+            }
+            const nPolicies = new Set(d.items.map(i => i.p.id)).size;
+            // A coverage that is not the policy's own main cover (e.g. a PA rider on a life plan) is tagged "rider".
+            const MAIN_KIND = { life: "life", savings: "life", investment: "life", term: "term", medical: "medical", critical: "critical", accident: "accident" };
+            const riderOf = ({ p }) => kind !== "other" && MAIN_KIND[p.type] && MAIN_KIND[p.type] !== kind;
+            const itemRow = ({ p, c }, hideAmt) => {
+                const labelled = kind === "other" && c.label;
+                const title = labelled ? c.label : (p.product || p.insurer || "Policy");
+                const sub = labelled ? [p.product, p.insurer].filter(Boolean).join(" · ") : (p.product && p.insurer ? p.insurer : "");
+                const hasNum = typeof insCovSum(c) === "number";
+                const amt = hasNum ? formatCurrency(insCovSum(c), p.currency || baseCurrency) : "no sum";
+                return `<div class="insp-it"><span class="insp-it-l"><span class="insp-it-n">${escapeHtml(title)}${riderOf({ p }) ? ` <span class="ins-rider-pill">rider</span>` : ""}</span>${sub ? `<span class="insp-it-s">${escapeHtml(sub)}</span>` : ""}</span>${(hideAmt && hasNum) ? "" : `<span class="insp-it-a">${amt}</span>`}</div>`;
+            };
+            // Biggest first, own-cover before riders.
+            const sorted = d.items.slice().sort((a, b) => (riderOf(a) - riderOf(b))
+                || (insConvert(insCovSum(b.c) || 0, b.p.currency || baseCurrency, baseCurrency) - insConvert(insCovSum(a.c) || 0, a.p.currency || baseCurrency, baseCurrency)));
+            const body = (kind === "medical" ? `<div class="insp-chips">${chips.join("")}<button type="button" class="ins-info-btn" data-click="insToggleMedNote" aria-label="About medical limits">i</button></div><div class="ins-med-note">Medical limits of different plans can overlap (each plan pays up to its own limit for the same bill), so these totals show what is arranged, not what you would receive.</div>` : "")
+                + (withItems ? sorted.map(x => itemRow(x, sorted.length === 1)).join("") : "");
+            return inspRowHtml(kind, k[2], k[1], `${nPolicies} ${nPolicies === 1 ? "policy" : "policies"}`, d.hasSum ? money(d.sum) : "—", kind === "medical" ? "sum insured" : "", body);
+        }
+
+        // v502/v520: By person — the policies' riders (no sum insured of their own), soonest-ending first, ended ones last.
+        function insPersonRidersHtml(policies) {
+            const items = [];
+            policies.forEach(p => insRiderItemsOf(p).forEach(r => items.push({ p, r })));
+            if (!items.length) return "";
+            const today = localDateStr(new Date());
+            const isEnded = ({ r }) => !!r.endDate && r.endDate < today;
+            items.sort((a, b) => (isEnded(a) - isEnded(b)) || (a.r.endDate || "9999").localeCompare(b.r.endDate || "9999"));
+            const row = (x) => {
+                const { p, r } = x;
+                return `<div class="insp-it${isEnded(x) ? " insp-ended" : ""}"><span class="insp-it-l"><span class="insp-it-n" style="overflow-wrap:anywhere;">${escapeHtml(r.name)}</span><span class="insp-it-s">${escapeHtml(p.product || p.insurer || "Policy")}${p.insurer && p.product ? " (" + escapeHtml(p.insurer) + ")" : ""}</span></span><span class="insp-it-a" style="font-weight:600; font-size:0.72rem;">${insRiderUntilHtml(r)}</span></div>`;
+            };
+            const nEnded = items.filter(isEnded).length;
+            return inspRowHtml("riders", "🧩", "Riders", nEnded ? `${items.length - nEnded} active · ${nEnded} ended` : "active", String(items.length), "", items.map(row).join(""));
+        }
+
+        function insReportPeopleHtml() {
+            const live = insuranceCache.filter(p => insIsLive(p) && !INS_ASSET_TYPES.includes(p.type));
+            if (!live.length) return `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:40px 20px;">No in-force life, medical, critical illness or accident policies yet.</p>`;
+            const groups = new Map();
+            const noCoverage = [];
+            let foreign = false, anyMedical = false;
+            const kindOf = (map, k) => { if (!map.has(k)) map.set(k, insKindData()); return map.get(k); };
+            live.forEach(p => {
+                if ((p.currency || baseCurrency) !== baseCurrency) foreign = true;
+                const key = p.insuredMemberId && getMemberById(p.insuredMemberId) ? p.insuredMemberId : "";
+                if (!groups.has(key)) groups.set(key, { policies: [], kinds: new Map(), yearly: 0 });
+                const g = groups.get(key);
+                g.policies.push(p);
+                g.yearly += insAnnualCashBase(p);
+                const covs = (p.coverages || []).filter(c => c && (c.kind || c.label));
+                if (!covs.length) noCoverage.push(p);
+                covs.forEach(c => {
+                    const kind = INS_COV_KINDS[c.kind] ? c.kind : "other";
+                    if (kind === "medical") anyMedical = true;
+                    insAddCoverage(kindOf(g.kinds, kind), p, c);
+                });
+            });
+            const order = [...membersCache.map(m => m.id).filter(id => groups.has(id)), ...(groups.has("") ? [""] : [])];
+            const rowsFor = (kinds, withItems) => INS_COV_ORDER.filter(k => kinds.has(k)).map(k => insKindRowHtml(k, kinds.get(k), withItems)).join("")
+                || `<p style="font-size:0.75rem; color:var(--text-muted); padding:8px 0;">No coverage details recorded yet.</p>`;
+            let html = order.length ? `<div class="insp-toolbar"><span>${order.length} ${order.length === 1 ? "person" : "people"} · tap a row to see its policies</span><button type="button" data-click="insPeopleToggleAll">Expand all</button></div>` : "";
+            // v503: the "Everyone" household-total card was removed (summed sums insured are not what any one person is covered for).
+            order.forEach(key => {
+                const g = groups.get(key);
+                const m = key ? getMemberById(key) : null;
+                const color = m && /^#[0-9a-f]{6}$/i.test(m.color || "") ? m.color : "#94a3b8";
+                const name = m ? m.name : "Insured person not set";
+                const initial = m ? ([...String(m.name || "?").trim()][0] || "?").toUpperCase() : "?";
+                html += `<div class="insp-card" style="--pc:${color}; --pc-tint:${color}1f;">
+                    <div class="insp-head">
+                        <span class="insp-avatar">${escapeHtml(initial)}</span>
+                        <span class="insp-who"><span class="insp-who-n"${m ? "" : ' style="color:var(--text-muted);"'}>${escapeHtml(name)}</span><span class="insp-who-s">${g.policies.length} ${g.policies.length === 1 ? "policy" : "policies"} in force</span></span>
+                        ${g.yearly > 0 ? `<span class="insp-prem"><b>${formatCurrency(g.yearly, baseCurrency)}</b><span>per year</span></span>` : ""}
+                    </div>
+                    ${rowsFor(g.kinds, true)}
+                    ${insPersonRidersHtml(g.policies)}
+                </div>`;
+            });
+            if (noCoverage.length) {
+                html += `<div style="background:rgba(245,158,11,0.14); border:1px solid rgba(245,158,11,0.35); border-radius:10px; padding:9px 12px; font-size:0.76rem; font-weight:700; margin-bottom:12px;">⚠️ ${noCoverage.length} in-force ${noCoverage.length === 1 ? "policy has" : "policies have"} no coverage details yet, so ${noCoverage.length === 1 ? "it is" : "they are"} not in the totals — tap to add: ${noCoverage.map(p => `<span data-click="insurancePolicyTap" data-id="${escapeHtml(p.id)}" style="text-decoration:underline; cursor:pointer;">${escapeHtml(p.product || p.insurer || "Policy")}</span>`).join(", ")}</div>`;
+            }
+            const notes = [`In-force policies only. Amounts are the Sum insured of each coverage row${foreign ? `, converted to ${escapeHtml(baseCurrency)} at today's rates` : ""}. “/yr” is the cash premium per year (policies paid from accumulated bonus are not counted).`];
+            html += `<p style="font-size:0.7rem; color:var(--text-muted); line-height:1.5;">${notes.join(" ")}</p>`;
+            return html;
+        }
+
+        function insReportAssetsHtml() {
+            // v495: follows the In force / Ended / All filter (was in-force only).
+            const live = insuranceCache.filter(p => INS_ASSET_TYPES.includes(p.type) && (insuranceStatusFilter === "all" ? true
+                : (insuranceStatusFilter === "ended" ? !insIsLive(p) : insIsLive(p))));
+            if (!live.length) {
+                const anyAsset = insuranceCache.some(p => INS_ASSET_TYPES.includes(p.type));
+                const msg = !anyAsset ? "No car, home / fire or travel policies yet — add one with + and choose that Type."
+                    : (insuranceStatusFilter === "ended" ? "No ended car, home / fire or travel policies." : "No in-force car, home / fire or travel policies — choose Ended or All above to see the others.");
+                return `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:40px 20px;">${msg}</p>`;
+            }
+            const today = todayLocalStr();
+            const money = (n) => formatCurrency(n, baseCurrency);
+            let totalYearly = 0, foreign = false;
+            const sections = INS_ASSET_TYPES.map(type => {
+                const ps = live.filter(p => p.type === type)
+                    .sort((a, b) => (a.maturityDate || "9999").localeCompare(b.maturityDate || "9999") || (a.product || "").localeCompare(b.product || ""));
+                if (!ps.length) return "";
+                let sumBase = 0, hasSum = false, yearlyBase = 0;
+                const rows = ps.map(p => {
+                    const cur = p.currency || baseCurrency;
+                    if (cur !== baseCurrency) foreign = true;
+                    const sums = (p.coverages || []).filter(c => c && typeof c.sumAssured === "number");
+                    const sumNative = sums.reduce((s, c) => s + c.sumAssured, 0);
+                    if (sums.length && insIsLive(p)) { sumBase += insConvert(sumNative, cur, baseCurrency); hasSum = true; }
+                    const yearly = insIsLive(p) ? insAnnualCashBase(p) : 0; // v495: an ended policy has no yearly cost
+                    yearlyBase += yearly;
+                    const freq = INS_FREQ[p.frequency], prem = parseFloat(p.premium) || 0;
+                    const yearlyNative = (freq && freq[1] > 0 && prem > 0 && !p.paidByBonus && insIsLive(p)) ? prem * freq[1] : 0;
+                    let endLine = "";
+                    let urg = insIsLive(p) ? "ok" : "ended"; // v524: row bar state — "red" | "amber" | "ok" | "ended"
+                    if (!insIsLive(p)) {
+                        endLine = `<span style="font-size:0.72rem; font-weight:700; color:var(--text-muted);">${escapeHtml(INS_STATUSES[p.status] || p.status)}${p.maturityDate ? " · " + escapeHtml(p.maturityDate) : ""}</span>`;
+                    } else if (p.maturityDate) {
+                        const dd = Math.round((new Date(p.maturityDate + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+                        // v524: two urgency levels — red: overdue / within 7 days; amber: 8–30 days (same thresholds as the row's bar)
+                        urg = dd <= 7 ? "red" : (dd <= 30 ? "amber" : "ok");
+                        const color = urg === "red" ? "var(--expense-color)" : (urg === "amber" ? "#d97706" : "var(--text-muted)");
+                        endLine = `<span style="font-size:0.72rem; font-weight:700; color:${color};">${dd < 0 ? `⚠️ Expired ${-dd} day${-dd === 1 ? "" : "s"} ago` : (dd === 0 ? "⚠️ Expires today" : `Ends ${escapeHtml(p.maturityDate)} · ${dd} day${dd === 1 ? "" : "s"} left`)}${dd < 0 ? ` (${escapeHtml(p.maturityDate)})` : ""}</span>`;
+                    }
+                    const who = p.insuredMemberId && getMemberById(p.insuredMemberId) ? accountOwnerTagHTML({ memberIds: [p.insuredMemberId] }) : "";
+                    const meta = [p.insurer ? escapeHtml(p.insurer) : "", p.policyNo ? escapeHtml(p.policyNo) : "", who].filter(Boolean).join(" · ");
+                    return `<div class="ins-ar" data-urg="${urg}" data-click="insurancePolicyTap" data-id="${escapeHtml(p.id)}" style="cursor:pointer; ${insIsLive(p) ? "" : "opacity:0.65; "}border-top:1px solid var(--border-color); display:flex; justify-content:space-between; gap:10px; align-items:flex-start;">
+                        <span style="min-width:0; display:flex; flex-direction:column; gap:2px;">
+                            <strong style="font-size:0.85rem; overflow-wrap:anywhere;">${escapeHtml(p.product || p.insurer || "Policy")}</strong>
+                            ${meta ? `<span style="font-size:0.72rem; color:var(--text-muted); font-weight:600; overflow-wrap:anywhere;">${meta}</span>` : ""}
+                            ${endLine}
                         </span>
-                        <span style="text-align:right; flex:0 0 auto;">
-                            <span style="display:block; font-size:0.85rem; font-weight:700;">Paid ${formatCurrency(f.paid, f.cur)}</span>
-                            <span style="font-size:0.72rem; font-weight:700; color:${f.svStale ? "var(--expense-color)" : "var(--text-muted)"};">${svText}</span>
+                        <span style="text-align:right; flex:0 0 auto; display:flex; flex-direction:column; gap:2px;">
+                            <span style="font-size:0.85rem; font-weight:800;">${sums.length ? formatCurrency(sumNative, cur) : "—"}</span>
+                            <span style="font-size:0.7rem; color:var(--text-muted); font-weight:700;">${yearlyNative > 0 ? formatCurrency(yearlyNative, cur) + "/yr" : ""}</span>
                         </span>
                     </div>`;
-            });
-            list.innerHTML = rows.join("");
-
-            const cell = (label, value) => `
-                <div style="flex:1 1 0; min-width:0; text-align:center;">
-                    <div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:0.03em;">${label}</div>
-                    <div style="font-family:'Kalam', cursive; font-size:1.05rem; font-weight:800; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${value}</div>
+                }).join("");
+                totalYearly += yearlyBase;
+                return `<div class="ins-ag" data-cat="${type}">
+                    <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:6px;">
+                        <span class="ins-ag-ttl"><span class="ins-ag-ico">${INS_TYPE_ICONS[type]}</span><span class="ins-ag-name">${escapeHtml(INS_TYPES[type])}</span><span class="ins-ag-chip"></span><span style="font-weight:600; font-size:0.75rem; color:var(--text-muted);">· ${ps.length} ${ps.length === 1 ? "policy" : "policies"}</span></span>
+                        <span style="font-size:0.72rem; font-weight:700; color:var(--text-muted); text-align:right;">Sum insured ${hasSum ? money(sumBase) : "—"}${yearlyBase > 0 ? ` · ${money(yearlyBase)}/yr` : ""}</span>
+                    </div>${rows}
                 </div>`;
-            summary.style.display = filtered.length ? "flex" : "none";
-            summary.innerHTML = cell("Yearly premium", formatCurrency(annualBase, baseCurrency))
-                + cell("Premiums paid", formatCurrency(paidBase, baseCurrency))
-                + cell("Surrender value", svCount ? formatCurrency(svBase, baseCurrency) : "—");
+            }).join("");
+            return sections + `<p style="font-size:0.7rem; color:var(--text-muted); line-height:1.5;">${insuranceStatusFilter === "ended" ? "Ended policies — they are not counted in the totals" : (insuranceStatusFilter === "all" ? "Ended policies are dimmed and not counted in the totals" : "In-force policies only")}, nearest end date first. Sum insured adds up the coverage rows of each policy${foreign ? `; section totals are converted to ${escapeHtml(baseCurrency)} at today's rates` : ""}.${totalYearly > 0 ? ` Yearly cash premium of all of these: ${money(totalYearly)}.` : ""}</p>`;
+        }
+
+        // --- v496: Insurance print report ---
+        // A purpose-built printout (the 🖨️ button in the Insurance header, and the floating print button
+        // while this page is open): summary → needs attention → cover by person → policy register →
+        // car / home / travel → agents → (optional) one detail block per policy. It is built from the
+        // data, not copied from the screen, so it does not depend on which tab is open. The HTML goes into
+        // #insurancePrintReport, which is hidden on screen and the only thing shown while body has
+        // .ins-printing (see the v496 print CSS in index.html). Landscape A4 via the named @page "insr".
+        let insPrintOpts = { scope: "active", details: false, contacts: true, members: null }; // v508: members = array of insured-person keys ("" = not set), null = everyone
+
+        function openInsurancePrintSheet() {
+            const sc = document.querySelector(`input[name="insPrintScope"][value="${insPrintOpts.scope}"]`);
+            if (sc) sc.checked = true;
+            const d = document.getElementById("insPrintDetails"); if (d) d.checked = insPrintOpts.details;
+            const c = document.getElementById("insPrintContacts"); if (c) c.checked = insPrintOpts.contacts;
+            // v508: "Whose policies" — one tick per insured person who has a policy (hidden when there is only one group).
+            const box = document.getElementById("insPrintMembers");
+            if (box) {
+                const counts = new Map();
+                insuranceCache.forEach(p => {
+                    const k = p.insuredMemberId && getMemberById(p.insuredMemberId) ? p.insuredMemberId : "";
+                    counts.set(k, (counts.get(k) || 0) + 1);
+                });
+                const keys = [...membersCache.map(m => m.id).filter(id => counts.has(id)), ...(counts.has("") ? [""] : [])];
+                if (keys.length < 2) { box.style.display = "none"; box.innerHTML = ""; }
+                else {
+                    box.style.display = "block";
+                    const sel = insPrintOpts.members;
+                    box.innerHTML = `<div style="font-size:0.7rem; font-weight:800; text-transform:uppercase; letter-spacing:0.04em; color:var(--text-muted); margin:14px 0 6px;">Whose policies</div>`
+                        + keys.map(k => {
+                            const m = k ? getMemberById(k) : null;
+                            const on = !sel || sel.includes(k);
+                            const nm = m ? `<span class="member-color-dot" style="background:${m.color}; display:inline-block; width:10px; height:10px; border-radius:50%;"></span> ${escapeHtml(m.name)}` : "Insured person not set";
+                            return `<label style="display:flex; align-items:center; gap:10px; padding:8px 0; font-size:0.9rem; font-weight:600;"><input type="checkbox" class="ins-print-member" value="${escapeHtml(k)}"${on ? " checked" : ""} style="width:18px; height:18px; padding:0; flex:0 0 auto;"> <span>${nm} <span style="font-weight:600; color:var(--text-muted); font-size:0.78rem;">· ${counts.get(k)} ${counts.get(k) === 1 ? "policy" : "policies"}</span></span></label>`;
+                        }).join("");
+                }
+            }
+            openModal("insurancePrintModal");
+        }
+
+        async function insurancePrintRun() {
+            const scopeEl = document.querySelector('input[name="insPrintScope"]:checked');
+            // v508: ticked insured people (null = everyone: no choice shown, or all ticked).
+            const mBoxes = [...document.querySelectorAll("#insPrintMembers .ins-print-member")];
+            let members = null;
+            if (mBoxes.length) {
+                const ticked = mBoxes.filter(b => b.checked).map(b => b.value);
+                if (!ticked.length) { showToast("Tick at least one person"); return; }
+                if (ticked.length < mBoxes.length) members = ticked;
+            }
+            insPrintOpts = {
+                scope: scopeEl ? scopeEl.value : "active",
+                details: !!(document.getElementById("insPrintDetails") || {}).checked,
+                contacts: !!(document.getElementById("insPrintContacts") || {}).checked,
+                members
+            };
+            // closeModal() goes through history.back(); wait for its popstate before the print dialog opens.
+            closeModalAndThen("insurancePrintModal", () => { printInsuranceReport(insPrintOpts); });
+        }
+
+        async function printInsuranceReport(opts) {
+            await loadInsuranceCache();
+            const [txs, planned] = await Promise.all([readAllDB(STORES.TRANSACTIONS), readAllDB(STORES.PLANNED_PAYMENTS)]);
+            const page = document.getElementById("page-insurance");
+            if (!page) return;
+            let host = document.getElementById("insurancePrintReport");
+            if (!host) { host = document.createElement("div"); host.id = "insurancePrintReport"; page.appendChild(host); }
+            host.innerHTML = buildInsuranceReportHtml(opts, txs, planned);
+            document.body.classList.add("ins-printing");
+            const prevDocTitle = document.title;
+            document.title = `Ledger - Insurance report ${todayLocalStr()}`;
+            let cleanedUp = false;
+            const cleanup = () => {
+                if (cleanedUp) return;
+                cleanedUp = true;
+                clearTimeout(fallbackTimer);
+                document.body.classList.remove("ins-printing");
+                document.title = prevDocTitle;
+                host.innerHTML = "";
+            };
+            // Some mobile browsers fire afterprint before the preview has been drawn, so the report is
+            // removed a moment later rather than at once.
+            window.addEventListener("afterprint", () => setTimeout(cleanup, 1500), { once: true });
+            const fallbackTimer = setTimeout(cleanup, 60000);
+            window.print();
+        }
+
+        // Plain-text cover lines for a policy ("Life RM50,000"): same grouping as the list card, each in the
+        // policy's own currency; Medical shows its annual limit (else lifetime limit / sum).
+        // v505: riders on the printable report — a "Rider: name · until date" line under the sum insured in the
+        // policy register, and a Riders table in each policy's detail block.
+        function insPrintRiderLines(p) {
+            const rs = (p.riders || []).filter(r => r && r.name);
+            if (!rs.length) return "";
+            const esc2 = (t) => escapeHtml(String(t == null ? "" : t));
+            // v509: same wording as the policy card — "Until <date>" while active, red "Ended <date>" once past.
+            const today = localDateStr(new Date());
+            return rs.map(r => {
+                const ended = r.endDate && r.endDate < today;
+                return `<small${ended ? ' class="insr-bad"' : ""}>Rider: ${esc2(r.name)}${r.endDate ? ` · ${ended ? "Ended" : "Until"} ${esc2(r.endDate)}` : ""}</small>`;
+            }).join("");
+        }
+        function insPrintRiderTable(p) {
+            const rs = (p.riders || []).filter(r => r && r.name);
+            if (!rs.length) return "";
+            const esc2 = (t) => escapeHtml(String(t == null ? "" : t));
+            const today = localDateStr(new Date());
+            const rows = rs.map(r => `<tr><td>${esc2(r.name)}</td><td>${r.startDate ? esc2(r.startDate) : "—"}</td><td>${r.endDate ? (r.endDate < today ? `<span class="insr-bad">Ended ${esc2(r.endDate)}</span>` : esc2(r.endDate)) : "—"}</td></tr>`).join("");
+            return `<table class="insr-t"><thead><tr><th>Riders (${rs.length})</th><th>From</th><th>Until</th></tr></thead><tbody>${rows}</tbody></table>`;
+        }
+
+        function insPrintCoverLines(p) {
+            const cur = p.currency || baseCurrency;
+            const groups = new Map();
+            (p.coverages || []).filter(c => c && (c.kind || c.label)).forEach(c => {
+                const k = INS_COV_KINDS[c.kind];
+                const name = (k && c.kind !== "other") ? k[1] : (c.label || (k ? k[1] : "Cover"));
+                let amount = null, tag = "";
+                if (c.kind === "medical" && typeof c.annualLimit === "number") { amount = c.annualLimit; tag = " (annual limit)"; }
+                else if (typeof insCovSum(c) === "number") amount = insCovSum(c);
+                else if (c.kind === "medical" && typeof c.lifetimeLimit === "number") { amount = c.lifetimeLimit; tag = " (lifetime limit)"; }
+                if (amount == null) return;
+                const key = name + tag;
+                groups.set(key, (groups.get(key) || 0) + amount);
+            });
+            return [...groups.entries()].map(([n, a]) => `${escapeHtml(n)} <b>${formatCurrency(a, cur)}</b>`);
+        }
+
+        function buildInsuranceReportHtml(opts, txs, planned) {
+            const esc = escapeHtml;
+            const today = todayLocalStr();
+            const money = (n) => formatCurrency(n, baseCurrency);
+            const daysTo = (d) => Math.round((new Date(d + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+            const scopeAll = opts.scope === "all";
+            const typeOrder = Object.keys(INS_TYPES);
+            const memberKeyOf = (p) => (p.insuredMemberId && getMemberById(p.insuredMemberId)) ? p.insuredMemberId : "";
+            const picked = Array.isArray(opts.members) ? opts.members : null; // v508
+            const included = insuranceCache.filter(p => (scopeAll || insIsLive(p)) && (!picked || picked.includes(memberKeyOf(p)))).slice().sort((a, b) => {
+                const ia = (a.insurer || "").trim().toLowerCase(), ib = (b.insurer || "").trim().toLowerCase();
+                if (ia !== ib) return !ia ? 1 : (!ib ? -1 : ia.localeCompare(ib));
+                const ta = typeOrder.indexOf(a.type || "other"), tb = typeOrder.indexOf(b.type || "other");
+                if (ta !== tb) return ta - tb;
+                return (a.product || "").localeCompare(b.product || "");
+            });
+            const fig = new Map(included.map(p => [p.id, computePolicyFigures(p, txs, planned)]));
+            const personal = included.filter(p => !INS_ASSET_TYPES.includes(p.type));
+            const assets = included.filter(p => INS_ASSET_TYPES.includes(p.type));
+            const livePersonal = personal.filter(insIsLive), liveAssets = assets.filter(insIsLive);
+            const liveAll = included.filter(insIsLive);
+            let foreign = false;
+            included.forEach(p => { if ((p.currency || baseCurrency) !== baseCurrency) foreign = true; });
+
+            const titleName = (p) => esc(p.product || p.insurer || "Policy");
+            const section = (title, body, note) => `<div class="insr-sec"><h3>${title}</h3>${body}${note ? `<p class="insr-note">${note}</p>` : ""}</div>`;
+            const box = (label, value, sub) => `<div class="insr-box"><div class="insr-box-l">${label}</div><div class="insr-box-v">${value}</div>${sub ? `<div class="insr-box-s">${sub}</div>` : ""}</div>`;
+
+            if (!included.length) {
+                return `<div class="insr-head"><h1>🛡️ Insurance report</h1><div class="insr-sub">Printed ${esc(new Date().toLocaleString())}</div></div>
+                    <p class="insr-note" style="font-size:10pt;">No ${scopeAll ? "" : "in-force "}policies to report.</p>`;
+            }
+
+            // ---- Summary ----
+            const yearlyPersonal = livePersonal.reduce((s, p) => s + insAnnualCashBase(p), 0);
+            const yearlyAssets = liveAssets.reduce((s, p) => s + insAnnualCashBase(p), 0);
+            const paidPersonal = personal.reduce((s, p) => s + insConvert(fig.get(p.id).paid, fig.get(p.id).cur, baseCurrency), 0);
+            const paidAssets = assets.reduce((s, p) => s + insConvert(fig.get(p.id).paid, fig.get(p.id).cur, baseCurrency), 0);
+            let savPaid = 0, savSv = 0, savN = 0, savMin = null, savMax = null;
+            livePersonal.forEach(p => {
+                const f = fig.get(p.id);
+                if (f.svValue == null) return;
+                savN++;
+                savPaid += insConvert(f.paidToSv, f.cur, baseCurrency);
+                savSv += insConvert(f.netSv, f.cur, baseCurrency);
+                if (!savMin || f.latestSv.date < savMin) savMin = f.latestSv.date;
+                if (!savMax || f.latestSv.date > savMax) savMax = f.latestSv.date;
+            });
+            const anyBonusPaid = liveAll.some(p => p.paidByBonus);
+            const summary = `<div class="insr-boxes">
+                ${box("Policies", `${liveAll.length} in force`, `${livePersonal.length} life / medical / other · ${liveAssets.length} car, home, travel${scopeAll && included.length > liveAll.length ? ` · ${included.length - liveAll.length} ended listed` : ""}`)}
+                ${box("Yearly premium", money(yearlyPersonal + yearlyAssets), `Personal ${money(yearlyPersonal)} · Car / home / travel ${money(yearlyAssets)}`)}
+                ${box("Premiums paid to date", money(paidPersonal + paidAssets), `Personal ${money(paidPersonal)} · Car / home / travel ${money(paidAssets)}`)}
+            </div>`
+            + (savN ? `<div class="insr-sav"><div class="insr-sav-t">Savings / investment policies (${savN}, in force)</div>
+                <div class="insr-boxes">
+                    ${box("Paid up to SV date", money(savPaid))}
+                    ${box("Surrender value", money(savSv), savMin === savMax ? `as of ${esc(savMin)}` : `dated ${esc(savMin)} to ${esc(savMax)}`)}
+                    ${box("Net", `<span style="color:${savSv - savPaid >= 0 ? "#047857" : "#b91c1c"};">${savSv - savPaid >= 0 ? "+" : "−"}${money(Math.abs(savSv - savPaid))}</span>`, savPaid > 0 ? `SV is ${(savSv / savPaid * 100).toFixed(1)}% of premiums paid` : "")}
+                </div>
+                <p class="insr-note">Premiums counted only up to each policy's SV date; surrender values are net of any policy loan. Net is a rough guide, not an investment return (riders, bonuses and fund prices move).</p></div>` : "");
+            const summaryNote = `${anyBonusPaid ? "Yearly premium leaves out policies whose premium is paid from accumulated bonus. " : ""}${foreign ? `Totals in other currencies are converted to ${esc(baseCurrency)} at today's rates.` : ""}`;
+
+            // ---- Needs attention ----
+            const att = [];
+            liveAll.forEach(p => {
+                const f = fig.get(p.id);
+                const nm = `<b>${titleName(p)}</b>${p.insurer && p.product ? " (" + esc(p.insurer) + ")" : ""}`;
+                if (f.plan && !f.plan.paused) {
+                    const dd = daysTo(f.plan.dueDate);
+                    if (dd < 0) att.push([0, `${nm}: premium <b>overdue ${-dd} day${-dd === 1 ? "" : "s"}</b> (was due ${esc(f.plan.dueDate)}).`]);
+                    else if (dd <= 30) att.push([1, `${nm}: premium due ${dd === 0 ? "<b>today</b>" : `in <b>${dd} day${dd === 1 ? "" : "s"}</b>`} (${esc(f.plan.dueDate)}).`]);
+                }
+                if (p.maturityDate) {
+                    const md = daysTo(p.maturityDate);
+                    if (md < 0) att.push([0, `${nm}: end date <b>${-md} day${-md === 1 ? "" : "s"} ago</b> (${esc(p.maturityDate)}) but still marked in force.`]);
+                    else if (md <= 60) att.push([1, `${nm}: ends ${md === 0 ? "<b>today</b>" : `in <b>${md} day${md === 1 ? "" : "s"}</b>`} (${esc(p.maturityDate)}).`]);
+                }
+                if (f.svStale) att.push([2, `${nm}: surrender value is over a year old (as of ${esc(f.latestSv.date)}) — update it from the latest statement.`]);
+                if (!insPrintCoverLines(p).length) att.push([2, `${nm}: sum insured not set.`]);
+            });
+            att.sort((a, b) => a[0] - b[0]);
+            const attention = att.length
+                ? `<ul class="insr-list">${att.map(a => `<li>${a[1]}</li>`).join("")}</ul>`
+                : `<p class="insr-note" style="font-size:9pt;">Nothing needs attention: no overdue or imminent premiums, no policy ending within 60 days, no out-of-date surrender values.</p>`;
+
+            // ---- Cover by person (in-force life / medical / other only, as on the By person tab) ----
+            let personHtml = "";
+            if (livePersonal.length) {
+                const groups = new Map();
+                const kindOf = (map, k) => { if (!map.has(k)) map.set(k, insKindData()); return map.get(k); };
+                livePersonal.forEach(p => {
+                    const key = p.insuredMemberId && getMemberById(p.insuredMemberId) ? p.insuredMemberId : "";
+                    if (!groups.has(key)) groups.set(key, { policies: [], kinds: new Map(), yearly: 0 });
+                    const g = groups.get(key);
+                    g.policies.push(p);
+                    g.yearly += insAnnualCashBase(p);
+                    (p.coverages || []).filter(c => c && (c.kind || c.label)).forEach(c => {
+                        const kind = INS_COV_KINDS[c.kind] ? c.kind : "other";
+                        insAddCoverage(kindOf(g.kinds, kind), p, c);
+                    });
+                });
+                const order = [...membersCache.map(m => m.id).filter(id => groups.has(id)), ...(groups.has("") ? [""] : [])];
+                const kindRows = (kinds) => INS_COV_ORDER.filter(k => kinds.has(k)).map(k => {
+                    const d = kinds.get(k), kd = INS_COV_KINDS[k];
+                    const sub = [];
+                    if (k === "medical") {
+                        if (d.hasAnnual) sub.push(`annual limit ${money(d.annual)}`);
+                        if (d.hasRem) sub.push(`lifetime limit remaining ${money(d.rem)}${d.hasLife ? " / " + money(d.life) : ""}`);
+                        else if (d.hasLife) sub.push(`lifetime limit ${money(d.life)}`);
+                    }
+                    const n = new Set(d.items.map(i => i.p.id)).size;
+                    return `<tr><td>${kd[2]} ${esc(kd[1])}</td><td class="r">${n}</td><td class="r"><b>${d.hasSum ? money(d.sum) : "—"}</b></td><td>${sub.join(" · ")}</td></tr>`;
+                }).join("") || `<tr><td colspan="4" class="insr-muted">No coverage details recorded.</td></tr>`;
+                const tbl = (rows) => `<table class="insr-t"><thead><tr><th>Cover</th><th class="r">Policies</th><th class="r">Sum insured</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>`;
+                const blocks = [];
+                order.forEach(key => {
+                    const g = groups.get(key), m = key ? getMemberById(key) : null;
+                    blocks.push(`<div class="insr-person"><div class="insr-person-h">${m ? esc(m.name) : "Insured person not set"}<span>${g.policies.length} ${g.policies.length === 1 ? "policy" : "policies"} · ${money(g.yearly)}/yr</span></div>${tbl(kindRows(g.kinds))}</div>`);
+                });
+                personHtml = section("Cover by person", `<div class="insr-persons">${blocks.join("")}</div>`,
+                    `In-force life, medical and other personal policies only. Sum insured is the current figure (reducing cover steps down on its dates). Medical limits of different plans can overlap — each plan pays up to its own limit for the same bill — so these totals show what is arranged, not what would be received.`);
+            }
+
+            // ---- Policy register ----
+            const showNo = !!opts.contacts;
+            const dueCell = (p, f) => {
+                if (!insIsLive(p) || !f.plan || f.plan.paused) return "—";
+                const dd = daysTo(f.plan.dueDate);
+                return `${esc(f.plan.dueDate)}<small class="${dd < 0 ? "insr-bad" : ""}">${dd < 0 ? "overdue " + (-dd) + "d" : (dd === 0 ? "today" : dd + "d left")}</small>`;
+            };
+            const premCell = (p, f) => {
+                const freq = INS_FREQ[p.frequency], prem = parseFloat(p.premium) || 0;
+                if (p.paidByBonus) return `<small>Paid from accumulated bonus</small>`;
+                if (!(prem > 0)) return "—";
+                return `${formatCurrency(prem, f.cur)}<small>${freq ? esc(freq[0]) : ""}${(f.annual > 0 && freq && freq[1] > 1) ? ` · ${formatCurrency(f.annual, f.cur)}/yr` : ""}</small>`;
+            };
+            const planCell = (p) => `<b>${titleName(p)}</b><small>${esc(p.insurer || "")}${showNo && p.policyNo ? `${p.insurer ? " · " : ""}${esc(p.policyNo)}` : ""}</small><small>${INS_TYPE_ICONS[p.type] || INS_TYPE_ICONS.other} ${esc(INS_TYPES[p.type] || "Other")}${insIsLive(p) ? "" : ` · <b>${esc(INS_STATUSES[p.status] || p.status)}</b>`}</small>`;
+            const register = (list, isAsset) => {
+                const ncol = 6; // personal: Policy, Sum insured, Premium, Next premium, Paid, Surrender value; assets: …, Ends, Paid
+                const rowHtml = (p) => {
+                    const f = fig.get(p.id), live = insIsLive(p);
+                    const cov = insPrintCoverLines(p);
+                    let endCell = "";
+                    if (isAsset) {
+                        if (!live) endCell = `<td>${p.maturityDate ? esc(p.maturityDate) : "—"}</td>`;
+                        else if (p.maturityDate) {
+                            const md = daysTo(p.maturityDate);
+                            endCell = `<td>${esc(p.maturityDate)}<small class="${md < 0 || md <= 60 ? "insr-bad" : ""}">${md < 0 ? "expired " + (-md) + "d ago" : (md === 0 ? "expires today" : md + "d left")}</small></td>`;
+                        } else endCell = `<td>—</td>`;
+                    }
+                    let svCell = "";
+                    if (!isAsset) {
+                        if (f.svValue == null) svCell = `<td class="r">—</td>`;
+                        else svCell = `<td class="r"><b>${formatCurrency(f.svValue, f.cur)}</b><small class="${f.svStale ? "insr-bad" : ""}">as of ${esc(f.latestSv.date)}${f.svStale ? " ⚠" : ""}</small>${f.loan > 0 ? `<small>less loan ${formatCurrency(f.loan, f.cur)}</small>` : ""}</td>`;
+                    }
+                    return `<tr class="${live ? "" : "insr-ended"}"><td>${planCell(p)}</td><td>${cov.length ? cov.join("<br>") : `<span class="insr-muted">not set</span>`}${insPrintRiderLines(p)}</td><td class="r">${premCell(p, f)}</td><td>${dueCell(p, f)}</td>${endCell}<td class="r">${formatCurrency(f.paid, f.cur)}</td>${svCell}</tr>`;
+                };
+                const yearlyOf = (arr) => arr.filter(insIsLive).reduce((s, p) => s + insAnnualCashBase(p), 0);
+                // v507: surrender values add up too (personal register only). Each policy's latest SV (net of any policy
+                // loan, as on the Insurance page) in the base currency; policies with no SV count as nothing.
+                const svOf = (arr) => {
+                    let sum = 0, any = false, loan = false;
+                    arr.forEach(p => { const f = fig.get(p.id); if (f && f.svValue != null) { sum += insConvert(f.netSv, f.cur, baseCurrency); any = true; if (f.loan > 0) loan = true; } });
+                    return any ? `${money(sum)}${loan ? "<small>net of policy loan</small>" : ""}` : "—";
+                };
+                const paidOf = (arr) => arr.reduce((s, p) => s + insConvert(fig.get(p.id).paid, fig.get(p.id).cur, baseCurrency), 0);
+                // v497: grouped by insured person (members in their usual order, "not set" last). With a single
+                // group that has no person there is nothing to group by, so no heading is drawn.
+                const groups = new Map();
+                list.forEach(p => {
+                    const key = p.insuredMemberId && getMemberById(p.insuredMemberId) ? p.insuredMemberId : "";
+                    if (!groups.has(key)) groups.set(key, []);
+                    groups.get(key).push(p);
+                });
+                const order = [...membersCache.map(m => m.id).filter(id => groups.has(id)), ...(groups.has("") ? [""] : [])];
+                const grouped = order.length > 1 || order[0] !== "";
+                const body = order.map(key => {
+                    const arr = groups.get(key), m = key ? getMemberById(key) : null;
+                    if (!grouped) return arr.map(rowHtml).join("");
+                    const head = `<tr class="insr-grp"><td colspan="${ncol}">${m ? esc(m.name) : "Insured person not set"} <span>· ${arr.length} ${arr.length === 1 ? "policy" : "policies"}</span></td></tr>`;
+                    const sub = order.length > 1 ? `<tr class="insr-sub"><td colspan="2">Subtotal${m ? " — " + esc(m.name) : ""}</td><td class="r">${money(yearlyOf(arr))}<small>per year, in force</small></td><td${isAsset ? ' colspan="2"' : ""}></td><td class="r">${money(paidOf(arr))}</td>${isAsset ? "" : `<td class="r">${svOf(arr)}</td>`}</tr>` : "";
+                    return head + arr.map(rowHtml).join("") + sub;
+                }).join("");
+                return `<table class="insr-t insr-reg"><thead><tr><th>Policy</th><th>Sum insured</th><th class="r">Premium</th><th>Next premium</th>${isAsset ? "<th>Ends</th>" : ""}<th class="r">Paid to date</th>${isAsset ? "" : `<th class="r">Surrender value</th>`}</tr></thead>
+                    <tbody>${body}</tbody>
+                    <tfoot><tr><td colspan="2">Total (${esc(baseCurrency)})</td><td class="r">${money(yearlyOf(list))}<small>per year, in force</small></td><td${isAsset ? ' colspan="2"' : ""}></td><td class="r">${money(paidOf(list))}</td>${isAsset ? "" : `<td class="r">${svOf(list)}</td>`}</tr></tfoot></table>`;
+            };
+            const regNote = scopeAll ? "Ended policies are shaded and not counted in the yearly total; premiums paid include them." : "";
+            const personalHtml = personal.length ? section(`Policy register — life, medical &amp; other (${personal.length})`, register(personal, false), regNote) : "";
+            const assetHtml = assets.length ? section(`Car, home &amp; travel (${assets.length})`, register(assets, true), regNote) : "";
+
+            // ---- Agents ----
+            let agentHtml = "";
+            if (opts.contacts) {
+                const byAgent = new Map();
+                included.forEach(p => {
+                    const nm = String(p.agentName || "").trim(), ct = String(p.agentContact || "").trim();
+                    if (!nm && !ct) return;
+                    const key = nm + "|" + ct;
+                    if (!byAgent.has(key)) byAgent.set(key, { nm, ct, list: [] });
+                    byAgent.get(key).list.push(p);
+                });
+                if (byAgent.size) {
+                    agentHtml = section("Agents", `<table class="insr-t"><thead><tr><th>Agent</th><th>Contact</th><th>Policies</th></tr></thead><tbody>${[...byAgent.values()].map(a =>
+                        `<tr><td><b>${esc(a.nm) || "—"}</b></td><td>${esc(a.ct) || "—"}</td><td>${a.list.map(p => titleName(p) + (p.insurer && p.product ? " (" + esc(p.insurer) + ")" : "")).join("; ")}</td></tr>`).join("")}</tbody></table>`);
+                }
+            }
+
+            // ---- Detail blocks (optional) ----
+            let detailHtml = "";
+            if (opts.details) {
+                const personRank = (p) => { const i = membersCache.findIndex(m => m.id === p.insuredMemberId); return i < 0 ? 9999 : i; };
+                const blocks = included.slice().sort((a, b) => personRank(a) - personRank(b)).map(p => {
+                    const f = fig.get(p.id), cur = f.cur, live = insIsLive(p);
+                    const cm = (n) => formatCurrency(n, cur);
+                    const facts = [];
+                    const fact = (l, v) => { if (v !== "" && v != null) facts.push(`<div><span>${l}</span>${v}</div>`); };
+                    fact("Insurer", esc(p.insurer || ""));
+                    if (showNo) fact("Policy no.", esc(p.policyNo || ""));
+                    fact("Insured", esc(insMemberName(p)));
+                    fact("Type", esc(INS_TYPES[p.type] || ""));
+                    fact("Status", esc(INS_STATUSES[p.status] || p.status || ""));
+                    fact("Start", esc(p.startDate || ""));
+                    fact("Ends / matures", esc(p.maturityDate || ""));
+                    const freq = INS_FREQ[p.frequency], prem = parseFloat(p.premium) || 0;
+                    fact("Premium", p.paidByBonus ? "Paid from accumulated bonus" : (prem > 0 ? `${cm(prem)}${freq ? " · " + esc(freq[0]) : ""}` : ""));
+                    if (f.loan > 0) fact("Policy loan", cm(f.loan));
+                    if (parseFloat(p.cashbackPct) > 0) fact("Cashback", `${p.cashbackPct}% of ${esc((INS_COV_KINDS[p.cashbackBase || "life"] || ["", "Life"])[1])} sum insured · yearly`); // v510
+                    if (showNo && (p.agentName || p.agentContact)) fact("Agent", esc(insAgentLine(p)));
+                    const covs = (p.coverages || []).filter(c => c && (c.kind || c.label));
+                    const covRows = covs.map(c => {
+                        const k = INS_COV_KINDS[c.kind];
+                        const name = (k && c.kind !== "other") ? k[1] : (c.label || (k ? k[1] : "Cover"));
+                        const cc = insCovCurrent(c);
+                        const extra = [];
+                        if (typeof c.annualLimit === "number") extra.push(`annual limit ${cm(c.annualLimit)}`);
+                        if (typeof c.lifetimeLimit === "number") extra.push(`lifetime limit ${cm(c.lifetimeLimit)}${typeof c.lifetimeRemaining === "number" ? " (remaining " + cm(c.lifetimeRemaining) + ")" : ""}`);
+                        if (cc.steps.length) extra.push("reducing: " + cc.steps.map(st => `${esc(st.date)} → ${cm(st.amount)}`).join(", "));
+                        return `<tr><td>${esc(name)}</td><td class="r">${typeof cc.amount === "number" ? cm(cc.amount) : "—"}</td><td>${extra.join(" · ")}</td></tr>`;
+                    }).join("");
+                    const pays = f.history.map(r => ({ date: r.date, amount: parseFloat(r.amount) || 0, note: [r.paidBy === "parent" ? "paid by parent" : "", r.note || ""].filter(Boolean).join(" · ") }))
+                        .concat(f.ledgerRows.map(r => ({ date: r.date || "", amount: r.amount, note: r.amount < 0 ? "refund (Ledger)" : "Ledger" })))
+                        .sort((a, b) => b.date.localeCompare(a.date));
+                    const shown = pays.slice(0, 12), older = pays.slice(12);
+                    const payRows = shown.map(r => `<tr><td>${esc(r.date)}</td><td class="r">${cm(r.amount)}</td><td>${esc(r.note)}</td></tr>`).join("")
+                        + (older.length ? `<tr class="insr-muted"><td colspan="3">${older.length} earlier payment${older.length === 1 ? "" : "s"} not listed — together ${cm(older.reduce((s, r) => s + r.amount, 0))}</td></tr>` : "");
+                    const cbPays = f.cbHistory.map(r => ({ date: r.date, amount: parseFloat(r.amount) || 0, note: r.note || "" }))
+                        .concat(f.cbLedgerRows.map(r => ({ date: r.date || "", amount: r.amount, note: "Ledger" })))
+                        .sort((a, b) => b.date.localeCompare(a.date));
+                    const cbShown = cbPays.slice(0, 12), cbOlder = cbPays.slice(12);
+                    const cbRowsHtml = cbShown.map(r => `<tr><td>${esc(r.date)}</td><td class="r">${cm(r.amount)}</td><td>${esc(r.note)}</td></tr>`).join("")
+                        + (cbOlder.length ? `<tr class="insr-muted"><td colspan="3">${cbOlder.length} earlier payout${cbOlder.length === 1 ? "" : "s"} not listed — together ${cm(cbOlder.reduce((s, r) => s + r.amount, 0))}</td></tr>` : "");
+                    const svRows = f.svs.map(r => {
+                        const pr = insSvParts(r), tot = insSvValue(r);
+                        const part = (n) => n == null ? "—" : cm(n);
+                        return `<tr><td>${esc(r.date)}</td><td class="r">${part(pr.g)}</td><td class="r">${part(pr.d)}</td><td class="r">${part(pr.m)}</td><td class="r"><b>${tot == null ? "—" : cm(tot)}</b></td></tr>`;
+                    }).join("");
+                    return `<div class="insr-pol">
+                        <div class="insr-pol-h">${INS_TYPE_ICONS[p.type] || INS_TYPE_ICONS.other} ${titleName(p)}${p.insurer && p.product ? ` <span>${esc(p.insurer)}</span>` : ""}${live ? "" : ` <span>· ${esc(INS_STATUSES[p.status] || p.status)}</span>`}</div>
+                        <div class="insr-facts">${facts.join("")}</div>
+                        ${covRows ? `<table class="insr-t"><thead><tr><th>Cover</th><th class="r">Sum insured</th><th>Details</th></tr></thead><tbody>${covRows}</tbody></table>` : ""}
+                        ${insPrintRiderTable(p)}
+                        ${payRows ? `<table class="insr-t"><thead><tr><th>Premium payments</th><th class="r">Amount</th><th>Note</th></tr></thead><tbody>${payRows}</tbody><tfoot><tr><td>Total paid</td><td class="r">${cm(f.paid)}</td><td></td></tr></tfoot></table>` : ""}
+                        ${cbRowsHtml ? `<table class="insr-t"><thead><tr><th>Cashback received</th><th class="r">Amount</th><th>Note</th></tr></thead><tbody>${cbRowsHtml}</tbody><tfoot><tr><td>Total received</td><td class="r">${cm(f.cbTotal)}</td><td></td></tr></tfoot></table>` : ""}
+                        ${svRows ? `<table class="insr-t"><thead><tr><th>Surrender value</th><th class="r">Guaranteed</th><th class="r">Dividend</th><th class="r">Terminal</th><th class="r">Total</th></tr></thead><tbody>${svRows}</tbody></table>` : ""}
+                        ${p.notes ? `<div class="insr-pol-notes"><span>Notes</span> ${esc(p.notes)}</div>` : ""}
+                    </div>`;
+                }).join("");
+                detailHtml = `<div class="insr-sec insr-details"><h3>Policy details</h3>${blocks}</div>`;
+            }
+
+            return `<div class="insr-head"><h1>🛡️ Insurance report</h1>
+                    <div class="insr-sub">${scopeAll ? "All policies, including ended" : "In-force policies"}${picked ? " · " + esc(picked.map(k => k ? ((getMemberById(k) || {}).name || "") : "Insured person not set").filter(Boolean).join(", ")) : ""} · amounts in ${esc(baseCurrency)} unless a policy's own currency is shown · printed ${esc(new Date().toLocaleString())}</div></div>
+                ${section("Summary", summary, summaryNote)}
+                ${section("Needs attention", attention)}
+                ${personHtml}${personalHtml}${assetHtml}${agentHtml}${detailHtml}
+                <p class="insr-foot">Prepared from the figures recorded in My Ledger. Surrender values are the insurer's statement figures on the dates shown and are not guaranteed; check the policy documents for the exact terms.</p>`;
         }
 
         // --- Detail sheet (tapping a card) ---
@@ -15445,6 +18539,8 @@
             const freqLabel = INS_FREQ[p.frequency] ? INS_FREQ[p.frequency][0] : "";
             const premiumText = parseFloat(p.premium) > 0 ? `${formatCurrency(p.premium, cur)}${freqLabel ? " · " + freqLabel : ""}` : "";
             const section = (title) => `<div style="font-size:0.72rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin:16px 0 6px;">${title}</div>`;
+            // v597: highlighted badge heading for the two long lists (premium payments / surrender value history)
+            const sectionBadge = (title, count) => `<div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:22px 0 8px; padding:8px 12px; border-radius:12px; background:var(--primary-chip-bg); border-left:4px solid var(--primary);"><span style="font-size:0.78rem; font-weight:800; color:var(--primary); text-transform:uppercase; letter-spacing:0.04em;">${title}</span><span style="margin-left:auto; min-width:26px; text-align:center; padding:2px 9px; border-radius:999px; background:var(--primary); color:#fff; font-size:0.74rem; font-weight:800;">${count}</span></div>`;
             const line = (left, right, sub) => `
                 <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:10px; padding:7px 0; border-bottom:1px solid var(--border-color);">
                     <span style="min-width:0; font-size:0.82rem; font-weight:600; overflow-wrap:anywhere;">${left}${sub ? `<br><span style="font-size:0.68rem; color:var(--text-muted);">${sub}</span>` : ""}</span>
@@ -15460,38 +18556,76 @@
                     ${kv("Insured", escapeHtml(insMemberName(p)))}
                     ${kv("Premium", premiumText)}
                     ${kv("Start", escapeHtml(p.startDate || ""))}
+                    ${(() => { const py = insIsLive(p) ? insPolicyYear(p) : null; return py ? kv("Policy year", `Year ${py.year}${py.of ? " of " + py.of : ""} · next anniversary ${escapeHtml(py.next)}`) : ""; })()}
                     ${kv("Maturity / end", escapeHtml(p.maturityDate || ""))}
                 </div>
+                ${(p.agentName || p.agentContact) ? `<div style="display:flex; align-items:flex-start; gap:10px; padding:10px 12px; margin:0 0 12px; border:1px solid var(--border-color); border-radius:12px;"><span style="font-size:1.1rem; line-height:1.3;">🧑‍💼</span><div style="min-width:0;"><div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase; letter-spacing:0.04em;">Agent</div>${p.agentName ? `<div style="font-size:0.88rem; font-weight:800; overflow-wrap:anywhere;">${escapeHtml(p.agentName)}</div>` : ""}${p.agentContact ? `<div style="font-size:0.82rem; font-weight:600; color:var(--text-muted); overflow-wrap:anywhere;">${insLinkifyPhones(p.agentContact)}</div>` : ""}</div></div>` : ""}
+                ${insBonusBannerHtml(p, false)}
+                ${insCashbackBannerHtml(p, f, false)}
+                ${p.notes ? `<p style="font-size:0.78rem; color:var(--text-muted); font-weight:600; white-space:pre-wrap; overflow-wrap:anywhere; margin:0 0 12px;">${escapeHtml(p.notes)}</p>` : ""}
+                ${insAttachmentsHtml(p)}
 
                 <div style="border:1px solid var(--border-color); border-radius:12px; padding:12px;">
-                    <div style="display:flex; justify-content:space-between; gap:12px;">
+                    <div class="ins-hero-cols">
                         <div style="min-width:0;">
                             <div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Premiums paid</div>
                             <div style="font-family:'Kalam', cursive; font-size:1.1rem; font-weight:800;">${formatCurrency(f.paid, cur)}</div>
-                            <div style="font-size:0.68rem; color:var(--text-muted); font-weight:600;">Before ledger ${formatCurrency(f.historyTotal, cur)} · In ledger ${formatCurrency(f.ledgerTotal, cur)}</div>
+                            ${insPaidBreakdownHtml(f, cur, p)}
                         </div>
-                        <div style="min-width:0; text-align:right;">
+                        ${f.latestSv ? `<div class="ins-hero-sv" style="min-width:0; text-align:right;">
                             <div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Surrender value</div>
                             <div style="font-family:'Kalam', cursive; font-size:1.1rem; font-weight:800;">${f.svValue == null ? "—" : formatCurrency(f.svValue, cur)}</div>
-                            <div style="font-size:0.68rem; font-weight:600; color:${f.svStale ? "var(--expense-color)" : "var(--text-muted)"};">${f.latestSv ? `as of ${escapeHtml(f.latestSv.date)}${f.svStale ? " · ⚠️ over a year old" : ""}` : "not recorded"}</div>
-                        </div>
+                            <div style="font-size:0.68rem; font-weight:600; color:${f.svStale ? "var(--expense-color)" : "var(--text-muted)"};">as of ${escapeHtml(f.latestSv.date)}${f.svStale ? " · ⚠️ over a year old" : ""}</div>
+                        </div>` : ""}
                     </div>
                     ${f.loan > 0 ? `<div style="font-size:0.75rem; font-weight:700; margin-top:8px;">Loan outstanding −${formatCurrency(f.loan, cur)} → net ${f.netSv == null ? "—" : formatCurrency(f.netSv, cur)}</div>` : ""}
-                    ${(f.svValue != null && f.svValue > 0 && (f.svParts.g != null || f.svParts.m != null)) ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">${[
-                        f.svParts.g != null ? `Guaranteed ${formatCurrency(f.svParts.g, cur)} (${(f.svParts.g / f.svValue * 100).toFixed(0)}%)` : "",
-                        f.svParts.d != null && f.svParts.d !== 0 ? `Dividend ${formatCurrency(f.svParts.d, cur)} (${(f.svParts.d / f.svValue * 100).toFixed(0)}%)` : "",
-                        f.svParts.m != null && f.svParts.m !== 0 ? `Terminal bonus ${formatCurrency(f.svParts.m, cur)} (${(f.svParts.m / f.svValue * 100).toFixed(0)}%) — can change each year` : ""
-                    ].filter(Boolean).join(" · ")}</div>` : ""}
+                    ${insSvBreakdownHtml(f, cur)}
                     ${(f.latestSv && Array.isArray(f.latestSv.funds) && typeof f.latestSv.fundValue === "number") ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">Fund value ${formatCurrency(f.latestSv.fundValue, cur)}${f.latestSv.deduction > 0 ? ` − deduction ${formatCurrency(f.latestSv.deduction, cur)}` : ""} · ${f.latestSv.funds.length} fund${f.latestSv.funds.length === 1 ? "" : "s"} · price date ${escapeHtml(f.latestSv.date)}</div>` : ""}
-                    ${f.paybackPct != null ? `<div style="font-size:0.75rem; font-weight:700; margin-top:6px; color:var(--text-muted);">Surrender value is ${f.paybackPct.toFixed(1)}% of premiums paid</div>` : ""}
+                    ${insPayoutLineHtml(p, f)}
+                    ${insCashbackBoxHtml(p, f)}
                 </div>`;
 
             // Coverage
-            const covs = (p.coverages || []).filter(c => c && c.label);
+            // Coverage — one card per coverage: type chip + sum insured; Health / Medical adds its limits
+            const covs = (p.coverages || []).filter(c => c && (c.kind || c.label));
             if (covs.length) {
-                html += section("Coverage") + covs.map(c => line(escapeHtml(c.label), typeof c.sumAssured === "number" ? formatCurrency(c.sumAssured, cur) : "—")).join("");
+                const cell = (label, valueHtml) => `<div><div style="font-size:0.62rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">${label}</div><div style="font-size:0.85rem; font-weight:800;">${valueHtml}</div></div>`;
+                html += section("Coverage") + covs.map(c => {
+                    const k = INS_COV_KINDS[c.kind];
+                    const name = (k && c.kind !== "other") ? k[1] : (c.label || (k ? k[1] : "Coverage"));
+                    const money = (n) => formatCurrency(n, cur);
+                    let limits = "";
+                    if (c.kind === "medical") {
+                        const cells = [];
+                        if (typeof c.annualLimit === "number") cells.push(cell("Annual limit", money(c.annualLimit)));
+                        if (typeof c.lifetimeRemaining === "number") {
+                            cells.push(cell("Lifetime limit remaining", money(c.lifetimeRemaining) + (typeof c.lifetimeLimit === "number" ? ` <span style="font-size:0.7rem; font-weight:600; color:var(--text-muted);">/ ${money(c.lifetimeLimit)}</span>` : "")));
+                        } else if (typeof c.lifetimeLimit === "number") {
+                            cells.push(cell("Lifetime limit", money(c.lifetimeLimit)));
+                        }
+                        if (cells.length) limits = `<div style="display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; margin-top:8px;">${cells.join("")}</div>`;
+                    }
+                    const expired = c.expiry && c.expiry < today;
+                    const expiryLine = c.expiry ? `<div style="font-size:0.7rem; font-weight:700; margin-top:6px; color:${expired ? "var(--expense-color)" : "var(--text-muted)"};">${expired ? "Expired " : "Until "}${escapeHtml(c.expiry)}</div>` : "";
+                    return `<div style="border:1px solid var(--border-color); border-radius:12px; padding:10px 12px; margin-bottom:8px;">
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px;">
+                            <span style="background:var(--chip-bg); border-radius:999px; padding:3px 10px; font-size:0.74rem; font-weight:700; min-width:0; overflow-wrap:anywhere;">${k ? k[2] + " " : ""}${escapeHtml(name)}</span>
+                            <span style="font-weight:800; font-size:0.9rem; flex:0 0 auto;">${typeof insCovSum(c) === "number" ? money(insCovSum(c)) : ""}</span>
+                        </div>${limits}${expiryLine}${insSchedAccordionHtml(c, money)}
+                    </div>`;
+                }).join("");
             }
 
+            // Riders
+            const riders = (p.riders || []).filter(r => r && r.name);
+            if (riders.length) {
+                html += section(`Riders (${riders.length})`) + riders.map(r => {
+                    const ended = r.endDate && r.endDate < today;
+                    return line(escapeHtml(r.name),
+                        r.endDate ? `<span style="color:${ended ? "var(--expense-color)" : "var(--text-muted)"};">${ended ? "Ended " : "Until "}${escapeHtml(r.endDate)}</span>` : "",
+                        r.startDate ? `From ${escapeHtml(r.startDate)}` : "");
+                }).join("");
+            }
             // Linked Planned Payment
             html += section("Next premium");
             if (f.plan) {
@@ -15500,10 +18634,27 @@
                 html += line(escapeHtml(f.plan.desc || "Planned payment"),
                     `${formatCurrency(f.plan.amount, f.plan.currency || cur)}`,
                     `${escapeHtml(f.plan.dueDate)} · ${when}${f.plan.recur ? " · " + escapeHtml(recurLabel(f.plan.recur)) : ""}`);
-                html += `<button type="button" class="submit-btn" data-click="insuranceUnlinkPlan" style="margin-top:8px; background:var(--chip-bg); color:var(--text-main);">Unlink planned payment</button>`;
+                html += `<button type="button" class="submit-btn" data-click="insuranceUnlinkPlan" data-kind="premium" style="margin-top:8px; background:var(--chip-bg); color:var(--text-main);">Unlink planned payment</button>`;
             } else {
                 html += `<p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:8px;">No planned payment linked to this policy.</p>
-                    <button type="button" class="submit-btn" data-click="insuranceOpenPlanPicker" style="margin-top:0; background:var(--chip-bg); color:var(--text-main);">🔗 Link a planned payment</button>`;
+                    <button type="button" class="submit-btn" data-click="insuranceOpenPlanPicker" data-kind="premium" style="margin-top:0; background:var(--chip-bg); color:var(--text-main);">🔗 Link a planned payment</button>`;
+            }
+
+            // v511: Next cashback — the linked income Planned Payment (if any), linked / unlinked like the premium plan
+            if (parseFloat(p.cashbackPct) > 0 || f.cbCount > 0 || f.cbPlan) {
+                html += section("Next cashback");
+                if (f.cbPlan) {
+                    const cp = f.cbPlan;
+                    const dd2 = Math.round((new Date(cp.dueDate + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000);
+                    const when2 = cp.paused ? "⏸ Paused" : (dd2 < 0 ? `Overdue ${Math.abs(dd2)}d` : (dd2 === 0 ? "Due today" : `${dd2}d left`));
+                    html += line(escapeHtml(cp.desc || "Planned payment"),
+                        `<span style="color:var(--income-color);">+${formatCurrency(cp.amount, cp.currency || cur)}</span>`,
+                        `${escapeHtml(cp.dueDate)} · ${when2}${cp.recur ? " · " + escapeHtml(recurLabel(cp.recur)) : ""}`);
+                    html += `<button type="button" class="submit-btn" data-click="insuranceUnlinkPlan" data-kind="cashback" style="margin-top:8px; background:var(--chip-bg); color:var(--text-main);">Unlink planned payment</button>`;
+                } else {
+                    html += `<p style="font-size:0.78rem; color:var(--text-muted); margin-bottom:8px;">No cashback planned payment linked to this policy. Link an income plan (e.g. the yearly payout) to track the next payout and have Mark as Paid count it as cashback.</p>
+                        <button type="button" class="submit-btn" data-click="insuranceOpenPlanPicker" data-kind="cashback" style="margin-top:0; background:var(--chip-bg); color:var(--text-main);">🔗 Link a planned payment</button>`;
+                }
             }
 
             // Premium timeline — earlier (typed-in) payments and ledger payments in one list
@@ -15511,12 +18662,13 @@
                 ...f.ledgerRows.map(r => ({ date: r.date, amount: r.amount, source: "Ledger", note: "", dup: !!(p.historyCutoff && r.date && r.date <= p.historyCutoff) })),
                 ...f.history.map(r => ({ date: r.date, amount: parseFloat(r.amount) || 0, source: "History", note: r.note || "", dup: false }))
             ].sort((a, b) => b.date.localeCompare(a.date));
-            html += section(`Premium payments (${timeline.length})`);
+            html += sectionBadge("Premium payments", timeline.length);
             if (timeline.length) {
+                // A negative amount is a refund: shown green with a leading "+", like a refund in the transaction list.
                 html += `<div>` + timeline.map(r => line(
                     `${escapeHtml(r.date)}${r.source === "Ledger" ? " 🧾" : ""}`,
-                    formatCurrency(r.amount, cur),
-                    [r.note ? escapeHtml(r.note) : "", r.dup ? "⚠️ dated before the ledger-tracking date — may duplicate an earlier entry" : ""].filter(Boolean).join(" · ")
+                    r.amount < 0 ? `<span style="color:var(--income-color);">+${formatCurrency(-r.amount, cur)}</span>` : formatCurrency(r.amount, cur),
+                    [r.amount < 0 ? "↩ Refund" : "", r.note ? escapeHtml(r.note) : "", r.dup ? "⚠️ dated before the ledger-tracking date — may duplicate an earlier entry" : ""].filter(Boolean).join(" · ")
                 )).join("") + `</div>`;
                 if (parseFloat(p.statementTotal) > 0) {
                     const diff = f.historyTotal - parseFloat(p.statementTotal);
@@ -15528,9 +18680,28 @@
                 html += `<p style="font-size:0.78rem; color:var(--text-muted);">No payments recorded yet.</p>`;
             }
 
+            // v510: Cashback received — earlier (typed-in) payouts and Income entries linked to the policy, in one list
+            const cbTimeline = [
+                ...f.cbLedgerRows.map(r => ({ date: r.date, amount: r.amount, source: "Ledger", note: (r.tx && r.tx.desc) || "", dup: !!(p.historyCutoff && r.date && r.date <= p.historyCutoff) })),
+                ...f.cbHistory.map(r => ({ date: r.date, amount: parseFloat(r.amount) || 0, source: "History", note: r.note || "", dup: false }))
+            ].sort((a, b) => b.date.localeCompare(a.date));
+            if (cbTimeline.length || parseFloat(p.cashbackPct) > 0) {
+                html += sectionBadge("Cashback received", cbTimeline.length);
+                if (cbTimeline.length) {
+                    html += `<div>` + cbTimeline.map(r => line(
+                        `${escapeHtml(r.date)}${r.source === "Ledger" ? " 🧾" : ""}`,
+                        `<span style="color:var(--income-color);">+${formatCurrency(r.amount, cur)}</span>`,
+                        [r.note ? escapeHtml(r.note) : "", r.dup ? "⚠️ dated before the ledger-tracking date — may duplicate an earlier entry" : ""].filter(Boolean).join(" · ")
+                    )).join("") + `</div>`;
+                } else {
+                    html += `<p style="font-size:0.78rem; color:var(--text-muted);">No cashback recorded yet. Tap 🎁 Record cashback when a payout reaches your bank account, or type earlier years in Edit.</p>`;
+                }
+            }
+
             // Surrender value history
-            html += section(`Surrender value history (${f.svs.length})`);
+            // Nothing is shown for a policy with no surrender value (term, medical, motor… never have one).
             if (f.svs.length) {
+                html += sectionBadge("Surrender value history", f.svs.length);
                 html += f.svs.map(r => {
                     const bits = [];
                     if (typeof r.guaranteed === "number") bits.push(`Guaranteed ${formatCurrency(r.guaranteed, cur)}`);
@@ -15546,15 +18717,29 @@
                     if (r.note) bits.push(escapeHtml(r.note));
                     return line(escapeHtml(r.date), insSvValue(r) == null ? "—" : formatCurrency(insSvValue(r), cur), bits.join(" · "));
                 }).join("");
-            } else {
-                html += `<p style="font-size:0.78rem; color:var(--text-muted);">No surrender value recorded yet — add one from Edit.</p>`;
             }
 
-            if (p.notes) html += section("Notes") + `<p style="font-size:0.82rem; white-space:pre-wrap; overflow-wrap:anywhere;">${escapeHtml(p.notes)}</p>`;
-
             document.getElementById("insuranceDetailBody").innerHTML = html;
+            { const cbBtn = document.getElementById("insDetailCashbackBtn"); if (cbBtn) cbBtn.style.display = (parseFloat(p.cashbackPct) > 0 || f.cbCount > 0 || f.cbPlan) ? "" : "none"; } // v510/v511
+            { const svBtn = document.getElementById("insDetailSvBtn"); if (svBtn) svBtn.style.display = (f.svs.length > 0 || ["life", "savings", "investment"].includes(p.type)) ? "" : "none"; } // v599
             // Already open when re-rendered after linking/unlinking a planned payment.
             if (!document.getElementById("insuranceDetailModal").classList.contains("active")) openModal("insuranceDetailModal");
+        }
+
+        // v599: "📈 Record SV" — opens Edit Policy already scrolled to Surrender value history with a new,
+        // empty entry (dated today) on top and the cursor in it; Save stores it like any other edit.
+        function insuranceRecordSv() {
+            const id = activeInsuranceId;
+            if (!id) return;
+            closeModalAndThen("insuranceDetailModal", async () => {
+                await openInsuranceModal(id);
+                insAddSvRowForType();
+                setTimeout(() => {
+                    insJumpTo({ dataset: { target: "insSec8" } });
+                    const first = document.querySelector("#insSvRows .ins-sv-guaranteed, #insSvRows input:not([type=date])");
+                    if (first) { try { first.focus({ preventScroll: true }); } catch (err) { /* ignore */ } }
+                }, 120);
+            });
         }
 
         function insuranceDetailEdit() {
@@ -15570,7 +18755,7 @@
         async function insuranceRecordPremium() {
             const p = getPolicyById(activeInsuranceId);
             if (!p) return;
-            const planned = (await readAllDB(STORES.PLANNED_PAYMENTS)).find(x => x.policyId === p.id && !x.paused) || null;
+            const planned = (await readAllDB(STORES.PLANNED_PAYMENTS)).find(x => x.policyId === p.id && !x.paused && x.type !== "income") || null;
             closeModalAndThen("insuranceDetailModal", async () => {
                 await openTransactionForm("expense", null, planned && planned.accountId ? planned.accountId : null);
                 document.getElementById("txDesc").value = planned ? planned.desc : policyLabel(p);
@@ -15606,15 +18791,59 @@
             });
         }
 
-        // --- Link / unlink a Planned Payment ---
-
-        async function insuranceOpenPlanPicker() {
+        // v510/v511: "🎁 Record cashback" — opens the ordinary Income form pre-filled for this policy. With a cashback plan
+        // linked (v511) it goes through the SAME confirm path as "Mark as Paid" (like Record premium), so the plan moves
+        // to its next date and the payout cannot be recorded twice; otherwise amount = the estimate and date = the expected
+        // payout day when it has already passed, else today. The Policy row is set so the entry counts as cashback received.
+        async function insuranceRecordCashback() {
             const p = getPolicyById(activeInsuranceId);
             if (!p) return;
+            const [txs, planned] = await Promise.all([readAllDB(STORES.TRANSACTIONS), readAllDB(STORES.PLANNED_PAYMENTS)]);
+            const f = computePolicyFigures(p, txs, planned);
+            const plan = (f.cbPlan && !f.cbPlan.paused) ? f.cbPlan : null;
+            const nx = insCashbackNext(p, f);
+            closeModalAndThen("insuranceDetailModal", async () => {
+                await openTransactionForm("income", null, plan && plan.accountId ? plan.accountId : null);
+                document.getElementById("txDesc").value = plan ? plan.desc : (policyLabel(p) + " cashback");
+                document.getElementById("txAmount").value = plan ? plan.amount : ((nx && nx.amount != null) ? nx.amount : "");
+                const cur = (plan && plan.currency) || p.currency;
+                if (cur && [...document.getElementById("txCurrency").options].some(o => o.value === cur)) document.getElementById("txCurrency").value = cur;
+                if (plan && plan.accountId && [...document.getElementById("srcAccount").options].some(o => o.value === plan.accountId)) {
+                    document.getElementById("srcAccount").value = plan.accountId;
+                    syncAccountPickerButtonText("srcAccount");
+                }
+                const catSel = document.getElementById("txCategory");
+                let cat = plan && plan.cat ? plan.cat : null;
+                if (!cat) {
+                    const opt = [...catSel.options].find(o => INS_CASHBACK_CAT_RE.test(o.textContent + " " + o.value))
+                        || [...catSel.options].find(o => INS_INSURANCE_CAT_RE.test(o.textContent + " " + o.value));
+                    if (opt) cat = opt.value;
+                }
+                if (cat && [...catSel.options].some(o => o.value === cat)) { catSel.value = cat; syncAccountPickerButtonText("txCategory"); }
+                document.getElementById("txNotes").value = plan ? (plan.notes || "") : "";
+                document.getElementById("txDate").value = (!plan && nx && nx.overdue && nx.date) ? nx.date : todayLocalStr();
+                if (plan) {
+                    const savePlannedBtn = document.getElementById("txSavePlannedBtn");
+                    if (savePlannedBtn) savePlannedBtn.style.display = "none";
+                    const repeatWrap = document.getElementById("txPlannedRepeatWrap");
+                    if (repeatWrap) repeatWrap.style.display = "none";
+                    currentPlannedPaymentIdBeingConfirmed = plan.id;
+                }
+                refreshTxPolicyRow(p.id);
+            });
+        }
+
+        // --- Link / unlink a Planned Payment ---
+
+        async function insuranceOpenPlanPicker(el) {
+            const p = getPolicyById(activeInsuranceId);
+            if (!p) return;
+            const cashback = !!(el && el.dataset && el.dataset.kind === "cashback"); // v511: premium plan (expense) or cashback plan (income)
             const all = await readAllDB(STORES.PLANNED_PAYMENTS);
-            const candidates = all.filter(x => x.type === "expense" && !x.policyId)
+            const candidates = all.filter(x => (cashback ? x.type === "income" : x.type === "expense") && !x.policyId)
                 .sort((a, b) => {
-                    const ai = INS_INSURANCE_CAT_RE.test(a.cat || "") ? 0 : 1, bi = INS_INSURANCE_CAT_RE.test(b.cat || "") ? 0 : 1;
+                    const re = cashback ? new RegExp(INS_CASHBACK_CAT_RE.source + "|" + INS_INSURANCE_CAT_RE.source, "i") : INS_INSURANCE_CAT_RE;
+                    const ai = re.test(a.cat || "") ? 0 : 1, bi = re.test(b.cat || "") ? 0 : 1;
                     return ai - bi || (a.dueDate || "").localeCompare(b.dueDate || "");
                 });
             const listEl = document.getElementById("insurancePlanList");
@@ -15628,11 +18857,11 @@
                         </span>
                     </span>
                     <span style="text-align:right;">
-                        <span style="display:block; font-size:0.85rem; font-weight:700;">${formatCurrency(x.amount, x.currency)}</span>
+                        <span style="display:block; font-size:0.85rem; font-weight:700;${cashback ? " color:var(--income-color);" : ""}">${cashback ? "+" : ""}${formatCurrency(x.amount, x.currency)}</span>
                         <span style="font-size:0.72rem; font-weight:700; color:var(--text-muted);">${escapeHtml(x.dueDate || "")}</span>
                     </span>
                 </div>`).join("")
-                : `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:30px 10px;">No unlinked planned payments. Save one from the Add Expense form with "🕒 Save as Planned", then link it here.</p>`;
+                : `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:30px 10px;">${cashback ? 'No unlinked income plans. Save one from the Add Income form with "🕒 Save as Planned" (choose this policy in the Policy row and it links by itself), then link it here if needed.' : 'No unlinked planned payments. Save one from the Add Expense form with "🕒 Save as Planned", then link it here.'}</p>`;
             closeModalAndThen("insuranceDetailModal", () => openModal("insurancePlanModal"));
         }
 
@@ -15643,14 +18872,14 @@
                 const all = await readAllDB(STORES.PLANNED_PAYMENTS);
                 const plan = all.find(x => x.id === planId);
                 if (plan) {
-                    // One planned payment per policy: anything already linked to THIS policy is
-                    // released first, so the policy's "Next premium" can never be ambiguous.
+                    // One planned payment per policy AND kind (premium = expense, cashback = income): anything of the same
+                    // kind already linked to THIS policy is released first, so "Next premium" / "Next cashback" can never be ambiguous.
                     for (const other of all) {
-                        if (other.policyId === policyId && other.id !== planId) { other.policyId = null; await writeDB(STORES.PLANNED_PAYMENTS, other); }
+                        if (other.policyId === policyId && other.id !== planId && (other.type || "expense") === (plan.type || "expense")) { other.policyId = null; await writeDB(STORES.PLANNED_PAYMENTS, other); }
                     }
                     plan.policyId = policyId;
                     await writeDB(STORES.PLANNED_PAYMENTS, plan);
-                    showToast("Planned payment linked");
+                    showToast(plan.type === "income" ? "Cashback plan linked" : "Planned payment linked");
                 }
                 await refreshPlannedPaymentsViews();
                 await renderInsurancePage();
@@ -15658,11 +18887,12 @@
             });
         }
 
-        async function insuranceUnlinkPlan() {
+        async function insuranceUnlinkPlan(el) {
             const policyId = activeInsuranceId;
+            const cashback = !!(el && el.dataset && el.dataset.kind === "cashback"); // v511: only the plan of that kind
             const all = await readAllDB(STORES.PLANNED_PAYMENTS);
             for (const x of all) {
-                if (x.policyId === policyId) { x.policyId = null; await writeDB(STORES.PLANNED_PAYMENTS, x); }
+                if (x.policyId === policyId && ((x.type === "income") === cashback)) { x.policyId = null; await writeDB(STORES.PLANNED_PAYMENTS, x); }
             }
             await refreshPlannedPaymentsViews();
             await renderInsurancePage();
@@ -15677,31 +18907,163 @@
 
         // Row editors. Each row is a self-contained .ins-row div; collect*() reads them back and
         // silently skips a half-filled row (same forgiving convention as collectWarrantyRows()).
+        // One coverage row = type (preset) + sum insured + optional expiry when the coverage ends on a
+        // different date from the policy. Health / Medical adds the three limits a medical plan has that
+        // other coverages don't: annual limit, lifetime limit and lifetime limit REMAINING (the remaining
+        // figure is copied from the insurer's statement — the app can't know what has been claimed).
+        // Record: { id, kind, label (only for "other"), sumAssured, expiry, schedule [{date,amount}] (v482), annualLimit, lifetimeLimit,
+        // lifetimeRemaining }; every number is optional.
         function addInsCoverageRow(data) {
             const c = data || {};
             insRowCounter++;
             const rowId = "insCov_" + insRowCounter;
+            const kind = INS_COV_KINDS[c.kind] ? c.kind : (data ? "other" : "life");
+            const val = (n) => (typeof n === "number" ? n : "");
             const row = document.createElement("div");
-            row.className = "ins-row ins-row-line";
+            row.className = "ins-row ins-card ins-cov-block";
             row.id = rowId;
             row.innerHTML = `
-                <input type="text" class="ins-c-grow ins-cov-label" placeholder="Benefit (e.g. Death, TPD, CI)" value="${escapeHtml(c.label || "")}">
-                <input type="number" class="ins-c-num ins-cov-sum" step="0.01" min="0" placeholder="Sum assured" value="${typeof c.sumAssured === "number" ? c.sumAssured : ""}">
-                <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${rowId}" aria-label="Remove">×</button>`;
+                <div class="ins-row-line">
+                    <select class="form-input ins-cov-kind" data-change="insCovKindChange" aria-label="Coverage type">${Object.entries(INS_COV_KINDS).map(([k, v]) => `<option value="${k}"${k === kind ? " selected" : ""}>${v[2]} ${escapeHtml(v[0])}</option>`).join("")}</select>
+                    <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${rowId}" aria-label="Remove">×</button>
+                </div>
+                <div class="ins-row-line ins-cov-namewrap"><input type="text" class="ins-cov-label" placeholder="Coverage name (e.g. TPD, Hospital income)" value="${escapeHtml(c.label || "")}"></div>
+                <div class="ins-row-line">
+                    <div class="ins-sv-cell"><label>Sum insured</label><input type="number" class="ins-cov-sum" step="0.01" min="0" placeholder="Optional" value="${val(c.sumAssured)}"></div>
+                    <div class="ins-sv-cell ins-cov-med"><label>Annual limit</label><input type="number" class="ins-cov-annual" step="0.01" min="0" placeholder="Optional" value="${val(c.annualLimit)}"></div>
+                </div>
+                <div class="ins-row-line ins-cov-med">
+                    <div class="ins-sv-cell"><label>Lifetime limit</label><input type="number" class="ins-cov-lifetime" step="0.01" min="0" placeholder="Optional" value="${val(c.lifetimeLimit)}"></div>
+                    <div class="ins-sv-cell"><label>Lifetime remaining</label><input type="number" class="ins-cov-remaining" step="0.01" min="0" placeholder="Optional" value="${val(c.lifetimeRemaining)}"></div>
+                </div>
+                <div class="ins-row-line">
+                    <div class="ins-sv-cell"><label>Coverage expiry (only if different from the policy's end date)</label><input type="date" class="ins-cov-expiry" value="${escapeHtml(c.expiry || "")}"></div>
+                </div>
+                <details class="ins-sched-edit"${Array.isArray(c.schedule) && c.schedule.length ? " open" : ""}>
+                    <summary>↘ Reducing cover schedule (optional)</summary>
+                    <div class="ins-sched-help">For reducing term / mortgage cover: the sum insured on each step date. The Sum insured above is the starting amount; the card and reports use the latest step on or before today.</div>
+                    <div class="ins-sched-rows"></div>
+                    <div class="ins-row-line" style="gap:8px; margin-top:6px;">
+                        <button type="button" class="ins-mini-btn" data-click="addInsSchedStep" data-row-id="${rowId}">＋ Add step</button>
+                        <button type="button" class="ins-mini-btn" data-click="insSchedPasteFromNote" data-row-id="${rowId}">Paste from note</button>
+                    </div>
+                </details>`;
             document.getElementById("insCoverageRows").appendChild(row);
+            (Array.isArray(c.schedule) ? c.schedule : []).slice().sort((a, b) => String(a.date).localeCompare(String(b.date))).forEach(st => addInsSchedStepTo(row, st));
+            insCovApplyKind(row);
+        }
+
+        // --- v482: reducing-cover schedule editor ---
+        function addInsSchedStepTo(row, st) {
+            const d = st || {};
+            insRowCounter++;
+            const stepId = "insStep_" + insRowCounter;
+            const line = document.createElement("div");
+            line.className = "ins-row-line ins-step-line";
+            line.id = stepId;
+            line.innerHTML = `
+                <input type="date" class="ins-c-date ins-step-date" value="${escapeHtml(d.date || "")}">
+                <input type="number" class="ins-c-num ins-step-amount" step="0.01" min="0" placeholder="Sum insured" value="${typeof d.amount === "number" ? d.amount : ""}">
+                <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${stepId}" aria-label="Remove step">×</button>`;
+            row.querySelector(".ins-sched-rows").appendChild(line);
+            const det = row.querySelector(".ins-sched-edit");
+            if (det) det.open = true;
+        }
+
+        function addInsSchedStep(el) {
+            const row = document.getElementById(el.dataset.rowId);
+            if (!row) return;
+            // continue from the last step: same day next year, same amount (adjust after)
+            const lines = row.querySelectorAll(".ins-step-line");
+            const last = lines.length ? lines[lines.length - 1] : null;
+            const lastDate = last ? last.querySelector(".ins-step-date").value : "";
+            addInsSchedStepTo(row, { date: lastDate ? insAddYear(lastDate) : "", amount: last ? insNumOrNull(last.querySelector(".ins-step-amount").value) : insNumOrNull(row.querySelector(".ins-cov-sum").value) });
+        }
+
+        // Reads lines such as "12/11/2026 - 497,587" (dd/mm/yyyy, like the PC date field) from the policy's Notes.
+        function insParseScheduleLines(text) {
+            const found = [];
+            const re = /(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{4})\s*[-–—:=]?\s*(?:[A-Za-z]{0,3}\s*)?([\d,]+(?:\.\d+)?)/;
+            String(text || "").split(/\r?\n/).forEach((line, idx) => {
+                const m = line.match(re);
+                if (!m) return;
+                const dd = parseInt(m[1], 10), mm = parseInt(m[2], 10), yy = parseInt(m[3], 10);
+                const amount = parseFloat(m[4].replace(/,/g, ""));
+                if (!(dd >= 1 && dd <= 31 && mm >= 1 && mm <= 12) || !isFinite(amount)) return;
+                found.push({ idx, date: `${yy}-${String(mm).padStart(2, "0")}-${String(dd).padStart(2, "0")}`, amount });
+            });
+            return found;
+        }
+
+        function insSchedPasteFromNote(el) {
+            const row = document.getElementById(el.dataset.rowId);
+            const notesEl = document.getElementById("insNotes");
+            if (!row || !notesEl) return;
+            const found = insParseScheduleLines(notesEl.value);
+            if (!found.length) { alert("No schedule lines found in the Notes.\n\nExpected one step per line, like:\n12/11/2026 - 497,587"); return; }
+            const preview = found.map(f => `${f.date}   ${f.amount.toLocaleString("en-MY", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`).join("\n");
+            if (!confirm(`Add these ${found.length} steps to this coverage? (dates read as dd/mm/yyyy)\n\n${preview}`)) return;
+            const have = new Set([...row.querySelectorAll(".ins-step-line")].map(l => l.querySelector(".ins-step-date").value));
+            found.forEach(f => { if (!have.has(f.date)) addInsSchedStepTo(row, { date: f.date, amount: f.amount }); });
+            if (confirm("Remove those lines from the Notes now that they are in the schedule?")) {
+                const drop = new Set(found.map(f => f.idx));
+                notesEl.value = notesEl.value.split(/\r?\n/).filter((_, i) => !drop.has(i)).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+            }
+        }
+
+        // "Other" shows a name box; Health / Medical shows the limit boxes.
+        function insCovApplyKind(row) {
+            const kind = row.querySelector(".ins-cov-kind").value;
+            row.querySelector(".ins-cov-namewrap").style.display = kind === "other" ? "flex" : "none";
+            row.querySelectorAll(".ins-cov-med").forEach(e => { e.style.display = kind === "medical" ? "" : "none"; });
+        }
+
+        function insCovKindChange(el) {
+            insCovApplyKind(el.closest(".ins-row"));
+        }
+
+        // Riders: name + optional start and expiry date (a rider usually ends before the base policy does).
+        // A rider that carries its own sum insured is better ALSO entered as a coverage row, so that the
+        // sum counts towards the coverage totals; this list is the record of what is attached and until when.
+        function addInsRiderRow(data) {
+            const r = data || {};
+            insRowCounter++;
+            const rowId = "insRd_" + insRowCounter;
+            const row = document.createElement("div");
+            row.className = "ins-row ins-card ins-rider-block";
+            row.id = rowId;
+            row.innerHTML = `
+                <div class="ins-row-line">
+                    <input type="text" class="ins-rd-name" placeholder="Rider name" value="${escapeHtml(r.name || "")}">
+                    <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${rowId}" aria-label="Remove">×</button>
+                </div>
+                <div class="ins-row-line">
+                    <div class="ins-sv-cell"><label>Start date (optional)</label><input type="date" class="ins-rd-start" value="${escapeHtml(r.startDate || "")}"></div>
+                    <div class="ins-sv-cell"><label>Expiry date (optional)</label><input type="date" class="ins-rd-end" value="${escapeHtml(r.endDate || "")}"></div>
+                </div>`;
+            document.getElementById("insRiderRows").appendChild(row);
         }
 
         // New payment rows continue the previous one (date + 1 year, same amount) — yearly premiums
-        // are then just "add row, adjust if it changed".
+        // are then just "add row, adjust if it changed". A row can be a REFUND (overpaid premium, premium
+        // returned…): the ↩ button flips it, and it is stored as a NEGATIVE amount, so every total (this
+        // sheet, the card, the check against the insurer's figure) is simply a sum. The amount box always
+        // shows the positive figure; green = refund.
         function addInsPaymentRow(data, continueFromLast) {
             const container = document.getElementById("insPaymentRows");
             let d = data || {};
             if (!data && continueFromLast) {
-                const lastRow = container.querySelector(".ins-row:last-child");
+                // continue from the last real PAYMENT row — a refund row's amount isn't the next premium
+                const payRows = [...container.querySelectorAll(".ins-row")].filter(r => !r.querySelector(".ins-refund-btn").classList.contains("on"));
+                const lastRow = payRows[payRows.length - 1];
                 const lastDate = lastRow ? lastRow.querySelector(".ins-pay-date").value : "";
                 const lastAmt = lastRow ? lastRow.querySelector(".ins-pay-amount").value : "";
-                d = { date: lastDate ? insAddYear(lastDate) : "", amount: lastAmt !== "" ? lastAmt : (document.getElementById("insPremium").value || "") };
+                d = { date: lastDate ? insAddYear(lastDate) : "", amount: lastAmt !== "" ? lastAmt : (document.getElementById("insPremium").value || ""),
+                    paidBy: (lastRow && lastRow.querySelector(".ins-parent-btn").classList.contains("on")) ? "parent" : "" };
             }
+            const num = parseFloat(d.amount);
+            const refund = isFinite(num) && num < 0;
+            const amountText = (d.amount === undefined || d.amount === null || d.amount === "") ? "" : (refund ? String(Math.abs(num)) : String(d.amount));
             insRowCounter++;
             const rowId = "insPay_" + insRowCounter;
             const row = document.createElement("div");
@@ -15709,12 +19071,84 @@
             row.id = rowId;
             row.innerHTML = `
                 <input type="date" class="ins-c-date ins-pay-date" value="${escapeHtml(d.date || "")}">
-                <input type="number" class="ins-c-num ins-pay-amount" step="0.01" min="0" placeholder="Amount" value="${d.amount !== undefined && d.amount !== "" ? escapeHtml(String(d.amount)) : ""}" data-input="insRecalcPaymentTotal">
-                <input type="text" class="ins-c-grow ins-pay-note" placeholder="Note" value="${escapeHtml(d.note || "")}">
+                <input type="number" class="ins-c-num ins-pay-amount${refund ? " refund" : ""}" step="0.01" min="0" placeholder="Amount" value="${escapeHtml(amountText)}" data-input="insRecalcPaymentTotal">
+                <input type="text" class="ins-c-grow ins-pay-note" placeholder="${refund ? "Refund reason" : "Note"}" value="${escapeHtml(d.note || "")}">
+                <button type="button" class="ins-parent-btn${d.paidBy === "parent" ? " on" : ""}" data-click="toggleInsParent" aria-pressed="${d.paidBy === "parent"}" aria-label="Paid by parent" title="Paid by parent">P</button>
+                <button type="button" class="ins-refund-btn${refund ? " on" : ""}" data-click="toggleInsRefund" data-row-id="${rowId}" aria-pressed="${refund}" aria-label="Refund" title="Refund (money back)">↩</button>
                 <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${rowId}" aria-label="Remove">×</button>`;
             container.appendChild(row);
             insRecalcPaymentTotal();
-            if (!data && continueFromLast) container.scrollTop = container.scrollHeight;
+            if (!data && continueFromLast) { container.scrollTop = container.scrollHeight; if (container.scrollHeight <= container.clientHeight + 1) row.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+        }
+
+        // v491: a premium-history row can be tagged "paid by parent" (P button). Untagged rows count as
+        // paid by the ledger owner. New rows copy the previous row's tag.
+        // v510: "Cashback received (earlier years)" rows — same shape as the premium rows: {id, date, amount, note}.
+        function addInsCashbackRow(data, continueFromLast) {
+            const container = document.getElementById("insCbRows");
+            let d = data || {};
+            if (!data && continueFromLast) {
+                const rows = [...container.querySelectorAll(".ins-row")];
+                const last = rows[rows.length - 1];
+                if (last) {
+                    const ld = last.querySelector(".ins-cb-date").value;
+                    d = { date: ld ? insAddYear(ld) : "", amount: last.querySelector(".ins-cb-amount").value };
+                } else {
+                    const start = document.getElementById("insStartDate").value;
+                    const fy = parseInt(document.getElementById("insCbFirstYear").value, 10);
+                    d = { date: start ? (fy > 0 ? insAnnivDate(start, fy) : insAddYear(start)) : "", amount: "" };
+                }
+            }
+            insRowCounter++;
+            const rowId = "insCb_" + insRowCounter;
+            const row = document.createElement("div");
+            row.className = "ins-row ins-row-line";
+            row.id = rowId;
+            row.innerHTML = `
+                <input type="date" class="ins-c-date ins-cb-date" value="${escapeHtml(d.date || "")}">
+                <input type="number" class="ins-c-num ins-cb-amount" step="0.01" min="0" placeholder="Amount" value="${escapeHtml(d.amount === undefined || d.amount === null ? "" : String(d.amount))}" data-input="insRecalcCashbackTotal">
+                <input type="text" class="ins-c-grow ins-cb-note" placeholder="Note" value="${escapeHtml(d.note || "")}">
+                <button type="button" class="ins-row-x" data-click="removeInsRow" data-row-id="${rowId}" aria-label="Remove">×</button>`;
+            container.appendChild(row);
+            insRecalcCashbackTotal();
+            if (!data && continueFromLast) { container.scrollTop = container.scrollHeight; if (container.scrollHeight <= container.clientHeight + 1) row.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+        }
+
+        function collectInsCashbackRows() {
+            const out = [];
+            document.querySelectorAll("#insCbRows .ins-row").forEach(row => {
+                const date = row.querySelector(".ins-cb-date").value;
+                const amount = insNumOrNull(row.querySelector(".ins-cb-amount").value);
+                if (date && amount != null && amount > 0) out.push({ id: makeInsuranceId(), date, amount, note: row.querySelector(".ins-cb-note").value.trim() });
+            });
+            return out.sort((a, b) => a.date.localeCompare(b.date));
+        }
+
+        function insRecalcCashbackTotal() {
+            const out = document.getElementById("insCbTotal");
+            if (!out) return;
+            const rows = collectInsCashbackRows();
+            const cur = document.getElementById("insCurrency").value || baseCurrency;
+            out.textContent = `${rows.length} payout${rows.length === 1 ? "" : "s"} · total ${formatCurrency(rows.reduce((s, r) => s + r.amount, 0), cur)}`;
+        }
+
+        function toggleInsParent(el) {
+            const on = el.classList.toggle("on");
+            el.setAttribute("aria-pressed", on ? "true" : "false");
+        }
+
+        function toggleInsRefund(el) {
+            const row = document.getElementById(el.dataset.rowId);
+            if (!row) return;
+            const on = el.classList.toggle("on");
+            el.setAttribute("aria-pressed", on ? "true" : "false");
+            row.querySelector(".ins-pay-amount").classList.toggle("refund", on);
+            row.querySelector(".ins-pay-note").placeholder = on ? "Refund reason" : "Note";
+            insRecalcPaymentTotal();
+        }
+
+        function insBonusToggle() {
+            document.getElementById("insBonusDetail").style.display = document.getElementById("insPaidByBonus").checked ? "block" : "none";
         }
 
         // One surrender-value entry = Date + Guaranteed + Dividend + Terminal bonus + Total, mirroring the
@@ -15725,6 +19159,23 @@
         // or more parts empty nothing is guessed — the difference simply shows as "Other". So any mix of
         // boxes can be entered. Dividend and Terminal bonus accept a sum such as "20389.58 + 11580.50"
         // (see insParseAmount()).
+        // v593: the surrender list is shown newest-first in a bounded, scrolling box (like the payment and
+        // cashback lists), and a NEW blank entry goes to the TOP of it and takes focus — so adding one no
+        // longer means scrolling past every earlier entry to the bottom of the form. Loaded rows are appended
+        // in the order given (newest first, see openInsuranceModal()). Saving sorts by date, so the order
+        // on screen never matters to the data.
+        function placeInsSvRow(row, isNew) {
+            const box = document.getElementById("insSvRows");
+            if (isNew) { box.insertBefore(row, box.firstChild); box.scrollTop = 0; }
+            else box.appendChild(row);
+        }
+
+        function focusNewInsSvRow(row, selector) {
+            const el = row.querySelector(selector);
+            if (el) { try { el.focus({ preventScroll: true }); } catch (err) { /* ignore */ } }
+            if (row.scrollIntoView) row.scrollIntoView({ block: "nearest" });
+        }
+
         function addInsSvRow(data) {
             const r = data || {};
             insRowCounter++;
@@ -15751,7 +19202,8 @@
                 <div class="ins-row-line">
                     <div class="ins-sv-cell"><label>Total surrender value (auto)</label><input type="number" class="ins-sv-total" step="0.01" placeholder="auto" value="${val(r.total)}" data-input="insSvTotalInput" data-change="insSvTotalChange"></div>
                 </div>`;
-            document.getElementById("insSvRows").appendChild(row);
+            placeInsSvRow(row, !data);
+            if (!data) focusNewInsSvRow(row, ".ins-sv-guaranteed");
         }
 
         function insSvRowFields(row) {
@@ -15855,7 +19307,7 @@
                     <div class="ins-sv-cell"><label>Deduction</label><input type="number" class="ins-sv-deduction" step="0.01" min="0" placeholder="0.00" value="${val(r.deduction)}" data-input="insFundRowInput"></div>
                     <div class="ins-sv-cell"><label>Surrender value</label><input type="number" class="ins-sv-total" step="0.01" placeholder="auto" value="${val(r.total)}" data-input="insSvTotalInput"></div>
                 </div>`;
-            document.getElementById("insSvRows").appendChild(row);
+            placeInsSvRow(row, !data);
             const funds = Array.isArray(r.funds) && r.funds.length ? r.funds : [null];
             funds.forEach(fd => addInsFundLineTo(row, fd));
             // A loaded total that is not fund value − deduction was typed over by hand: keep it as is.
@@ -15864,6 +19316,7 @@
                 row.dataset.totalAuto = Math.abs(r.total - (sum - (r.deduction || 0))) < 0.005 ? "1" : "0";
             }
             insFundRowRecalc(row);
+            if (!data) focusNewInsSvRow(row, ".ins-fd-name");
         }
 
         function addInsFundLine(el) {
@@ -15934,7 +19387,13 @@
 
         // Policy type drives which kind of entry "＋ Add" creates, and what the help text says.
         function updateInsSvAddUi() {
-            const ilp = document.getElementById("insType").value === "investment";
+            // The person box means something different by type: the insured person for life / medical…,
+            // but for a car or a building it is the owner, and for travel the traveller — and it can
+            // stay empty (a fire policy on a warehouse has no insured person).
+            const t = document.getElementById("insType").value;
+            const memberLabel = document.getElementById("insMemberLabel");
+            if (memberLabel) memberLabel.textContent = (t === "car" || t === "home") ? "Owner (optional)" : (t === "travel" ? "Traveller (optional)" : "Insured person");
+            const ilp = t === "investment";
             document.getElementById("insSvAddBtn").textContent = ilp ? "＋ Add fund value (units × price)" : "＋ Add surrender value";
             document.getElementById("insSvHelp").innerHTML = ilp
                 ? "For an investment-linked policy, copy the fund lines from the insurer's unit statement: <b>fund name, units and price (NAV) as at the date shown</b> — the value is units × price. If the statement shows a surrender charge or other deduction, enter it under <b>Deduction</b>; the <b>Surrender value</b> fills in as fund value − deduction. The latest entry is the value shown on the policy."
@@ -15945,14 +19404,38 @@
             const row = document.getElementById(el.dataset.rowId);
             if (row) row.remove();
             insRecalcPaymentTotal();
+            insRecalcCashbackTotal(); // v510
         }
 
         function collectInsCoverageRows() {
             const out = [];
             document.querySelectorAll("#insCoverageRows .ins-row").forEach(row => {
-                const label = row.querySelector(".ins-cov-label").value.trim();
-                const sum = insNumOrNull(row.querySelector(".ins-cov-sum").value);
-                if (label) out.push({ id: makeInsuranceId(), label, sumAssured: sum });
+                const kind = row.querySelector(".ins-cov-kind").value;
+                const medical = kind === "medical";
+                const label = kind === "other" ? row.querySelector(".ins-cov-label").value.trim() : "";
+                const sumAssured = insNumOrNull(row.querySelector(".ins-cov-sum").value);
+                const expiry = row.querySelector(".ins-cov-expiry").value || "";
+                // A blank "Other" row (no name, no amount, no date) is an unused row, not a coverage.
+                const schedule = [...row.querySelectorAll(".ins-step-line")].map(l => ({ date: l.querySelector(".ins-step-date").value || "", amount: insNumOrNull(l.querySelector(".ins-step-amount").value) }))
+                    .filter(st => st.date && st.amount != null).sort((a, b) => a.date.localeCompare(b.date));
+                if (kind === "other" && !label && sumAssured == null && !expiry && !schedule.length) return;
+                out.push({
+                    id: makeInsuranceId(), kind, label, sumAssured, expiry, schedule,
+                    annualLimit: medical ? insNumOrNull(row.querySelector(".ins-cov-annual").value) : null,
+                    lifetimeLimit: medical ? insNumOrNull(row.querySelector(".ins-cov-lifetime").value) : null,
+                    lifetimeRemaining: medical ? insNumOrNull(row.querySelector(".ins-cov-remaining").value) : null
+                });
+            });
+            return out;
+        }
+
+        function collectInsRiderRows() {
+            const out = [];
+            document.querySelectorAll("#insRiderRows .ins-row").forEach(row => {
+                const name = row.querySelector(".ins-rd-name").value.trim();
+                const startDate = row.querySelector(".ins-rd-start").value || "";
+                const endDate = row.querySelector(".ins-rd-end").value || "";
+                if (name || startDate || endDate) out.push({ id: makeInsuranceId(), name, startDate, endDate });
             });
             return out;
         }
@@ -15962,7 +19445,12 @@
             document.querySelectorAll("#insPaymentRows .ins-row").forEach(row => {
                 const date = row.querySelector(".ins-pay-date").value;
                 const amount = insNumOrNull(row.querySelector(".ins-pay-amount").value);
-                if (date && amount != null && amount >= 0) out.push({ id: makeInsuranceId(), date, amount, note: row.querySelector(".ins-pay-note").value.trim() });
+                const refund = row.querySelector(".ins-refund-btn").classList.contains("on");
+                if (date && amount != null && amount >= 0) {
+                    const rec = { id: makeInsuranceId(), date, amount: refund ? -amount : amount, note: row.querySelector(".ins-pay-note").value.trim() };
+                    if (row.querySelector(".ins-parent-btn").classList.contains("on")) rec.paidBy = "parent";
+                    out.push(rec);
+                }
             });
             return out.sort((a, b) => a.date.localeCompare(b.date));
         }
@@ -16003,7 +19491,8 @@
             const rows = collectInsPaymentRows();
             const total = rows.reduce((s, r) => s + r.amount, 0);
             const cur = document.getElementById("insCurrency").value || baseCurrency;
-            let text = `${rows.length} payment${rows.length === 1 ? "" : "s"} · total ${formatCurrency(total, cur)}`;
+            const nRefunds = rows.filter(r => r.amount < 0).length, nPays = rows.length - nRefunds;
+            let text = `${nPays} payment${nPays === 1 ? "" : "s"}${nRefunds ? ` + ${nRefunds} refund${nRefunds === 1 ? "" : "s"}` : ""} · total ${formatCurrency(total, cur)}`;
             let color = "var(--text-muted)";
             const stmt = insNumOrNull(document.getElementById("insStatementTotal").value);
             if (stmt != null && stmt > 0) {
@@ -16013,6 +19502,348 @@
             }
             out.textContent = text;
             out.style.color = color;
+            insRecalcCashbackTotal(); // v510: the policy currency may have changed too
+        }
+
+        // --- v487: Premiums-paid box on the policy detail sheet ---
+        // (1) plain-language "where the paid figure comes from" (hidden unless BOTH parts exist);
+        // (2) a stacked bar + legend for the surrender-value make-up (Guaranteed / Dividend / Terminal bonus);
+        // (3) the payback % in green plus an annualised return (XIRR) worked out from the dated premiums.
+        function insPaidBreakdownHtml(f, cur, p) {
+            let out = "";
+            if (f.hasParentSplit) {
+                const line = (label, v) => `<div style="display:flex; justify-content:space-between; gap:10px; font-size:0.72rem; font-weight:700;"><span>${label}</span><span>${formatCurrency(v, cur)}</span></div>`;
+                const st = p ? parseFloat(p.statementTotal) : 0;
+                const mismatch = st > 0 && Math.abs(f.historyTotal - st) >= 0.005;
+                out += `<div style="margin-top:6px; padding:6px 8px; border-radius:8px; background:var(--chip-bg);">${line("👪 Paid by parent", f.parentTotal)}${line("🙋 Paid by you", f.selfTotal)}${mismatch ? `<div style="font-size:0.66rem; font-weight:700; color:var(--expense-color); margin-top:3px;">⚠️ Typed-in history ≠ insurer's total paid</div>` : ""}</div>`;
+            }
+            if (Math.abs(f.historyTotal) >= 0.005 && Math.abs(f.ledgerTotal) >= 0.005) {
+                out += `<div style="font-size:0.68rem; color:var(--text-muted); font-weight:600;">${formatCurrency(f.historyTotal, cur)} entered manually (earlier years) · ${formatCurrency(f.ledgerTotal, cur)} recorded in the ledger</div>`;
+            }
+            return out;
+        }
+
+        // Annualised return: money out on each premium date, the surrender value (after any policy loan) in on the
+        // latest surrender-value date. Only premiums dated on or before that day are used — the same set as
+        // "Paid to SV date" on the Savings panel. Returns null when the data can't support an honest number.
+        function insXirr(flows) {
+            const f = (r) => flows.reduce((sum, c) => sum + c.amt / Math.pow(1 + r, c.t), 0);
+            let lo = -0.95, hi = 5, flo = f(lo), fhi = f(hi);
+            if (!isFinite(flo) || !isFinite(fhi) || flo * fhi > 0) return null;
+            for (let i = 0; i < 200; i++) {
+                const mid = (lo + hi) / 2, fm = f(mid);
+                if (flo * fm <= 0) { hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+            }
+            return (lo + hi) / 2;
+        }
+        function insAnnualisedReturn(p, f) {
+            if (!f.latestSv || f.svValue == null || !(f.svValue > 0)) return null;
+            // typed-in earlier payments don't reconcile with the insurer's total → the history is incomplete
+            if (parseFloat(p.statementTotal) > 0 && Math.abs(f.historyTotal - parseFloat(p.statementTotal)) >= 0.005) return null;
+            const end = f.latestSv.date;
+            const rows = [
+                ...f.history.map(r => ({ date: r.date, amount: parseFloat(r.amount) || 0 })),
+                ...f.ledgerRows.map(r => ({ date: r.date || "", amount: r.amount }))
+            ].filter(r => r.date && r.date <= end && r.amount !== 0);
+            if (rows.length < 2) return null;
+            const day = (d) => Date.parse(d + "T00:00:00Z") / 86400000;
+            const t0 = Math.min(...rows.map(r => day(r.date)));
+            const spanDays = day(end) - t0;
+            if (!(spanDays >= 365)) return null;
+            const flows = rows.map(r => ({ t: (day(r.date) - t0) / 365, amt: -r.amount }));
+            // v510: cashback received up to the surrender-value date is money back on the day it arrived
+            [...f.cbHistory.map(r => ({ date: r.date, amount: parseFloat(r.amount) || 0 })), ...f.cbLedgerRows.map(r => ({ date: r.date || "", amount: r.amount }))]
+                .filter(r => r.date && r.date <= end && r.amount > 0)
+                .forEach(r => flows.push({ t: Math.max(0, (day(r.date) - t0) / 365), amt: r.amount }));
+            flows.push({ t: spanDays / 365, amt: f.svValue - (f.loan || 0) });
+            const r = insXirr(flows);
+            return (r == null || !isFinite(r)) ? null : r;
+        }
+
+        function insSvBreakdownHtml(f, cur) {
+            if (!(f.svValue != null && f.svValue > 0 && (f.svParts.g != null || f.svParts.m != null))) return "";
+            if (f.latestSv && Array.isArray(f.latestSv.funds)) return ""; // unit-linked: shown as fund value instead
+            const pp = f.svParts;
+            const segs = [];
+            if (pp.g != null && pp.g > 0) segs.push({ label: "Guaranteed", amt: pp.g, op: 1 });
+            if (pp.d != null && pp.d > 0) segs.push({ label: "Dividend", amt: pp.d, op: 0.6 });
+            if (pp.m != null && pp.m > 0) segs.push({ label: "Terminal bonus", amt: pp.m, op: 0.3 });
+            const rest = f.svValue - (pp.g || 0) - (pp.d || 0) - (pp.m || 0);
+            if (rest >= 0.005) segs.push({ label: "Other", amt: rest, op: 0.15 });
+            const total = segs.reduce((a, x) => a + x.amt, 0);
+            if (!segs.length || !(total > 0)) return "";
+            const pct = (x) => (x.amt / f.svValue * 100).toFixed(0);
+            const aria = segs.map(x => `${x.label} ${pct(x)}%`).join(", ");
+            return `<div style="margin-top:10px;">
+                <div role="img" aria-label="${escapeHtml(aria)}" style="display:flex; height:10px; border-radius:6px; overflow:hidden; background:var(--chip-bg);">${segs.map(x => `<div style="flex:${(x.amt / total * 100).toFixed(2)} 1 0; background:var(--primary); opacity:${x.op};"></div>`).join("")}</div>
+                <div style="display:flex; flex-wrap:wrap; gap:4px 14px; margin-top:7px;">${segs.map(x => `<span style="display:inline-flex; align-items:center; gap:5px; font-size:0.72rem; font-weight:700; color:var(--text-muted);"><span style="width:9px; height:9px; border-radius:2px; background:var(--primary); opacity:${x.op}; flex:0 0 auto;"></span>${x.label} ${pct(x)}% · ${formatCurrency(x.amt, cur)}</span>`).join("")}</div>
+                ${(pp.m != null && pp.m > 0) ? `<div style="font-size:0.68rem; color:var(--text-muted); font-weight:600; margin-top:4px;">Terminal bonus is not guaranteed — it can change each year.</div>` : ""}
+            </div>`;
+        }
+
+        // ---- v510: cashback (annual payout of an endowment-type policy) ----
+        // A policy may carry cashbackPct (% of the sum insured of the coverage kind cashbackBase, default "life"), an
+        // optional cashbackFirstYear, and cashbackHistory [{id,date,amount,note}] = payouts received before this ledger
+        // tracked them. Payouts from now on are ordinary Income entries linked to the policy (policyId). The payout day is
+        // the policy anniversary (month-day of the start date). The "next payout" is only an ESTIMATE — what the insurer
+        // really paid is in the received rows, and those drive every total and return figure.
+        function insAnnivDate(startStr, year) {
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(startStr || "");
+            if (!m) return "";
+            let mm = m[2], dd = m[3];
+            if (mm === "02" && dd === "29") { const leap = (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0; if (!leap) dd = "28"; }
+            return String(year).padStart(4, "0") + "-" + mm + "-" + dd;
+        }
+        // v516: policy year = which year of the policy we are in (year 1 runs from the start date to the
+        // first anniversary). "of" is the policy term when an end / maturity date is set. null when there is
+        // no start date or it is still in the future.
+        function insPolicyYear(p, todayStr) {
+            const m = /^(\d{4})-\d{2}-\d{2}$/.exec(p && p.startDate || "");
+            if (!m) return null;
+            const sy = parseInt(m[1], 10);
+            const today = todayStr || todayLocalStr();
+            if (p.startDate > today) return null;
+            let elapsed = parseInt(today.slice(0, 4), 10) - sy;
+            if (insAnnivDate(p.startDate, sy + elapsed) > today) elapsed--;
+            let of = null;
+            const mm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(p.maturityDate || "");
+            if (mm && p.maturityDate > p.startDate) {
+                let t = parseInt(mm[1], 10) - sy;
+                if (insAnnivDate(p.startDate, sy + t) > p.maturityDate) t--;
+                if (t >= 1) of = t;
+            }
+            return { year: elapsed + 1, of, next: insAnnivDate(p.startDate, sy + elapsed + 1) };
+        }
+        function insCovAmountOn(c, dateStr) {
+            let cur = null;
+            insCovSchedule(c).forEach(st => { if (st.date <= dateStr) cur = st; });
+            if (cur) return cur.amount;
+            return (c && typeof c.sumAssured === "number") ? c.sumAssured : null;
+        }
+        function insCashbackBaseSum(p, dateStr) {
+            const kind = p.cashbackBase || "life";
+            let sum = 0, any = false;
+            (p.coverages || []).forEach(c => {
+                if (c && c.kind === kind) { const a = insCovAmountOn(c, dateStr); if (typeof a === "number") { sum += a; any = true; } }
+            });
+            return any ? sum : null;
+        }
+        // v511: a linked, un-paused cashback PLAN (an income planned payment) wins: its due date and amount are what the
+        // person set up. Without one, the estimate (anniversary x sum insured %) is used as in v510.
+        function insCashbackNext(p, f) {
+            const pct = parseFloat(p.cashbackPct), hasPct = pct > 0;
+            const plan = (f.cbPlan && !f.cbPlan.paused && f.cbPlan.dueDate) ? f.cbPlan : null;
+            if (!insIsLive(p) || (!hasPct && !plan)) return null;
+            const today = todayLocalStr();
+            const kind = p.cashbackBase || "life";
+            const day = (d) => Date.parse(d + "T00:00:00Z") / 86400000;
+            let est = null;
+            if (hasPct) {
+                let date = "", ended = false;
+                if (p.startDate) {
+                    const received = [...f.cbHistory.map(r => r.date), ...f.cbLedgerRows.map(r => r.date)].filter(Boolean).sort();
+                    let y;
+                    if (received.length) {
+                        const last = received[received.length - 1], ly = parseInt(last.slice(0, 4), 10);
+                        let best = ly, bestD = Infinity;
+                        [ly - 1, ly, ly + 1].forEach(c => { const dd = Math.abs(day(last) - day(insAnnivDate(p.startDate, c))); if (dd < bestD) { bestD = dd; best = c; } });
+                        y = best + 1;
+                    } else {
+                        y = parseInt(today.slice(0, 4), 10);
+                        if (insAnnivDate(p.startDate, y) < today) y++;
+                    }
+                    const fy = parseInt(p.cashbackFirstYear, 10);
+                    if (fy > 0 && y < fy) y = fy;
+                    date = insAnnivDate(p.startDate, y);
+                    if (date && p.maturityDate && date > p.maturityDate) ended = true;
+                }
+                if (!ended) {
+                    const base = insCashbackBaseSum(p, date || today);
+                    est = { base, amount: base == null ? null : Math.round(base * pct) / 100, date };
+                }
+            }
+            if (plan) {
+                const amount = Math.round(insConvert(plan.amount, plan.currency || f.cur, f.cur) * 100) / 100;
+                return { pct: hasPct ? pct : null, kind, base: est ? est.base : null, amount, date: plan.dueDate, overdue: plan.dueDate < today, fromPlan: true, estimate: est ? est.amount : null };
+            }
+            if (!est) return null;
+            return { pct, kind, base: est.base, amount: est.amount, date: est.date, overdue: !!(est.date && est.date < today), fromPlan: false, estimate: est.amount };
+        }
+        function insCashbackBannerHtml(p, f, compact) {
+            const nx = insCashbackNext(p, f);
+            if (!nx && !(f.cbCount > 0)) return "";
+            const cur = f.cur, kName = (INS_COV_KINDS[(nx && nx.kind) || p.cashbackBase || "life"] || ["", "Life"])[1];
+            const box = (inner, warn) => `<div style="background:${warn ? "rgba(245,158,11,0.14)" : "rgba(16,185,129,0.12)"}; border:1px solid ${warn ? "rgba(245,158,11,0.35)" : "rgba(16,185,129,0.35)"}; border-radius:10px; padding:7px 10px; font-size:0.74rem; font-weight:700; margin:${compact ? "0" : "0 0 10px"};">${inner}</div>`;
+            let out = "";
+            if (nx) {
+                const same = nx.estimate != null && Math.abs(nx.estimate - nx.amount) < 0.005;
+                if (nx.fromPlan && nx.overdue) {
+                    out += box(`⚠️ Cashback payout due ${escapeHtml(nx.date)} (${formatCurrency(nx.amount, cur)}) · the planned payment is not marked as paid yet`, true);
+                } else if (nx.fromPlan) {
+                    const head = (nx.pct && nx.base != null && same) ? `🎉 Cashback benefit: ${nx.pct}% of ${formatCurrency(nx.base, cur)}` : "🎉 Cashback";
+                    const diff = (nx.pct && nx.base != null && nx.estimate != null && !same) ? ` · ${nx.pct}% of ${formatCurrency(nx.base, cur)} would be ${formatCurrency(nx.estimate, cur)}` : "";
+                    out += box(`${head} · next payout ${formatCurrency(nx.amount, cur)} on ${escapeHtml(nx.date)} · planned${diff}`, false);
+                } else if (nx.base == null) {
+                    out += box(`🎉 Cashback ${nx.pct}% of ${escapeHtml(kName)} sum insured · set the ${escapeHtml(kName)} sum insured to see the payout`, false);
+                } else if (nx.overdue) {
+                    out += box(`⚠️ Cashback ${nx.pct}% of ${formatCurrency(nx.base, cur)} · payout due ${escapeHtml(nx.date)} (~${formatCurrency(nx.amount, cur)}) · not recorded yet`, true);
+                } else {
+                    out += box(`🎉 Cashback benefit: ${nx.pct}% of ${formatCurrency(nx.base, cur)} · next payout ~${formatCurrency(nx.amount, cur)}${nx.date ? " on " + escapeHtml(nx.date) : ""}`, false);
+                }
+            }
+            if (f.cbCount > 0) {
+                out += `<div style="font-size:0.72rem; font-weight:700; color:var(--text-muted); margin-top:${out ? "5px" : "0"};">🎁 Cashback received ${formatCurrency(f.cbTotal, cur)} · ${f.cbCount} payout${f.cbCount === 1 ? "" : "s"}</div>`;
+            }
+            return compact ? `<div>${out}</div>` : out;
+        }
+        function insCashbackBoxHtml(p, f) {
+            const hasPlan = parseFloat(p.cashbackPct) > 0 || !!f.cbPlan;
+            if (!hasPlan && !(f.cbCount > 0)) return "";
+            const cur = f.cur;
+            const parts = [];
+            if (f.cbHistory.length) parts.push(`${formatCurrency(f.cbHistoryTotal, cur)} entered manually (earlier years)`);
+            if (f.cbLedgerRows.length) parts.push(`${formatCurrency(f.cbLedgerTotal, cur)} recorded in the ledger`);
+            return `<div style="margin-top:10px; padding-top:10px; border-top:1px solid var(--border-color);">
+                <div style="display:flex; justify-content:space-between; gap:12px; align-items:baseline;">
+                    <span style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Cashback received</span>
+                    <span style="font-family:'Kalam', cursive; font-size:1.1rem; font-weight:800; color:var(--income-color);">${formatCurrency(f.cbTotal, cur)}</span>
+                </div>
+                <div style="font-size:0.68rem; color:var(--text-muted); font-weight:600;">${f.cbCount} payout${f.cbCount === 1 ? "" : "s"}${parts.length ? " · " + parts.join(" · ") : ""}</div>
+            </div>`;
+        }
+        function insPayoutLineHtml(p, f) {
+            if (f.paybackPct == null) return "";
+            const good = f.paybackPct >= 100;
+            const ret = insAnnualisedReturn(p, f);
+            const retHtml = ret == null ? "" : `<span style="font-size:0.74rem; font-weight:700; color:var(--text-muted);">annualised return ≈ ${ret < 0 ? "−" : ""}${(Math.abs(ret) * 100).toFixed(1)}%<button type="button" class="ins-info-btn" data-click="insToggleReturnNote" aria-label="About the annualised return">i</button></span>`;
+            const note = ret == null ? "" : `<div class="ins-med-note">Worked out from the dates and amounts of every premium paid up to the surrender-value date, against the surrender value${f.loan > 0 ? " after the policy loan" : ""}${f.cbTotal > 0 ? ", with the cashback received up to that date counted as money back on the day it arrived" : ""}. It is not a pure investment return: part of each premium pays for the protection (life cover, riders), so it reads lower than a fund's return, and the early years are always weak. It moves each year with the insurer's bonus.</div>`;
+            const cbSub = f.cbTotal > 0 ? `<div style="font-size:0.68rem; font-weight:600; color:var(--text-muted);">surrender value + ${formatCurrency(f.cbTotal, f.cur)} cashback received</div>` : "";
+            return `<div class="ins-ret-wrap" style="margin-top:10px;">
+                <div style="display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 12px;">
+                    <span style="font-size:0.95rem; font-weight:800; color:${good ? "var(--income-color)" : "var(--primary)"};">${f.paybackPct.toFixed(1)}% of premiums paid</span>
+                    ${retHtml}
+                </div>${cbSub}${note}
+            </div>`;
+        }
+
+        // --- v486: policy attachments (PDF + images). Same store/shape as transaction, planned-payment and
+        // inventory attachments: the policy keeps refs [{id,name,mime,thumb,size}], the file bytes live in
+        // STORES.ATTACHMENTS (so backups and Drive sync already carry them). Own temp/existing arrays so the
+        // policy form never disturbs the transaction form's. Nothing is written until Save. ---
+        let insExistingAttachments = [];
+        let insTempAttachments = [];
+        let insAttOriginalIds = [];
+
+        function insAttCount(p) { return Array.isArray(p && p.attachments) ? p.attachments.length : 0; }
+
+        async function handleInsAttachmentsSelected(event) {
+            const files = Array.from(event.target.files || []);
+            const attName = attNamesFor(event, files);
+            for (const file of files) {
+                const isImage = file.type.startsWith("image/");
+                const isPdf = file.type === "application/pdf";
+                if (!isImage && !isPdf) { alert(`"${file.name}" isn't an image or a PDF — skipped.`); continue; }
+                if (isPdf && file.size > 8 * 1024 * 1024) {
+                    const mb = (file.size / 1024 / 1024).toFixed(1);
+                    if (!confirm(`"${file.name}" is ${mb}MB. Large PDFs take longer to store. Add it anyway?`)) continue;
+                }
+                let data, thumb;
+                if (isImage) {
+                    const raw = await readFileAsDataUrl(file);
+                    if (!raw) { alert(`Couldn't read "${file.name}" — it wasn't added.`); continue; }
+                    try {
+                        // a little larger than receipts (1280/0.75): policy schedules are small print
+                        data = await compressImage(raw, 1600, 0.8);
+                        thumb = await compressImage(raw, 96, 0.5);
+                    } catch (err) { alert(`Could not process "${file.name}" — it wasn't added.`); continue; }
+                } else {
+                    data = await readFileAsDataUrl(file);
+                    if (!data) { alert(`Couldn't read "${file.name}" — it wasn't added.`); continue; }
+                    thumb = null;
+                }
+                insTempAttachments.push({ id: makeAttId(), name: attName(file), mime: isImage ? "image/jpeg" : "application/pdf", data, thumb, size: data.length });
+            }
+            renderInsAttachmentPreview();
+            document.getElementById("insCameraInput").value = "";
+            document.getElementById("insFilesInput").value = "";
+        }
+
+        function renderInsAttachmentPreview() {
+            const wrap = document.getElementById("insAttachmentPreview");
+            const items = [];
+            insExistingAttachments.forEach((att, idx) => items.push(renderTxAttachmentRow(att, `removeExistingInsAttachment" data-idx="${idx}`)));
+            insTempAttachments.forEach((att, idx) => items.push(renderTxAttachmentRow(att, `removeTempInsAttachment" data-idx="${idx}`)));
+            wrap.innerHTML = items.join("");
+            wrap.style.display = items.length ? "flex" : "none";
+        }
+
+        function removeExistingInsAttachment(el) {
+            insExistingAttachments.splice(parseInt(el.dataset.idx, 10), 1);
+            renderInsAttachmentPreview();
+        }
+
+        function removeTempInsAttachment(el) {
+            insTempAttachments.splice(parseInt(el.dataset.idx, 10), 1);
+            renderInsAttachmentPreview();
+        }
+
+        // Detail sheet: tap a row to open it in the shared viewer (txId null → the viewer's Delete button stays
+        // hidden; removing a policy file is done from the policy's Edit form, like inventory).
+        function insAttachmentsHtml(p) {
+            const atts = Array.isArray(p.attachments) ? p.attachments : [];
+            if (!atts.length) return "";
+            return `<div style="font-size:0.72rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.04em; margin:16px 0 6px;">Attachments (${atts.length})</div>
+                <div style="display:flex; flex-direction:column; gap:6px; margin-bottom:12px;">${atts.map((att, idx) => {
+                    const isImage = (att.mime || "").startsWith("image/");
+                    return `<div class="tx-att-item" data-click="openInsAttachment" data-idx="${idx}" style="cursor:pointer; display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:6px 8px;">
+                        <div style="width:36px; height:36px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:1.1rem;">${att.thumb ? `<img src="${att.thumb}" alt="" style="width:100%; height:100%; object-fit:cover;">` : (isImage ? "🖼️" : "📄")}</div>
+                        <div style="flex:1; min-width:0;"><div style="font-size:0.8rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div><div style="font-size:0.68rem; color:var(--text-muted);">${formatAttBytes(att.size)}</div></div>
+                        <span style="color:var(--text-muted); font-weight:700;">›</span>
+                    </div>`;
+                }).join("")}</div>`;
+        }
+
+        function openInsAttachment(el) {
+            const p = getPolicyById(activeInsuranceId);
+            const att = p && Array.isArray(p.attachments) ? p.attachments[parseInt(el.dataset.idx, 10)] : null;
+            if (att) openAttachment(att, null);
+        }
+
+        // --- v485: agent / contact as their own fields (used to be typed into Notes) ---
+        function insAgentLine(p) { return [p && p.agentName, p && p.agentContact].map(x => String(x || "").trim()).filter(Boolean).join(" · "); }
+        // Phone numbers in the contact text become tap-to-call links (detail sheet only — the list card is itself tappable).
+        function insLinkifyPhones(text) {
+            return escapeHtml(String(text || "")).replace(/(\+?\d[\d \-]{5,}\d)/g, m => `<a href="tel:${m.replace(/[^\d+]/g, "")}" style="color:var(--primary); text-decoration:none; font-weight:700;">${m}</a>`);
+        }
+        function insFindAgentLine(text) {
+            const lines = String(text || "").split(/\r?\n/);
+            const idx = lines.findIndex(l => /^\s*agent\b/i.test(l));
+            return idx < 0 ? null : { idx, lines, raw: lines[idx] };
+        }
+        // "Agent -SIA KET THIAM -016 8311700" → { name: "SIA KET THIAM", contact: "016 8311700" }
+        function insSplitAgentLine(raw) {
+            const t = String(raw || "").replace(/^\s*agent\b\s*[-:–—.]*\s*/i, "").trim();
+            const m = t.search(/\+?\d|[^\s@]+@/);
+            const name = (m < 0 ? t : t.slice(0, m)).replace(/[\s\-–—:,(]+$/, "").trim();
+            const contact = m < 0 ? "" : t.slice(m).trim();
+            return { name, contact };
+        }
+        function insAgentMoveRefresh() {
+            const row = document.getElementById("insAgentMoveRow");
+            if (!row) return;
+            const empty = !document.getElementById("insAgentName").value.trim() && !document.getElementById("insAgentContact").value.trim();
+            row.style.display = (empty && insFindAgentLine(document.getElementById("insNotes").value)) ? "block" : "none";
+        }
+        function insAgentFromNotes() {
+            const notesEl = document.getElementById("insNotes");
+            const found = insFindAgentLine(notesEl.value);
+            if (!found) return;
+            const { name, contact } = insSplitAgentLine(found.raw);
+            if (!confirm(`Move this line from Notes into the agent fields?\n\n"${found.raw.trim()}"\n\nAgent name: ${name || "—"}\nContact: ${contact || "—"}`)) return;
+            document.getElementById("insAgentName").value = name;
+            document.getElementById("insAgentContact").value = contact;
+            notesEl.value = found.lines.filter((_, i) => i !== found.idx).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+            insAgentMoveRefresh();
         }
 
         async function openInsuranceModal(id) {
@@ -16024,6 +19855,8 @@
             document.getElementById("insProduct").value = p ? (p.product || "") : "";
             document.getElementById("insInsurer").value = p ? (p.insurer || "") : "";
             document.getElementById("insPolicyNo").value = p ? (p.policyNo || "") : "";
+            document.getElementById("insAgentName").value = p ? (p.agentName || "") : "";
+            document.getElementById("insAgentContact").value = p ? (p.agentContact || "") : "";
             insFillSelect("insType", Object.entries(INS_TYPES), p ? (p.type || "other") : "life");
             insFillSelect("insStatus", Object.entries(INS_STATUSES), p ? (p.status || "active") : "active");
             insFillSelect("insMember", [["", "— not set —"], ...membersCache.map(m => [m.id, m.name])], p ? (p.insuredMemberId || "") : "");
@@ -16036,8 +19869,17 @@
             document.getElementById("insMaturityDate").value = p ? (p.maturityDate || "") : "";
             document.getElementById("insPremium").value = (p && p.premium != null) ? p.premium : "";
             document.getElementById("insLoan").value = (p && p.loanOutstanding) ? p.loanOutstanding : "";
+            document.getElementById("insExcludeNw").checked = !!(p && p.excludeFromNetWorth); // v500
             document.getElementById("insNotes").value = p ? (p.notes || "") : "";
+            insAgentMoveRefresh(); // v485
+            document.getElementById("insPaidByBonus").checked = !!(p && p.paidByBonus);
+            document.getElementById("insPaidByBonusSince").value = (p && p.paidByBonusSince) || "";
+            insBonusToggle();
             document.getElementById("insStatementTotal").value = (p && p.statementTotal != null) ? p.statementTotal : "";
+            // v510: cashback
+            document.getElementById("insCbPct").value = (p && p.cashbackPct != null) ? p.cashbackPct : "";
+            insFillSelect("insCbBase", Object.entries(INS_COV_KINDS).map(([k, v]) => [k, v[0]]), p ? (p.cashbackBase || "life") : "life");
+            document.getElementById("insCbFirstYear").value = (p && p.cashbackFirstYear) ? p.cashbackFirstYear : "";
 
             // Ledger-tracking date — a new policy defaults to the day before the earliest
             // transaction in the ledger, i.e. "everything before this is typed in below".
@@ -16055,16 +19897,56 @@
             document.getElementById("insCutoff").value = cutoff;
 
             document.getElementById("insCoverageRows").innerHTML = "";
+            document.getElementById("insRiderRows").innerHTML = "";
             document.getElementById("insPaymentRows").innerHTML = "";
             document.getElementById("insSvRows").innerHTML = "";
+            document.getElementById("insCbRows").innerHTML = ""; // v510
             ((p && p.coverages) || []).forEach(c => addInsCoverageRow(c));
+            ((p && p.riders) || []).forEach(r => addInsRiderRow(r));
             ((p && p.premiumHistory) || []).slice().sort((a, b) => a.date.localeCompare(b.date)).forEach(r => addInsPaymentRow(r));
-            ((p && p.surrenderHistory) || []).slice().sort((a, b) => a.date.localeCompare(b.date)).forEach(r => (Array.isArray(r.funds) ? addInsFundSvRow(r) : addInsSvRow(r)));
+            ((p && p.surrenderHistory) || []).slice().sort((a, b) => b.date.localeCompare(a.date)).forEach(r => (Array.isArray(r.funds) ? addInsFundSvRow(r) : addInsSvRow(r)));
+            ((p && p.cashbackHistory) || []).slice().sort((a, b) => a.date.localeCompare(b.date)).forEach(r => addInsCashbackRow(r)); // v510
             insRecalcPaymentTotal();
             updateInsSvAddUi();
+            insExistingAttachments = (p && Array.isArray(p.attachments)) ? p.attachments.map(a => ({ ...a })) : []; // v486
+            insTempAttachments = [];
+            insAttOriginalIds = insExistingAttachments.map(a => a.id);
+            renderInsAttachmentPreview();
             document.getElementById("insDeleteBtn").style.display = id ? "block" : "none";
             openModal("insuranceModal");
+            const insSc = document.getElementById("insModalScroll"); // v595: always start at the top, chip bar in sync
+            if (insSc) { insSc.scrollTop = 0; const jb = document.getElementById("insJump"); if (jb) jb.scrollLeft = 0; insUpdateJumpActive(); }
         }
+        // v595: Edit Policy is split into section cards (#insSec1..#insSec9); the chip bar (#insJump) at the top
+        // jumps between them and highlights the section being read.
+        function toggleInsHelp(el) { // v596: "!" button shows / hides the section's explanation (phone only)
+            const sec = el && el.closest ? el.closest(".ins-sec") : null;
+            if (!sec) return;
+            const on = sec.classList.toggle("help-open");
+            el.setAttribute("aria-expanded", on ? "true" : "false");
+        }
+        function insJumpTo(el) {
+            const sc = document.getElementById("insModalScroll");
+            const sec = el && el.dataset ? document.getElementById(el.dataset.target) : null;
+            if (!sc || !sec) return;
+            const top = sec.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 58;
+            sc.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+        }
+        function insUpdateJumpActive() {
+            const sc = document.getElementById("insModalScroll");
+            if (!sc) return;
+            const secs = Array.from(sc.querySelectorAll(".ins-sec"));
+            if (!secs.length) return;
+            const line = sc.getBoundingClientRect().top + 72;
+            let cur = secs[0];
+            secs.forEach(s => { if (s.getBoundingClientRect().top <= line) cur = s; });
+            if (sc.scrollTop + sc.clientHeight >= sc.scrollHeight - 4) cur = secs[secs.length - 1];
+            let on = null;
+            sc.querySelectorAll("#insJump button").forEach(b => { const isOn = b.dataset.target === cur.id; b.classList.toggle("on", isOn); if (isOn) on = b; });
+            const bar = document.getElementById("insJump");
+            if (on && bar) { const l = on.offsetLeft - 20, r = on.offsetLeft + on.offsetWidth + 20; if (l < bar.scrollLeft) bar.scrollLeft = l; else if (r > bar.scrollLeft + bar.clientWidth) bar.scrollLeft = r - bar.clientWidth; }
+        }
+        (function () { const sc = document.getElementById("insModalScroll"); if (sc) sc.addEventListener("scroll", insUpdateJumpActive, { passive: true }); })();
 
         async function handleSaveInsurance() {
             const id = document.getElementById("insId").value || null;
@@ -16076,6 +19958,8 @@
             record.product = product;
             record.insurer = insurer;
             record.policyNo = document.getElementById("insPolicyNo").value.trim();
+            record.agentName = document.getElementById("insAgentName").value.trim(); // v485
+            record.agentContact = document.getElementById("insAgentContact").value.trim();
             record.type = document.getElementById("insType").value;
             record.status = document.getElementById("insStatus").value;
             record.insuredMemberId = document.getElementById("insMember").value || null;
@@ -16085,19 +19969,45 @@
             record.startDate = document.getElementById("insStartDate").value || "";
             record.maturityDate = document.getElementById("insMaturityDate").value || "";
             record.loanOutstanding = insNumOrNull(document.getElementById("insLoan").value) || 0;
+            if (document.getElementById("insExcludeNw").checked) record.excludeFromNetWorth = true; else delete record.excludeFromNetWorth; // v500
             record.historyCutoff = document.getElementById("insCutoff").value || "";
             record.statementTotal = insNumOrNull(document.getElementById("insStatementTotal").value);
             record.notes = document.getElementById("insNotes").value.trim();
+            record.paidByBonus = document.getElementById("insPaidByBonus").checked;
+            record.paidByBonusSince = record.paidByBonus ? (document.getElementById("insPaidByBonusSince").value || "") : "";
             record.coverages = collectInsCoverageRows();
+            record.riders = collectInsRiderRows();
             record.premiumHistory = collectInsPaymentRows();
+            // v510: cashback — the percentage is only kept when it is > 0; received rows are kept either way
+            const cbPct = insNumOrNull(document.getElementById("insCbPct").value);
+            if (cbPct != null && cbPct > 0) {
+                record.cashbackPct = cbPct;
+                record.cashbackBase = document.getElementById("insCbBase").value || "life";
+                const fy = parseInt(document.getElementById("insCbFirstYear").value, 10);
+                if (fy >= 1900 && fy <= 2200) record.cashbackFirstYear = fy; else delete record.cashbackFirstYear;
+            } else { delete record.cashbackPct; delete record.cashbackBase; delete record.cashbackFirstYear; }
+            record.cashbackHistory = collectInsCashbackRows();
             record.surrenderHistory = collectInsSvRows();
             record.updated = todayLocalStr();
+            // v486: attachments — refs on the policy, bytes in STORES.ATTACHMENTS. New files are written first;
+            // files removed in this edit are deleted only after the policy itself saved.
+            record.attachments = [...insExistingAttachments, ...insTempAttachments.map(a => ({ id: a.id, name: a.name, mime: a.mime, thumb: a.thumb, size: a.size }))];
             try {
+                for (const att of insTempAttachments) {
+                    await writeDB(STORES.ATTACHMENTS, { id: att.id, name: att.name, mime: att.mime, data: att.data });
+                }
                 await writeDB(STORES.INSURANCE, record);
             } catch (err) {
-                alert("Could not save this policy: " + (err && err.message ? err.message : err));
+                const full = err && (err.name === "QuotaExceededError" || /quota/i.test(String(err.message || "")));
+                alert(full ? "Not enough storage space to save these attachments. Try removing one or freeing up space."
+                           : "Could not save this policy: " + (err && err.message ? err.message : err));
                 return;
             }
+            const keptAttIds = new Set(record.attachments.map(a => a.id));
+            for (const oldId of insAttOriginalIds) {
+                if (oldId != null && !keptAttIds.has(oldId)) { try { await deleteDB(STORES.ATTACHMENTS, oldId); } catch (err) { /* a leftover blob costs storage, not correctness */ } }
+            }
+            insTempAttachments = []; insExistingAttachments = []; insAttOriginalIds = [];
             await loadInsuranceCache();
             closeModal("insuranceModal");
             await renderInsurancePage();
@@ -16120,9 +20030,469 @@
             closeModalAndThen("insuranceModal", async () => {
                 const confirmed = await customConfirm("Delete this policy and all its recorded history? This can't be undone.");
                 if (!confirmed) return;
+                const doomed = getPolicyById(id);
                 try { await deleteDB(STORES.INSURANCE, id); } catch (err) {}
+                // v486: its attached files go with it (no orphaned blobs)
+                for (const att of ((doomed && doomed.attachments) || [])) { try { await deleteDB(STORES.ATTACHMENTS, att.id); } catch (err) {} }
                 await loadInsuranceCache();
                 await renderInsurancePage();
+            });
+        }
+
+        // --- TIMELINE (v537) --- a notes timeline for things worth remembering from BEFORE the
+        // ledger started (and after): started EPF in 2015, bought the car, took a policy, changed
+        // jobs. Deliberately a memory aid only — nothing here touches balances, Net Worth or any
+        // report, so there is no double-counting with Opening Balance. Design agreed in chat:
+        // - `date` is a string of one of three precisions — "YYYY-MM-DD", "YYYY-MM" or "YYYY" —
+        //   because old memories are rarely exact. tlSortKey() pads it so mixed precisions sort.
+        // - `refAmount`/`refCurrency` are display-only (grey "ref." figure), never summed.
+        // - `linkKind` ("account" | "policy") + `linkId` optionally point at an existing record;
+        //   a deleted target just shows as "(deleted)" and is not tappable.
+        // - The "Ledger starts here" marker sits at the earliest transaction date; entries dated
+        //   before it get a dashed "pre-ledger" look. Entries after it are allowed too.
+        // Record shape: { id, date, title, type, memberIds[], memberId (first, legacy), note, refAmount,
+        // refCurrency, extraAmounts[{amount,note}] (v539, share refCurrency), linkKind,
+        // linkId, createdAt, updated }. v539: Person(s) is multi-select (older records only have
+        // memberId — tlMemberIds() reads either). Stored encrypted + included in Backup & Restore and Google
+        // Drive sync like every other store (generic writeDB/readAllDB path).
+        const TL_TYPES = {
+            work: ["💼", "Work / Income"],
+            property: ["🏠", "Property"],
+            vehicle: ["🚗", "Vehicle"],
+            insurance: ["🛡️", "Insurance"],
+            account: ["🏦", "Account / Loan"],
+            education: ["🎓", "Education"],
+            family: ["👨‍👩‍👧", "Family"],
+            other: ["📌", "Other"]
+        };
+        const TL_MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        let timelineTypeFilter = "all";
+        // v621: optional page style — "classic" (original rail + cards) or "ribbon" (centre spine of coloured
+        // arrow segments, year rings and label pills, alternating left/right). Remembered per device.
+        const TIMELINE_STYLE_KEY = "ledgerTimelineStyle";
+        let timelineStyle = (() => { try { return localStorage.getItem(TIMELINE_STYLE_KEY) === "ribbon" ? "ribbon" : "classic"; } catch (e) { return "classic"; } })();
+        function timelineSetStyle(el) {
+            const mode = el.dataset.mode === "ribbon" ? "ribbon" : "classic";
+            if (mode === timelineStyle) return;
+            timelineStyle = mode;
+            try { localStorage.setItem(TIMELINE_STYLE_KEY, mode); } catch (e) { /* private mode: just not remembered */ }
+            renderTimelinePage();
+        }
+
+        function makeTimelineId() {
+            return "tl_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8);
+        }
+
+        // "2015" -> "2015-00-00", "2015-06" -> "2015-06-00": a year-only entry sorts below the dated
+        // ones of the same year (newest-first list), which reads naturally ("sometime in 2015").
+        function tlSortKey(d) {
+            const p = String(d || "").split("-");
+            return (p[0] || "0000") + "-" + (p[1] || "00") + "-" + (p[2] || "00");
+        }
+
+        function tlDateLabel(d) {
+            const p = String(d || "").split("-");
+            if (p.length >= 3) return `${parseInt(p[2], 10)} ${TL_MONTHS[parseInt(p[1], 10) - 1] || ""} ${p[0]}`;
+            if (p.length === 2) return `${TL_MONTHS[parseInt(p[1], 10) - 1] || ""} ${p[0]}`;
+            return p[0] || "";
+        }
+
+        // v538: the year heading already shows the year, so cards only show the finer part.
+        function tlShortDate(d) {
+            const p = String(d || "").split("-");
+            if (p.length >= 3) return `${parseInt(p[2], 10)} ${TL_MONTHS[parseInt(p[1], 10) - 1] || ""}`;
+            if (p.length === 2) return TL_MONTHS[parseInt(p[1], 10) - 1] || "";
+            return "";
+        }
+
+        // v539: Person(s) is multi-select. Older entries only carry the single `memberId`.
+        function tlMemberIds(e) {
+            if (Array.isArray(e.memberIds)) return e.memberIds.filter(Boolean);
+            return e.memberId ? [e.memberId] : [];
+        }
+
+        // v541: display-only — a period followed by a space in a title (e.g. "EP. Senior Engineer")
+        // is drawn as a small grey centred dot. The stored title is unchanged.
+        function tlTitleHTML(t) {
+            return escapeHtml(t || "").replace(/\.\s+/g, '<span class="tl-ref-dot tl-title-dot" aria-hidden="true"></span>');
+        }
+
+        function tlFmtAmt(n) {
+            return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function tlValidDate(d) {
+            return /^\d{4}(-(0[1-9]|1[0-2])(-(0[1-9]|[12]\d|3[01]))?)?$/.test(d || "");
+        }
+
+        function navigateToTimelinePage() {
+            showPage("page-timeline");
+            pushVirtualState("timeline");
+            renderTimelinePage();
+        }
+
+        function timelineSetType(el) {
+            timelineTypeFilter = el.dataset.type || "all";
+            renderTimelinePage();
+        }
+
+        async function renderTimelinePage() {
+            const listEl = document.getElementById("timelineList");
+            const emptyEl = document.getElementById("timelineEmpty");
+            const chipsEl = document.getElementById("timelineTypeChips");
+            const memberSel = document.getElementById("timelineMember");
+            if (!listEl || !emptyEl || !chipsEl || !memberSel) return;
+            document.querySelectorAll("#timelineStyleToggle .tl-style-btn").forEach(b => {
+                const on = b.dataset.mode === timelineStyle;
+                b.classList.toggle("active", on);
+                b.setAttribute("aria-pressed", on ? "true" : "false");
+            });
+
+            await loadMembersCache();
+            const all = await readAllDB(STORES.TIMELINE);
+
+            // Member filter: keep the current choice if that member still exists.
+            const prevMember = memberSel.value || "all";
+            memberSel.innerHTML = `<option value="all">All people</option>` + membersCache.map(m => `<option value="${escapeHtml(m.id)}">${escapeHtml(m.name)}</option>`).join("");
+            memberSel.value = membersCache.some(m => m.id === prevMember) ? prevMember : "all";
+
+            // Type chips: only the types actually in use (plus "All"), so the row stays short.
+            const counts = {};
+            all.forEach(e => { counts[e.type || "other"] = (counts[e.type || "other"] || 0) + 1; });
+            if (timelineTypeFilter !== "all" && !counts[timelineTypeFilter]) timelineTypeFilter = "all";
+            chipsEl.innerHTML = all.length === 0 ? "" :
+                [`<button type="button" class="tl-chip${timelineTypeFilter === "all" ? " active" : ""}" data-click="timelineSetType" data-type="all">All<span class="tl-chip-n">${all.length}</span></button>`]
+                    .concat(Object.keys(TL_TYPES).filter(k => counts[k]).map(k =>
+                        `<button type="button" class="tl-chip${timelineTypeFilter === k ? " active" : ""}" data-click="timelineSetType" data-type="${k}">${TL_TYPES[k][0]} ${escapeHtml(TL_TYPES[k][1])}<span class="tl-chip-n">${counts[k]}</span></button>`)).join("");
+
+            const q = (document.getElementById("timelineSearch").value || "").trim().toLowerCase();
+            const memberFilter = memberSel.value;
+            const filtered = all.filter(e => {
+                if (timelineTypeFilter !== "all" && (e.type || "other") !== timelineTypeFilter) return false;
+                if (memberFilter !== "all" && !tlMemberIds(e).includes(memberFilter)) return false;
+                if (q && !((e.title || "") + " " + (e.note || "") + " " + (e.extraAmounts || []).map(x => x.note || "").join(" ")).toLowerCase().includes(q)) return false;
+                return true;
+            });
+
+            // Ledger start = earliest transaction date.
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            let startDate = "";
+            txs.forEach(t => { const d = String(t.date || "").slice(0, 10); if (d && (!startDate || d < startDate)) startDate = d; });
+
+            // Names for linked records (read once per render).
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const policies = await readAllDB(STORES.INSURANCE);
+
+            const items = filtered.map(e => ({ e, key: tlSortKey(e.date) }));
+            if (startDate) items.push({ marker: true, key: tlSortKey(startDate) });
+            // Newest first; on an equal key the marker goes last (entries on the start day are "after" it).
+            items.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : (a.marker ? 1 : 0) - (b.marker ? 1 : 0) || String((b.e && b.e.createdAt) || "").localeCompare(String((a.e && a.e.createdAt) || ""))));
+
+            emptyEl.style.display = all.length === 0 ? "block" : "none";
+            if (all.length === 0) {
+                listEl.innerHTML = "";
+                return;
+            }
+            if (filtered.length === 0) {
+                listEl.innerHTML = `<p style="text-align:center; color:var(--text-muted); font-size:0.85rem; padding:30px 20px;">No entries match this filter.</p>`;
+                return;
+            }
+
+            const startKey = startDate ? tlSortKey(startDate) : "";
+
+            // v538: group into year blocks first (so each heading can show its entry count), then
+            // lay out as: [after-ledger rail] -> start marker -> [before-ledger dashed rail].
+            const yearCount = {};
+            items.forEach(it => { if (!it.marker) { const y = it.key.slice(0, 4); yearCount[y] = (yearCount[y] || 0) + 1; } });
+            const preCount = startKey ? items.filter(it => !it.marker && it.key < startKey).length : 0;
+            const years = items.filter(it => !it.marker).map(it => it.key.slice(0, 4));
+            const yearsSpan = years.length ? (years[years.length - 1] === years[0] ? years[0] : `${years[years.length - 1]}–${years[0]}`) : "";
+            const editIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`;
+            const chevIcon = `<svg class="tl-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"/></svg>`;
+
+            const ribbon = timelineStyle === "ribbon";
+            let ribIdx = 0;
+            let html = `<div class="tl-summary">${filtered.length === all.length ? `${all.length} ${all.length === 1 ? "entry" : "entries"}` : `Showing ${filtered.length} of ${all.length}`}${yearsSpan ? ` · ${escapeHtml(yearsSpan)}` : ""}</div>` + (ribbon ? `<div class="tlr-wrap">` : `<div class="tl-wrap"><div class="tl-sec">`);
+            let curYear = "";
+            let inPre = false;
+            items.forEach(it => {
+                const year = it.key.slice(0, 4);
+                if (ribbon && it.marker) {
+                    html += `<div class="tlr-marker"><b>📍 Ledger starts here</b><span>${escapeHtml(tlDateLabel(startDate))}</span>${preCount ? `<em>Notes below are from before the ledger</em>` : ""}</div>`;
+                    return;
+                }
+                if (it.marker) {
+                    // close the "after" rail, show the divider, then open the dashed "before" rail
+                    html += `</div><div class="tl-marker-row"><span class="tl-dot tl-dot-start">📍</span><div class="tl-marker"><div class="tl-marker-line"><b>Ledger starts here</b><span>${escapeHtml(tlDateLabel(startDate))}</span></div>${preCount ? `<span class="tl-marker-sub">Notes below are from before the ledger</span>` : ""}</div></div><div class="tl-sec tl-sec-pre">`;
+                    inPre = true;
+                    curYear = year === curYear ? "" : curYear; // marker's own year may still need a heading for the entries below
+                    return;
+                }
+                if (!ribbon && year !== curYear) {
+                    curYear = year;
+                    const n = yearCount[year] || 0;
+                    html += `<div class="tl-year"><span class="tl-year-n">${escapeHtml(year)}</span><span class="tl-year-c">${n} ${n === 1 ? "entry" : "entries"}</span></div>`;
+                }
+                const e = it.e;
+                const typeKey = TL_TYPES[e.type] ? e.type : "other";
+                const t = TL_TYPES[typeKey];
+                const pre = !!startKey && it.key < startKey;
+                const liveIds = tlMemberIds(e).filter(id => getMemberById(id));
+                const member = liveIds.length ? accountOwnerTagHTML({ memberIds: liveIds }) : "";
+                const shortDate = tlShortDate(e.date);
+                const metaParts = [];
+                let refShown = false;
+                if (typeof e.refAmount === "number" && isFinite(e.refAmount)) {
+                    metaParts.push(`<span class="tl-ref"><i>ref.</i> <i>${escapeHtml(e.refCurrency || "")}</i> ${tlFmtAmt(e.refAmount)}</span>`);
+                    refShown = true;
+                }
+                // v539: extra amounts — each its own chip, "CUR amount · note", in the main currency.
+                (Array.isArray(e.extraAmounts) ? e.extraAmounts : []).forEach(x => {
+                    if (!x || typeof x.amount !== "number" || !isFinite(x.amount)) return;
+                    metaParts.push(`<span class="tl-ref">${refShown ? "" : "<i>ref.</i> "}<i>${escapeHtml(e.refCurrency || "")}</i> ${tlFmtAmt(x.amount)}${x.note ? `<span class="tl-ref-dot" aria-hidden="true"></span><span class="tl-ref-note">${escapeHtml(x.note)}</span>` : ""}</span>`);
+                    refShown = true;
+                });
+                if (e.linkKind && e.linkId) {
+                    let label = null;
+                    if (e.linkKind === "account") { const a = accounts.find(x => x.id === e.linkId); if (a) label = accountOptionLabel(a, accounts); }
+                    else if (e.linkKind === "policy") { const p = policies.find(x => x.id === e.linkId); if (p) label = p.product || p.insurer || "Policy"; }
+                    metaParts.push(label
+                        ? `<span class="tl-link" data-click="timelineOpenLink" data-kind="${escapeHtml(e.linkKind)}" data-id="${escapeHtml(e.linkId)}">🔗 ${escapeHtml(label)}</span>`
+                        : `<span class="tl-gone">🔗 (deleted)</span>`);
+                }
+                if (ribbon) {
+                    const side = ribIdx % 2 === 0 ? "r" : "l";
+                    const detail = [t[1], shortDate].filter(Boolean).join(" · ");
+                    html += `
+                    <div class="tlr-item tlr-${side} tlr-c${ribIdx % 5}${pre ? " tlr-pre" : ""}" data-click="timelineToggleNote">
+                        <span class="tlr-node"></span>
+                        <div class="tlr-block">
+                            <div class="tlr-top"><span class="tlr-dash"></span><span class="tlr-ring">${escapeHtml(year)}</span></div>
+                            <div class="tlr-label-row"><span class="tlr-label">${tlTitleHTML(e.title)}</span><button type="button" class="tl-edit" data-click="timelineEdit" data-id="${escapeHtml(e.id)}" aria-label="Edit entry" title="Edit">${editIcon}</button></div>
+                            <div class="tlr-text"><span class="tlr-kind">${escapeHtml(detail)}</span>${liveIds.length ? member : ""}${e.note ? `<div class="tlr-note">${escapeHtml(e.note)}</div>` : ""}</div>
+                            ${metaParts.length ? `<div class="tl-meta">${metaParts.join("")}</div>` : ""}
+                        </div>
+                    </div>`;
+                    ribIdx++;
+                    return;
+                }
+                html += `
+                    <div class="tl-item tl-t-${typeKey}${pre ? " tl-pre" : ""}">
+                        <span class="tl-dot">${t[0]}</span>
+                        <div class="tl-card" data-click="timelineToggleNote">
+                            <div class="tl-head"><span class="tl-kind">${escapeHtml(t[1])}</span>${shortDate ? `<span>· ${escapeHtml(shortDate)}</span>` : ""}<span class="tl-head-end">${member}<button type="button" class="tl-edit" data-click="timelineEdit" data-id="${escapeHtml(e.id)}" aria-label="Edit entry" title="Edit">${editIcon}</button></span></div>
+                            <div class="tl-title">${tlTitleHTML(e.title)}</div>
+                            ${e.note ? `<div class="tl-note-row"><div class="tl-note">${escapeHtml(e.note)}</div>${chevIcon}</div>` : ""}
+                            ${metaParts.length ? `<div class="tl-meta">${metaParts.join("")}</div>` : ""}
+                        </div>
+                    </div>`;
+            });
+            html += ribbon ? `</div>` : `</div></div>`;
+            listEl.innerHTML = html;
+        }
+
+        function timelineToggleNote(el) {
+            el.classList.toggle("open");
+        }
+
+        function timelineEdit(el) {
+            openTimelineModal(el.dataset.id);
+        }
+
+        function timelineOpenLink(el) {
+            const id = el.dataset.id;
+            if (el.dataset.kind === "account") navigateToLedgerPage(id);
+            else if (el.dataset.kind === "policy") { navigateToInsurancePage(); setTimeout(() => openInsuranceDetail(id), 60); }
+        }
+
+        // --- Add/Edit modal ---
+
+        function timelinePrecisionChange() {
+            const p = document.getElementById("tlPrecision").value;
+            const day = document.getElementById("tlDateDay");
+            const mon = document.getElementById("tlDateMonth");
+            const yr = document.getElementById("tlDateYear");
+            // Carry what's already typed over to the newly chosen precision.
+            const cur = (day.value || mon.value || yr.value || "");
+            const parts = cur.split("-");
+            if (p === "day" && !day.value) day.value = parts.length >= 3 ? cur : "";
+            if (p === "month" && !mon.value) mon.value = parts.length >= 2 ? parts.slice(0, 2).join("-") : "";
+            if (p === "year" && !yr.value) yr.value = parts[0] || "";
+            day.style.display = p === "day" ? "" : "none";
+            mon.style.display = p === "month" ? "" : "none";
+            yr.style.display = p === "year" ? "" : "none";
+        }
+
+        async function openTimelineModal(id) {
+            let rec = null;
+            if (id) {
+                rec = (await readAllDB(STORES.TIMELINE)).find(r => r.id === id) || null;
+                if (!rec) return;
+            }
+            await loadMembersCache();
+            document.getElementById("tlId").value = id || "";
+            document.getElementById("tlModalTitle").textContent = id ? "Edit Timeline Entry" : "Add Timeline Entry";
+            document.getElementById("tlTitle").value = rec ? (rec.title || "") : "";
+            document.getElementById("tlNote").value = rec ? (rec.note || "") : "";
+            insFillSelect("tlType", Object.entries(TL_TYPES).map(([k, v]) => [k, v[0] + " " + v[1]]), rec ? (rec.type || "other") : "other");
+            tlRenderMemberChips(rec ? tlMemberIds(rec) : []);
+
+            const d = rec ? rec.date : "";
+            const precision = d.length === 4 ? "year" : d.length === 7 ? "month" : "day";
+            document.getElementById("tlPrecision").value = precision;
+            document.getElementById("tlDateDay").value = d.length === 10 ? d : "";
+            document.getElementById("tlDateMonth").value = d.length === 7 ? d : "";
+            document.getElementById("tlDateYear").value = d.length === 4 ? d : "";
+            timelinePrecisionChange();
+
+            const curs = Object.keys(fxRates);
+            const refCur = rec && rec.refCurrency ? rec.refCurrency : baseCurrency;
+            if (!curs.includes(refCur)) curs.push(refCur);
+            insFillSelect("tlRefCurrency", curs.map(c => [c, c]), refCur);
+            document.getElementById("tlRefAmount").value = rec && typeof rec.refAmount === "number" ? String(rec.refAmount) : "";
+            document.getElementById("tlExtraRows").innerHTML = "";
+            if (rec && Array.isArray(rec.extraAmounts)) rec.extraAmounts.forEach(x => timelineAddAmountRow(null, x));
+            tlUpdateAddBtn();
+
+            // Link picker: accounts and policies in two groups.
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const policies = await readAllDB(STORES.INSURANCE);
+            const cur = rec && rec.linkKind && rec.linkId ? rec.linkKind + ":" + rec.linkId : "";
+            const opt = (v, label) => `<option value="${escapeHtml(v)}"${v === cur ? " selected" : ""}>${escapeHtml(label)}</option>`;
+            document.getElementById("tlLink").innerHTML =
+                `<option value="">— none —</option>` +
+                (accounts.length ? `<optgroup label="Accounts">${accounts.map(a => opt("account:" + a.id, accountOptionLabel(a, accounts))).join("")}</optgroup>` : "") +
+                (policies.length ? `<optgroup label="Policies">${policies.map(p => opt("policy:" + p.id, p.product || p.insurer || "Policy")).join("")}</optgroup>` : "");
+
+            document.getElementById("tlDeleteBtn").style.display = id ? "block" : "none";
+            openModal("timelineModal");
+            timelineNoteInput();
+            requestAnimationFrame(timelineNoteInput);
+        }
+
+        // --- v539 helpers for the modal ---
+        function tlRenderMemberChips(selectedIds) {
+            const wrap = document.getElementById("tlMemberChips");
+            if (membersCache.length === 0) {
+                wrap.innerHTML = `<p style="font-size:0.75rem; color:var(--text-muted);">No members yet — add one via Sidebar ▸ Manage Members.</p>`;
+                return;
+            }
+            wrap.innerHTML = membersCache.map(m => `
+                <label class="owner-chip">
+                    <input type="checkbox" class="tl-member-checkbox" value="${escapeHtml(m.id)}" ${selectedIds.includes(m.id) ? "checked" : ""} style="accent-color:${escapeHtml(m.color)};">
+                    ${escapeHtml(m.name)}
+                </label>`).join("");
+        }
+
+        const TL_MAX_EXTRA = 10;
+
+        function tlUpdateAddBtn() {
+            const btn = document.querySelector(".tl-amt-add");
+            if (btn) btn.disabled = document.querySelectorAll("#tlExtraRows .tl-xrow").length >= TL_MAX_EXTRA;
+        }
+
+        // "+" button (el set) or restoring a saved row (x set). Rows: Amount + Note; the currency
+        // is row 1's, shown as a small prefix inside the amount box.
+        function timelineAddAmountRow(el, x) {
+            const box = document.getElementById("tlExtraRows");
+            if (box.children.length >= TL_MAX_EXTRA) return;
+            const row = document.createElement("div");
+            row.className = "tl-xrow";
+            row.innerHTML = `
+                <div class="tl-xrow-amt"><span class="tl-xrow-cur"></span><input type="number" class="form-input tl-x-amt" step="0.01" placeholder="Amount" aria-label="Amount"></div>
+                <input type="text" class="form-input tl-x-note" maxlength="60" placeholder="Note" aria-label="Note for this amount">
+                <button type="button" class="tl-xrow-del" data-click="timelineRemoveAmountRow" aria-label="Remove this amount" title="Remove">&times;</button>`;
+            if (x) {
+                if (typeof x.amount === "number" && isFinite(x.amount)) row.querySelector(".tl-x-amt").value = String(x.amount);
+                row.querySelector(".tl-x-note").value = x.note || "";
+            }
+            box.appendChild(row);
+            timelineRefCurChange();
+            tlUpdateAddBtn();
+            if (el) row.querySelector(".tl-x-amt").focus();
+        }
+
+        function timelineRemoveAmountRow(el) {
+            const row = el.closest(".tl-xrow");
+            if (row) row.remove();
+            tlUpdateAddBtn();
+        }
+
+        function timelineRefCurChange() {
+            const cur = document.getElementById("tlRefCurrency").value || "";
+            document.querySelectorAll("#tlExtraRows .tl-xrow-cur").forEach(s => { s.textContent = cur; });
+        }
+
+        function timelineNoteInput() {
+            const ta = document.getElementById("tlNote");
+            if (!ta) return;
+            ta.style.height = "auto";
+            ta.style.height = Math.min(ta.scrollHeight + 2, 240) + "px";
+            const n = ta.value.length;
+            document.getElementById("tlNoteCount").textContent = n ? n + " / " + ta.maxLength : "";
+        }
+
+        async function handleSaveTimeline() {
+            const id = document.getElementById("tlId").value || null;
+            const title = document.getElementById("tlTitle").value.trim();
+            if (!title) { alert("Please enter a title."); return; }
+            const p = document.getElementById("tlPrecision").value;
+            const date = p === "day" ? document.getElementById("tlDateDay").value
+                : p === "month" ? document.getElementById("tlDateMonth").value
+                : String(document.getElementById("tlDateYear").value || "").trim();
+            if (!tlValidDate(date) || parseInt(date.slice(0, 4), 10) < 1900) { alert("Please enter a valid date (or just a month / year)."); return; }
+
+            let record = { id: id || makeTimelineId(), createdAt: todayLocalStr() };
+            if (id) {
+                const existing = (await readAllDB(STORES.TIMELINE)).find(r => r.id === id);
+                if (existing) record = { ...existing };
+            }
+            const amtRaw = document.getElementById("tlRefAmount").value.trim();
+            const amt = amtRaw === "" ? NaN : parseFloat(amtRaw);
+            const link = document.getElementById("tlLink").value;
+            // v539: extra amount rows — an empty row is skipped; a note without an amount is flagged.
+            const extras = [];
+            let badRow = false;
+            document.querySelectorAll("#tlExtraRows .tl-xrow").forEach(row => {
+                const raw = row.querySelector(".tl-x-amt").value.trim();
+                const note = row.querySelector(".tl-x-note").value.trim();
+                const v = raw === "" ? NaN : parseFloat(raw);
+                if (isFinite(v)) extras.push({ amount: v, note });
+                else if (note) badRow = true;
+            });
+            if (badRow) { alert("An extra row has a note but no amount — enter the amount or remove the row."); return; }
+            record.date = date;
+            record.title = title;
+            record.type = document.getElementById("tlType").value || "other";
+            record.memberIds = Array.from(document.querySelectorAll(".tl-member-checkbox:checked")).map(cb => cb.value);
+            record.memberId = record.memberIds[0] || ""; // legacy single-person field, kept for older readers
+            record.note = document.getElementById("tlNote").value.trim();
+            record.refAmount = isFinite(amt) ? amt : null;
+            record.extraAmounts = extras;
+            record.refCurrency = (isFinite(amt) || extras.length) ? document.getElementById("tlRefCurrency").value : "";
+            record.linkKind = link ? link.split(":")[0] : "";
+            record.linkId = link ? link.slice(link.indexOf(":") + 1) : "";
+            record.updated = todayLocalStr();
+
+            try {
+                await writeDB(STORES.TIMELINE, record);
+            } catch (err) {
+                alert("Could not save entry: " + (err && err.message ? err.message : err));
+                return;
+            }
+            closeModal("timelineModal");
+            await renderTimelinePage();
+            showToast("Timeline entry saved");
+        }
+
+        async function handleDeleteTimeline() {
+            const id = document.getElementById("tlId").value;
+            if (!id) { closeModal("timelineModal"); return; }
+            closeModalAndThen("timelineModal", async () => {
+                const confirmed = await customConfirm("Delete this timeline entry? This can't be undone.");
+                if (!confirmed) return;
+                try { await deleteDB(STORES.TIMELINE, id); } catch (err) {}
+                await renderTimelinePage();
             });
         }
 
@@ -16226,6 +20596,7 @@
                         <span style="display:flex; flex-direction:column;">
                             <strong>${escapeHtml(r.name)}</strong>
                             ${metaLine ? `<span style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">${metaLine}</span>` : ""}
+                            ${r.notes ? `<span class="reminder-row-note">📝 ${escapeHtml(r.notes)}</span>` : ""}
                         </span>
                     </span>
                     <span style="text-align:right;">
@@ -16251,6 +20622,7 @@
                 return daysDiff <= (r.leadDays || 0);
             }).sort((a, b) => a.dueDate.localeCompare(b.dueDate));
             wrap.style.display = reminders.length ? "" : "none";
+            setTodoBadge("dashboardRemindersWidget", reminders.length, reminders.some(r => r.dueDate < today) ? "red" : "orange");
             if (!reminders.length) return;
 
             list.innerHTML = reminders.map(r => renderReminderRowHtml(r, today)).join("");
@@ -16878,6 +21250,26 @@
         // while Quick View is already open+active underneath the attachment viewer (deleting an
         // attachment via handleDeleteAttachmentFromViewer() below) — calling openModal a second
         // time would push a duplicate modalStack/history entry for a modal that's already open.
+        // v544: Quick View image previews start from the 96px thumb stored on the transaction;
+        // this loads each saved image's full-resolution data from STORES.ATTACHMENTS and swaps it
+        // in. Guards against Quick View having moved on (closed / another tx opened) while the
+        // IndexedDB reads were in flight. Failures are non-fatal — the thumb simply stays.
+        async function hydrateQuickViewImages(txId, atts) {
+            for (let idx = 0; idx < atts.length; idx++) {
+                const att = atts[idx];
+                if (!att || att.data || !att.id) continue;
+                if (!(att.mime || "").startsWith("image/")) continue;
+                try {
+                    const rec = await readKeyDB(STORES.ATTACHMENTS, att.id);
+                    if (!rec || !rec.data) continue;
+                    if (activeQuickViewTxId !== txId) return;
+                    const box = document.getElementById("txQuickViewDetails");
+                    const img = box ? box.querySelector(`img[data-qv-img="${idx}"]`) : null;
+                    if (img) img.src = rec.data;
+                } catch (err) { /* keep thumb */ }
+            }
+        }
+
         async function openTxQuickView(el, opts = {}) {
             const id = Number(el.dataset.id);
             if (!id) return;
@@ -16952,14 +21344,29 @@
                 quickViewAtts = [{ name: "Receipt.jpg", mime: "image/jpeg", data: tx.image }];
             }
             txAttachmentsPickerCurrent = quickViewAtts; // reused by openAttachmentFromQuickView() below
+            // v544: image attachments render as a large inline preview (tap → full viewer), like the
+            // other apps' entry page; PDFs / unreadable files keep the compact row. The stored thumb
+            // is only 96px, so it is just a placeholder here — hydrateQuickViewImages() swaps in the
+            // full-resolution image from STORES.ATTACHMENTS right after the details are rendered.
+            const attIsImage = att => (att.mime || "").startsWith("image/") && !/\.pdf$/i.test(att.name || "");
             const attachmentsHTML = quickViewAtts.length ? `
                 <div style="margin-top:4px;">
                     <div style="font-size:0.7rem; font-weight:700; color:var(--text-muted); text-transform:uppercase; margin-bottom:6px;">Attachments</div>
-                    <div style="display:flex; flex-direction:column; gap:6px;">
-                        ${quickViewAtts.map((att, idx) => `
-                            <div class="tx-att-item" data-click="openAttachmentFromQuickView" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:6px 8px; cursor:pointer;">
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        ${quickViewAtts.map((att, idx) => attIsImage(att) ? `
+                            <div class="tx-att-item" data-click="openAttachmentFromQuickView" data-idx="${idx}" title="Tap to open" style="background:var(--chip-bg); border:1px solid var(--border-color); border-radius:10px; overflow:hidden; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent;">
+                                <div style="display:flex; align-items:center; justify-content:center; min-height:80px; line-height:0;">
+                                    ${(att.thumb || att.data) ? `<img data-qv-img="${idx}" src="${att.data || att.thumb}" alt="${escapeHtml(att.name || "Attachment")}" style="display:block; width:100%; max-height:320px; object-fit:contain;">` : `<span style="font-size:1.6rem; line-height:1; padding:24px;">🖼️</span>`}
+                                </div>
+                                <div style="display:flex; align-items:center; gap:8px; padding:6px 10px; border-top:1px solid var(--border-color); line-height:1.4;">
+                                    <div style="flex:1; min-width:0; font-size:0.74rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
+                                    <span style="font-size:0.7rem; color:var(--text-muted); flex-shrink:0;">View ›</span>
+                                </div>
+                            </div>
+                        ` : `
+                            <div class="tx-att-item" data-click="openAttachmentFromQuickView" data-idx="${idx}" style="display:flex; align-items:center; gap:8px; background:var(--chip-bg); border:1px solid var(--border-color); border-radius:8px; padding:6px 8px; cursor:pointer; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;">
                                 <div style="width:32px; height:32px; border-radius:6px; overflow:hidden; flex-shrink:0; display:flex; align-items:center; justify-content:center; background:var(--chip-bg); font-size:1rem;">
-                                    ${att.thumb || ((att.mime || "").startsWith("image/") && att.data) ? `<img src="${att.thumb || att.data}" alt="" style="width:100%; height:100%; object-fit:cover;">` : ((att.mime || "").startsWith("image/") ? "🖼️" : "📄")}
+                                    ${att.thumb ? `<img src="${att.thumb}" alt="" style="width:100%; height:100%; object-fit:cover;">` : "📄"}
                                 </div>
                                 <div style="flex:1; min-width:0; font-size:0.78rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(att.name || "Attachment")}</div>
                                 <span style="font-size:0.7rem; color:var(--text-muted); flex-shrink:0;">View ›</span>
@@ -16998,6 +21405,7 @@
                 ${splitBreakdownHTML}
                 <div>Account: ${accountName(tx.src)}</div>
                 ${destLine}
+                ${fxRateLineHTML(tx, accounts)}
                 ${(!splitInfo && tx.cat) ? `<div>Category: ${escapeHtml(tx.cat)}</div>` : ""}
                 <div>Notes: ${tx.notes ? escapeHtml(tx.notes) : "-"}</div>
                 ${tagsLineHTML}
@@ -17005,6 +21413,7 @@
                 ${attachmentsHTML}
             `;
 
+            hydrateQuickViewImages(id, quickViewAtts);
             updateTxQuickViewCheckedBtn(!!tx.checked);
             // Refund/Reimbursement only make sense for an ordinary expense — not for a Transfer,
             // not for another refund (no "refund of a refund"), and not for Income. Split
@@ -18058,6 +22467,12 @@
                     currencyTotals[a.currency] = (currencyTotals[a.currency] || 0) + nativeBalances[a.id];
                 }
             });
+            // v488: + insurance surrender value when Setting > Net Worth Card > "Count insurance
+            // surrender value" is on (zero otherwise — see insSvNetWorth()). Counted as a financial
+            // asset in the Financial Assets / Real Estate split below so the two still add up.
+            const insSvAll = insSvNetWorth("all");
+            globalBaseNetWorth += insSvAll.base;
+            updateInsuranceSvChip();
             document.getElementById("netWorthDisplay").innerHTML = formatBalanceHTML(globalBaseNetWorth, baseCurrency);
 
             // v309: Dashboard hero badge for the same "compare also in" preference the Net Worth
@@ -18083,7 +22498,7 @@
             const hasRealEstateAccount = accounts.some(a => (a.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate");
             document.getElementById("netWorthSplitRow").classList.toggle("hidden", !hasRealEstateAccount);
             if (hasRealEstateAccount) {
-                const { financial, realEstate } = summarizeOwnerAssetSplit(accounts, nativeBalances);
+                const { financial, realEstate } = summarizeOwnerAssetSplit(accounts, nativeBalances, insSvAll.base);
                 document.getElementById("financialAssetsDisplay").innerHTML = formatBalanceHTML(financial, baseCurrency);
                 document.getElementById("realEstateDisplay").innerHTML = formatBalanceHTML(realEstate, baseCurrency);
             }
@@ -18099,6 +22514,7 @@
             await renderWarrantyReminderWidget();
             await refreshPlannedPaymentsViews();
             await renderRemindersWidget();
+            renderDormantAccountsWidget(accounts, nativeBalances); // v614
             applyDashboardWidgetOrder();
             applyMonthlyTrendDashboardVisibility();
             renderDesktopInsightsRail(accounts, txs);
@@ -18448,11 +22864,17 @@
                         (viewingAcc.group || DEFAULT_ACCOUNT_GROUP) === "Real Estate" ? "Purchase Cost" : "Current Balance";
                     document.getElementById("ledgerCurrentBalanceValue").innerHTML = balSummary;
                     balanceBanner.style.display = "block";
+                    // v528: Unit Trust accounts get the big "hero" balance; its P/L + Invested line is filled in by renderFundHoldingsTable().
+                    balanceBanner.classList.toggle("bal-hero", viewingAcc.type === "unittrust");
+                    const heroSubReset = document.getElementById("ledgerBalanceHeroSub");
+                    heroSubReset.style.display = "none"; heroSubReset.innerHTML = "";
                 } else {
                     balanceBanner.style.display = "none";
+                    balanceBanner.classList.remove("bal-hero");
                 }
             } else {
                 balanceBanner.style.display = "none";
+                balanceBanner.classList.remove("bal-hero");
             }
 
             // Related Account banner (v50) — Bank Loan accounts only, shown just under Current
@@ -18524,6 +22946,15 @@
                 }
             } else {
                 fundSection.style.display = "none";
+            }
+
+            // v528: on a Unit Trust account the year switcher sits in the Fund Holdings header as a compact
+            // control (saves a whole row); everywhere else it stays in its original spot.
+            {
+                const yn = document.getElementById("ledgerYearNav");
+                const target = document.getElementById(isUnitTrustAccountView ? "fundHoldingsYearSlot" : "ledgerYearNavHome");
+                if (yn && target && yn.parentElement !== target) target.appendChild(yn);
+                if (yn) yn.classList.toggle("compact", isUnitTrustAccountView);
             }
 
             // Multi-Currency account's own Activity page (v55): rather than a jumbled list of
@@ -18627,7 +23058,7 @@
                 if (viewingAcc && viewingAcc.type !== "multi" && viewingAcc.type !== "fd" && viewingAcc.type !== "unittrust" && viewingAcc.initialBalance) {
                     const subText = viewingAcc.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(viewingAcc.initialBalance, viewingAcc.currency, baseCurrency), baseCurrency)}</span>` : '';
                     openingBalanceHTML = `
-                        <div class="ledger-item" style="background-color: #fafbfd; border-left: 4px solid var(--primary); cursor: default;">
+                        <div class="ledger-item ledger-item-carry" style="border-left: 4px solid var(--primary); cursor: default;">
                             <div class="item-left">
                                 <span class="item-name" style="font-style: italic;">🏦 [Opening Balance Setup]</span>
                                 <span class="item-meta">Account Opening Initial Vault Point</span>
@@ -18659,7 +23090,7 @@
                         const bf = computeAccountBalanceAsOf(viewingAcc, yearStartMs);
                         const subText = viewingAcc.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(bf, viewingAcc.currency, baseCurrency), baseCurrency)}</span>` : '';
                         balanceBfHTML = `
-                            <div class="ledger-item" style="background-color: #fafbfd; border-left: 4px solid var(--primary); cursor: default;">
+                            <div class="ledger-item ledger-item-carry" style="border-left: 4px solid var(--primary); cursor: default;">
                                 <div class="item-left">
                                     <span class="item-name" style="font-style: italic;">↩️ Balance B/F</span>
                                     <span class="item-meta">Brought forward from ${accountLedgerYearsCache[accountYearIdx - 1]}</span>
@@ -18679,7 +23110,7 @@
                         const cf = computeAccountBalanceAsOf(viewingAcc, yearEndExclusiveMs);
                         const subText = viewingAcc.currency !== baseCurrency ? `<span class="converted-subtext">≈ ${formatCurrency(convertCurrency(cf, viewingAcc.currency, baseCurrency), baseCurrency)}</span>` : '';
                         balanceCfHTML = `
-                            <div class="ledger-item" style="background-color: #fafbfd; border-left: 4px solid var(--primary); cursor: default;">
+                            <div class="ledger-item ledger-item-carry" style="border-left: 4px solid var(--primary); cursor: default;">
                                 <div class="item-left">
                                     <span class="item-name" style="font-style: italic;">↪️ Balance C/F</span>
                                     <span class="item-meta">Carried forward to ${accountLedgerYearsCache[accountYearIdx + 1]}</span>
@@ -18865,9 +23296,7 @@
                 // own Activity history too. fdResolved placements keep showing their maturity
                 // date for reference even though the ✅ Closed badge already covers status.
                 const maturityText = t.fdMaturityDate ? ` · Matures ${escapeHtml(t.fdMaturityDate)}` : '';
-                const manualFxBadge = (t.manualFxRate || (t.type === "transfer" && t.destAmount != null))
-                    ? `<span style="font-size:0.62rem; font-weight:700; color:#c2410c; background:#ffedd5; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;">✏️ Manual FX</span>`
-                    : '';
+                const manualFxBadge = txFxLockBadgeHTML(t, accounts); // v547: 🔒 replaces the orange Manual FX pill
 
                 // What to show as the headline amount for this row. For a cross-currency Transfer
                 // viewed from its destination account specifically, showing the source amount/
@@ -19576,11 +24005,14 @@
 
             let incBaseTotal = 0, expBaseTotal = 0;
             txs.forEach(t => {
-                if (filterY !== "all" && new Date(t.date).getFullYear().toString() !== filterY) return;
+                // v570: parse as a LOCAL date (same as computeMonthlyTrendData) so a "YYYY-MM-DD" on the 1st can't slip into the
+                // previous month on a device whose timezone is west of UTC — keeps this page's month net equal to the table's Balance.
+                const tLocal = new Date(t.date + "T00:00:00");
+                if (filterY !== "all" && tLocal.getFullYear().toString() !== filterY) return;
                 // v148: report card "Total" click may also carry a specific month (see
                 // navigateToSavingsPage/savingsFilterMonth) — "all" the rest of the time, so this
                 // page filters by year alone exactly as before for every other visit.
-                if (savingsFilterMonth !== "all" && new Date(t.date).getMonth().toString() !== savingsFilterMonth) return;
+                if (savingsFilterMonth !== "all" && tLocal.getMonth().toString() !== savingsFilterMonth) return;
 
                 const tBase = convertTxAmountToBase(t, accounts);
                 if (t.type === "income" && t.isRefund) {
@@ -20063,6 +24495,8 @@
             const tagName = document.getElementById("tagReportTagSelect").value;
             document.getElementById("tagReportEmptyState").style.display = tagName ? "none" : "";
             document.getElementById("tagReportContent").style.display = tagName ? "" : "none";
+            const exportBtn = document.getElementById("tagReportExportCsvBtn");
+            if (exportBtn) exportBtn.style.display = tagName ? "" : "none";
             if (!tagName) return;
 
             const txs = await readAllDB(STORES.TRANSACTIONS);
@@ -20111,46 +24545,227 @@
             const breakdownWrap = document.getElementById("tagReportBreakdownWrap");
             if (breakdownWrap) breakdownWrap.style.display = (tagName === PENDING_CLAIM_TAG) ? "none" : "";
 
-            document.getElementById("tagReportIncomeTotal").textContent = formatCurrency(incomeTotal, baseCurrency);
-            document.getElementById("tagReportExpenseTotal").textContent = formatCurrency(expenseTotal, baseCurrency);
-            const net = incomeTotal - expenseTotal;
-            const netEl = document.getElementById("tagReportNetTotal");
-            netEl.textContent = formatCurrency(net, baseCurrency);
-            netEl.style.color = net >= 0 ? "var(--income-color)" : "var(--expense-color)";
-
-            const dates = matching.map(t => t.date).filter(Boolean).sort();
-            const metaEl = document.getElementById("tagReportMeta");
-            metaEl.textContent = dates.length
-                ? `${matching.length} transaction${matching.length === 1 ? "" : "s"} · ${dates[0] === dates[dates.length - 1] ? dates[0] : `${dates[0]} — ${dates[dates.length - 1]}`}`
-                : "No transactions tagged yet.";
+            // ---- v549 redesign: calm hero total, Income/Net only when there is income, one breakdown view,
+            // month-grouped transaction cards with notes + base-currency value per foreign row. ----
+            const base = baseCurrency;
+            const isPending = tagName === PENDING_CLAIM_TAG;
+            const accById = new Map(accounts.map(a => [a.id, a]));
 
             const entries = Object.keys(catTotals)
                 .filter(c => catTotals[c] > 0)
                 .sort((a, b) => catTotals[b] - catTotals[a])
                 .map((c, i) => ({ label: c, value: catTotals[c], color: BREAKDOWN_CHART_COLORS[i % BREAKDOWN_CHART_COLORS.length] }));
-            renderDonutIntoWrap("tagReportChartWrap", entries, expenseTotal, "expense");
-            document.getElementById("tagReportList").innerHTML = buildTagReportCategoryListHTML(entries, expenseTotal);
 
+            const incomeShown = incomeTotal !== 0;
+            document.getElementById("tagReportExpenseTotal").textContent = formatCurrency(expenseTotal, base);
+            document.getElementById("tagReportHeroLabel").textContent = incomeShown ? "Expense" : "Total expense";
+            document.getElementById("tagReportIncomeNetWrap").style.display = incomeShown ? "" : "none";
+            document.getElementById("tagReportIncomeTotal").textContent = formatCurrency(incomeTotal, base);
+            const net = incomeTotal - expenseTotal;
+            const netEl = document.getElementById("tagReportNetTotal");
+            netEl.textContent = formatCurrency(net, base);
+            netEl.style.color = net >= 0 ? "var(--income-color)" : "var(--expense-color)";
+
+            const dates = matching.map(t => t.date).filter(Boolean).sort();
+            const singleAcct = (matching.length && matching.every(t => t.src === matching[0].src)) ? accById.get(matching[0].src) : null;
+            const metaEl = document.getElementById("tagReportMeta");
+            if (dates.length) {
+                const parts = [];
+                if (entries.length === 1) parts.push(`${getCategoryIcon(entries[0].label, "expense")} ${escapeHtml(entries[0].label)}`);
+                parts.push(`${matching.length} transaction${matching.length === 1 ? "" : "s"}`);
+                parts.push(dates[0] === dates[dates.length - 1] ? escapeHtml(dates[0]) : `${escapeHtml(dates[0])} — ${escapeHtml(dates[dates.length - 1])}`);
+                if (singleAcct) parts.push(`🏦 ${escapeHtml(accountOptionLabel(singleAcct, accounts))}`);
+                metaEl.innerHTML = parts.join(" · ");
+            } else {
+                metaEl.textContent = "No transactions tagged yet.";
+            }
+
+            // Trust note: which part of the total still follows the live FX table.
+            let liveBase = 0, liveN = 0, lockedN = 0;
+            const liveNative = {};
+            matching.forEach(t => {
+                if (t.currency === base) return;
+                if (txBaseIsFrozen(t, accById.get(t.src))) { lockedN++; return; }
+                liveN++;
+                liveBase += convertTxAmountToBase(t, accounts);
+                liveNative[t.currency] = (liveNative[t.currency] || 0) + t.amount;
+            });
+            const fxNote = document.getElementById("tagReportFxNote");
+            if (liveN > 0) {
+                const nat = Object.keys(liveNative).map(c => formatCurrency(liveNative[c], c)).join(" + ");
+                fxNote.className = "tagrep-fxnote warn";
+                fxNote.innerHTML = `⚠ ${escapeHtml(nat)} (${liveN} entr${liveN === 1 ? "y" : "ies"}, ≈ ${escapeHtml(formatCurrency(liveBase, base))}) is converted at today's rates, so this total moves when FX rates change.${lockedN ? ` 🔒 ${lockedN} other${lockedN === 1 ? "" : "s"} locked.` : ""} <span class="tagrep-link" role="link" data-click="navigateToCurrencyConfigPage">Lock rates</span>`;
+                fxNote.style.display = "";
+            } else if (lockedN > 0) {
+                fxNote.className = "tagrep-fxnote ok";
+                fxNote.textContent = `🔒 ${lockedN} foreign-currency entr${lockedN === 1 ? "y is" : "ies are"} rate-locked: this total will not move with FX changes.`;
+                fxNote.style.display = "";
+            } else {
+                fxNote.style.display = "none";
+            }
+
+            // Breakdown: nothing to chart for a single category (the hero already says it); with 2+ categories the
+            // donut's own legend carries name/amount/% so the second bar list was a pure duplicate.
+            const breakdownWrap2 = document.getElementById("tagReportBreakdownWrap");
+            if (breakdownWrap2) breakdownWrap2.style.display = (isPending || entries.length < 2) ? "none" : "";
+            renderDonutIntoWrap("tagReportChartWrap", entries, expenseTotal, "expense");
+            document.getElementById("tagReportList").innerHTML = "";
+
+            // Transactions, newest first, one card per month with its own subtotal.
             const sortedTx = [...matching].sort((a, b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id));
-            document.getElementById("tagReportTxList").innerHTML = sortedTx.length ? sortedTx.map(t => {
-                const acc = accounts.find(a => a.id === t.src);
-                // v295: a tagged Transfer (a Claims Receivable claim) reads as neutral, not as an
-                // expense-colored "-" — it's an asset movement, not spending, even though it's
-                // grouped alongside expenses in the totals above for "amount outstanding" purposes.
-                const col = t.type === "income" ? "income-color" : t.type === "transfer" ? "primary" : "expense-color";
-                const sgn = t.type === "income" ? "+" : t.type === "transfer" ? "" : "-";
+            const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            const groups = [];
+            let curGroup = null;
+            sortedTx.forEach(t => {
+                const ym = String(t.date || "").slice(0, 7);
+                if (!curGroup || curGroup.ym !== ym) { curGroup = { ym, items: [], spent: 0, inc: 0 }; groups.push(curGroup); }
+                curGroup.items.push(t);
+                const tBase = convertTxAmountToBase(t, accounts);
+                const isRefundCredit = t.type === "income" && t.isRefund;
+                if (t.type === "expense" || t.type === "transfer" || isRefundCredit) curGroup.spent += isRefundCredit ? -tBase : tBase;
+                else if (t.type === "income") curGroup.inc += tBase;
+            });
+            // v553: row model. (1) A description that merely repeats the tag (or is the same word on most rows) is
+            // filler -> the note becomes the headline. (2) Category is only worth printing per row when the tag
+            // mixes categories (otherwise the hero already says it). (3) Date stamp once per day.
+            const normTxt = s => String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+            const tagNorm = normTxt(tagName);
+            const descCount = {};
+            matching.forEach(t => { const k = normTxt(t.desc); descCount[k] = (descCount[k] || 0) + 1; });
+            const topDesc = Object.keys(descCount).sort((x, y) => descCount[y] - descCount[x])[0];
+            const isFillerDesc = d => {
+                const k = normTxt(d);
+                if (!k) return true;
+                if (k === tagNorm) return true;
+                if (k.length >= 3 && (tagNorm.includes(k) || k.includes(tagNorm))) return true;
+                return matching.length >= 3 && k === topDesc && descCount[k] / matching.length >= 0.6;
+            };
+            const catOf = t => t.cat || (t.type === "transfer" ? "Claims Receivable" : "");
+            const mixedCat = new Set(matching.map(catOf)).size > 1;
+            const rowHTML = (t, prev) => {
+                const acc = accById.get(t.src);
+                const isInc = t.type === "income";
+                const valColor = isInc ? "var(--income-color)" : "var(--text-main)";
+                const sgn = isInc ? "+" : "";
+                const rowTags = isPending ? t.tags : (t.tags || []).filter(x => x !== tagName);
+
+                // amount column: base currency is the headline so the column adds up to the hero total
+                let approx = "", valTxt, sub = "";
+                if (t.currency !== base) {
+                    const locked = txBaseIsFrozen(t, acc);
+                    valTxt = formatCurrency(Math.abs(convertTxAmountToBase(t, accounts)), base);
+                    if (!locked) approx = `<i title="Converted at today's rate">≈</i>`;
+                    sub = `<div class="tagrep-sub">${escapeHtml(formatCurrency(Math.abs(t.amount), t.currency))}${locked ? " 🔒" : ""}</div>`;
+                } else {
+                    valTxt = formatCurrency(Math.abs(t.amount), t.currency);
+                }
+
+                // date stamp (first row of each day only)
+                const dstr = String(t.date || "").slice(0, 10);
+                const showDate = !prev || String(prev.date || "").slice(0, 10) !== dstr;
+                const dayNum = dstr.slice(8, 10).replace(/^0/, "");
+                const dt = new Date(dstr + "T00:00:00");
+                const wd = isNaN(dt) ? "" : dt.toLocaleDateString(undefined, { weekday: "short" });
+
+                // headline / note
+                const desc = String(t.desc || "").trim(), notes = String(t.notes || "").trim();
+                let head, noteLine = "";
+                if (notes && (isFillerDesc(desc) || !desc)) head = notes;
+                else { head = desc || tagName; noteLine = notes; }
+
+                const meta = [];
+                const catText = catOf(t);
+                if (mixedCat && catText) meta.push(`${t.cat ? getCategoryIcon(t.cat, t.type) : "🔄"} ${escapeHtml(catText)}`);
+                if (!singleAcct) meta.push(`🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}`);
+
                 return `
-                    <div class="ledger-item" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
-                        <div class="item-left">
-                            <span class="item-name">${t.cat ? getCategoryIcon(t.cat, t.type) : "🧾"} ${escapeHtml(t.desc)}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}</span>
-                            <span class="item-meta">${t.date} [${escapeHtml(t.cat || (t.type === "transfer" ? "Claims Receivable" : ""))}]</span>
-                            <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">🏦 ${acc ? escapeHtml(accountOptionLabel(acc, accounts)) : "(deleted account)"}</span>
+                    <div class="tagrep-row${showDate ? "" : " cont"}" data-click="openTxQuickView" data-type="${t.type}" data-id="${escapeHtml(t.id)}">
+                        <div class="tagrep-date">${showDate ? `<span class="tagrep-dpill"><b>${escapeHtml(dayNum)}</b><span>${escapeHtml(wd)}</span></span>` : ""}</div>
+                        <div class="tagrep-main">
+                            <div class="tagrep-title">${escapeHtml(head)}${txAttachBadgeHTML(t)}${buildTagBadgesHTML(rowTags, t.id)}${buildClaimedBadgeHTML(t, txs)}</div>
+                            ${noteLine ? `<div class="tagrep-note">${escapeHtml(noteLine)}</div>` : ""}
+                            ${meta.length ? `<div class="tagrep-meta">${meta.join(" · ")}</div>` : ""}
                         </div>
-                        <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(Math.abs(t.amount), t.currency)}</div>
+                        <div class="tagrep-amtcol">
+                            <div class="tagrep-val" style="color:${valColor};">${approx}${sgn}${escapeHtml(valTxt)}</div>
+                            ${sub}
                         </div>
                     </div>`;
+            };
+            document.getElementById("tagReportTxList").innerHTML = groups.length ? groups.map(g => {
+                const mi = parseInt(g.ym.slice(5, 7), 10) - 1;
+                const labelHtml = (mi >= 0 && mi < 12) ? `${escapeHtml(MONTHS[mi])} <span class="tagrep-mh-yr">${escapeHtml(g.ym.slice(0, 4))}</span>` : escapeHtml(g.ym || "No date");
+                const totalTxt = [g.spent !== 0 ? formatCurrency(g.spent, base) : "", g.inc > 0 ? "+" + formatCurrency(g.inc, base) : ""].filter(Boolean).join(" · ");
+                // share of the tag's total spend that landed in this month
+                const pct = (expenseTotal > 0 && g.spent > 0) ? Math.min(100, (g.spent / expenseTotal) * 100) : null;
+                const pctTxt = pct === null ? "" : ` · ${pct < 1 ? "<1" : Math.round(pct)}% of total`;
+                return `<div class="tagrep-month">
+                    <div class="tagrep-month-head">
+                        <div class="tagrep-mh-top">
+                            <div><div class="tagrep-mh-name">${labelHtml}</div><div class="tagrep-mh-sub">${g.items.length} ${g.items.length === 1 ? "entry" : "entries"}${pctTxt}</div></div>
+                            <b>${escapeHtml(totalTxt)}</b>
+                        </div>
+                        ${pct === null ? "" : `<div class="tagrep-share"><i style="width:${pct.toFixed(1)}%"></i></div>`}
+                    </div>
+                    <div class="tagrep-rows">${g.items.map((t, i) => rowHTML(t, g.items[i - 1])).join("")}</div>
+                </div>`;
             }).join("") : `<p style="color:var(--text-muted); text-align:center; padding:16px 0; font-size:0.85rem;">No transactions tagged yet.</p>`;
+        }
+
+        // v555: CSV export for Spending by Tag — one row per transaction carrying the selected tag, same
+        // order as the page (newest first), same csvEscape()/BOM convention as the other exports.
+        // Money is split into an Expense and an Income column (base currency) using the SAME rules as the
+        // report: expense / claim-transfer count as spending, a refund credit counts as NEGATIVE spending,
+        // so SUM(Expense column) equals the page's total exactly. The original currency/amount and whether
+        // the rate is locked or live are kept alongside, so foreign rows stay auditable.
+        async function exportTagReportCsv() {
+            const tagName = document.getElementById("tagReportTagSelect").value;
+            if (!tagName) { showToast("Pick a tag first"); return; }
+            const [txs, accounts] = await Promise.all([readAllDB(STORES.TRANSACTIONS), readAllDB(STORES.ACCOUNTS)]);
+            const accById = new Map(accounts.map(a => [a.id, a]));
+            const matching = txs
+                .filter(t => Array.isArray(t.tags) && t.tags.includes(tagName))
+                .sort((a, b) => (new Date(b.date) - new Date(a.date)) || (b.id - a.id));
+            if (matching.length === 0) { showToast("No transactions tagged yet"); return; }
+
+            const base = baseCurrency;
+            const header = ["Date", "Description", "Note", "Category", "Account", "Type",
+                "Original Currency", "Original Amount", "FX Rate", `Expense (${base})`, `Income (${base})`, "Tags"];
+            const rows = matching.map(t => {
+                const acc = accById.get(t.src);
+                const isRefundCredit = t.type === "income" && t.isRefund;
+                const tBase = convertTxAmountToBase(t, accounts);
+                let expense = "", income = "";
+                if (t.type === "expense" || t.type === "transfer" || isRefundCredit) expense = (isRefundCredit ? -tBase : tBase).toFixed(2);
+                else if (t.type === "income") income = tBase.toFixed(2);
+                const typeLabel = isRefundCredit ? "Refund" : t.type === "transfer" ? "Claim (Transfer)" : t.type === "income" ? "Income" : "Expense";
+                const fx = t.currency === base ? "" : (txBaseIsFrozen(t, acc) ? "Locked" : "Live");
+                return [
+                    String(t.date || "").slice(0, 10),
+                    t.desc || "",
+                    t.notes || "",
+                    t.cat || (t.type === "transfer" ? "Claims Receivable" : ""),
+                    acc ? accountOptionLabel(acc, accounts) : "(deleted account)",
+                    typeLabel,
+                    t.currency,
+                    (Number(t.amount) || 0).toFixed(2),
+                    fx,
+                    expense,
+                    income,
+                    (t.tags || []).join("; ")
+                ];
+            });
+
+            const csv = [header, ...rows].map(r => r.map(csvEscape).join(",")).join("\r\n");
+            const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const slug = tagName.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").toLowerCase() || "tag";
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `spending_by_tag_${slug}_${todayLocalStr()}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast(`\ud83d\udce4 Exported ${matching.length} transaction${matching.length === 1 ? "" : "s"} to CSV`);
         }
 
         // Generic year-filter populator (mirrors populateYearFilterOptions/populateSavingsYearFilterOptions)
@@ -20195,6 +24810,78 @@
         // computeInvested() inside renderFundHoldingsTable — deliberately duplicated here
         // rather than shared, so a future change to the per-account table can't silently alter
         // this report's numbers (or vice versa) without both being touched on purpose.
+        // v531/v532: one stats panel shared by the account page's Fund Holdings cards and the Unit Trust
+        // Portfolio's Fund Detail cards: Units · NAV · Invested · Annualised. When money has been taken
+        // out (sells / payouts), the Invested cell also shows "Current inv." stacked underneath; when
+        // nothing was taken out the two figures are identical, so only Invested is shown.
+        // `fundTxs` must be sorted oldest-first. Holding years live in the card subtitle (fundHoldingText).
+        function fundHoldingYears(fundTxs) {
+            const firstTx = fundTxs.length > 0 ? new Date(fundTxs[0].date) : null;
+            return firstTx ? Math.max((Date.now() - firstTx.getTime()) / (365.25 * 86400000), 0) : 0;
+        }
+        function fundHoldingText(fundTxs) {
+            const y = fundHoldingYears(fundTxs);
+            return y >= 0.08 ? `${y.toFixed(1)} yrs` : "";
+        }
+        function fundCardSubHTML(f, fundTxs) {
+            const parts = [];
+            if (f.code) parts.push(escapeHtml(f.code));
+            const h = fundHoldingText(fundTxs);
+            if (h) parts.push(`Held ${h}`);
+            return parts.length ? `<div class="fh-sub">${parts.join(" · ")}</div>` : "";
+        }
+        // v533: Annualised is now a money-weighted return (XIRR): every Buy is money out on its own date,
+        // every Sell / Dividend (Payout) is money in on its date, and today's value is the final money in.
+        // Reinvest / Contribution add units but no cash, so they are not flows (same rule as Invested).
+        // Returns a percentage, or null when it can't be honest: held < 1 year, no buys, or no sign change.
+        function fundXirrPct(f, fundTxs) {
+            const day = (d) => Date.parse(String(d).slice(0, 10) + "T00:00:00Z") / 86400000;
+            const rows = fundTxs.filter(t => t.date && (t.fundTxType === "buy" || t.fundTxType === "sell" || t.fundTxType === "dividend_payout") && t.amount);
+            if (!rows.some(t => t.fundTxType === "buy")) return null;
+            const t0 = Math.min(...rows.map(t => day(t.date)));
+            const today = Math.floor(Date.now() / 86400000);
+            const span = today - t0;
+            if (!(span >= 365)) return null;
+            const flows = rows.map(t => ({ t: Math.max(0, (day(t.date) - t0) / 365), amt: t.fundTxType === "buy" ? -t.amount : t.amount }));
+            const value = (f.units || 0) * (f.currentNav || 0);
+            flows.push({ t: span / 365, amt: value });
+            const r = insXirr(flows);
+            return (r == null || !isFinite(r)) ? null : r * 100;
+        }
+        // v534: Annualised (XIRR) sits under the P/L pill, next to the total return it belongs with.
+        // Hidden when it can't be computed (under 1 year of history).
+        function fundAnnualisedLineHTML(f, fundTxs) {
+            const x = fundXirrPct(f, fundTxs);
+            if (x === null) return "";
+            return `<div class="fh-ann" title="Money-weighted yearly return (XIRR): uses the date of every buy, sell and payout. Needs at least 1 year of history.">Annualised ${x.toFixed(2)}%</div>`;
+        }
+        // Units: at least 2, up to 4 decimals (13,425.45 / 12.3456), so Units x NAV still multiplies out.
+        function fmtFundUnits(u) {
+            return (u || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+        }
+        // v534: one panel for both card types. Left = the main money figure: Current inv. (with Invested /
+        // Recovered as small grey text) once something has been taken out, or just Invested when nothing has.
+        // Right = Units x NAV, which is how the card's Value is made. Fully recovered principal reads
+        // "Fully recovered" with the amount above cost instead of a negative number.
+        function fundCardStatsHTML(f, invested, recovered, fundTxs) {
+            const gold = isGoldFund(f);
+            const uxn = `<div class="fh-uxn"><div class="fh-stat-l">Units × NAV</div><div class="fh-stat-v">${fmtFundUnits(f.units)}${gold ? " g" : ""} × ${(Number(f.currentNav) || 0).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}${gold ? "/g" : ""}${goldStalenessBadgeHTML(f)}</div></div>`;
+            if (Math.abs(recovered) < 0.005) {
+                return `<div class="fh-panel"><div><div class="fh-stat-l">Invested</div><div class="fh-stat-v strong">${formatCurrency(invested, f.currency)}</div></div>${uxn}</div>`;
+            }
+            const cur = invested - recovered;
+            const main = cur > 0.005
+                ? formatCurrency(cur, f.currency)
+                : `Fully recovered${cur < -0.005 ? `<div class="fh-grey">+${formatCurrency(-cur, f.currency)} above cost</div>` : ""}`;
+            const num = (v) => v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            return `<div class="fh-panel"><div>
+                    <div class="fh-stat-l" title="Invested minus Recovered: the money still in the fund. Current inv. + P/L = Value.">Current inv.</div>
+                    <div class="fh-stat-v strong">${main}</div>
+                    <div class="fh-grey fh-grey-gap">Invested ${num(invested)}</div>
+                    <div class="fh-grey">Recovered ${num(recovered)}</div>
+                </div>${uxn}</div>`;
+        }
+
         function computePortfolioFundPL(fundTxs) {
             let invested = 0, recovered = 0;
             fundTxs.forEach(t => {
@@ -20264,18 +24951,21 @@
                     targetRows = (rowsByAccount[accName] = rowsByAccount[accName] || []);
                 }
                 targetRows.push(`
-                    <tr style="cursor:pointer;" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}">
-                        <td style="padding:8px 10px;">
-                            <strong>${escapeHtml(f.name)}</strong><br>
-                            <span style="font-size:0.68rem; color:var(--text-muted);">${escapeHtml(f.code || "")}</span><br>
-                            <span style="font-size:0.68rem; color:var(--primary); font-weight:700;">${escapeHtml(ownerLabel)}</span>
-                        </td>
-                        <td style="padding:8px 10px; text-align:right;"><strong>${formatCurrency(value, f.currency)}</strong></td>
-                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested, f.currency)}</td>
-                        <td style="padding:8px 10px; text-align:right;">${formatCurrency(invested - recovered, f.currency)}</td>
-                        <td style="padding:8px 10px; text-align:right; color:${plColor}; font-weight:700;">${pl >= 0 ? "+" : ""}${formatCurrency(pl, f.currency)}</td>
-                        <td style="padding:8px 10px; text-align:right; color:${plColor};">${returnPct.toFixed(2)}%</td>
-                    </tr>`);
+                    <div class="fh-card ${pl >= 0 ? "pos" : "neg"}" data-click="navigateToFundActivityPage" data-id="${escapeHtml(f.id)}">
+                        <div class="fh-head">
+                            <div style="min-width:0;">
+                                <div class="fh-name">${escapeHtml(f.name)}</div>
+                                ${fundCardSubHTML(f, fundTxs)}
+                                <div class="fh-chips">${ownerLabel ? `<span class="fh-chip owner">${escapeHtml(ownerLabel)}</span>` : ""}</div>
+                            </div>
+                            <div class="fh-val">
+                                <div class="fh-val-main">${formatCurrency(value, f.currency)}</div>
+                                <div class="fh-pl">${pl >= 0 ? "+" : ""}${formatCurrency(pl, f.currency)} (${returnPct.toFixed(2)}%)</div>
+                                ${fundAnnualisedLineHTML(f, fundTxs)}
+                            </div>
+                        </div>
+                        ${fundCardStatsHTML(f, invested, recovered, fundTxs)}
+                    </div>`);
             });
 
             document.getElementById("portfolioValueTotal").textContent = formatCurrency(totalValueBase, baseCurrency);
@@ -20351,27 +25041,7 @@
             detailWrap.innerHTML = accNames.map(accName => `
                 <div style="margin-bottom:14px;">
                     <div style="font-size:0.72rem; font-weight:800; color:var(--text-muted); text-transform:uppercase; margin-bottom:4px;">📊 ${escapeHtml(accName)}</div>
-                    <table style="width:100%; min-width:680px; table-layout:fixed; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
-                        <colgroup>
-                            <col style="width:24%;">
-                            <col style="width:17%;">
-                            <col style="width:17%;">
-                            <col style="width:17%;">
-                            <col style="width:15%;">
-                            <col style="width:10%;">
-                        </colgroup>
-                        <thead>
-                            <tr style="text-align:left; color:var(--text-muted); font-size:0.68rem; text-transform:uppercase;">
-                                <th style="padding:6px 10px;">Fund</th>
-                                <th style="padding:6px 10px; text-align:right;">Value</th>
-                                <th style="padding:6px 10px; text-align:right;">Invested</th>
-                                <th style="padding:6px 10px; text-align:right;" title="Invested minus Recovered (cash already taken out via sells / payouts). Current Inv. + P/L = Value.">Current Inv.</th>
-                                <th style="padding:6px 10px; text-align:right;">P/L</th>
-                                <th style="padding:6px 10px; text-align:right;">Return</th>
-                            </tr>
-                        </thead>
-                        <tbody>${(rowsByAccount[accName] || []).join("")}${closedByAccount[accName] ? closedFundsSummaryRow(closedByAccount[accName].rows.length, (closedByAccount[accName].plBase >= 0 ? "+" : "") + formatCurrency(closedByAccount[accName].plBase, baseCurrency), closedByAccount[accName].plBase >= 0, 6) + (getShowClosedFunds() ? closedByAccount[accName].rows.join("") : "") : ""}</tbody>
-                    </table>
+                    ${(rowsByAccount[accName] || []).join("")}${closedByAccount[accName] ? closedFundsSummaryCard(closedByAccount[accName].rows.length, (closedByAccount[accName].plBase >= 0 ? "+" : "") + formatCurrency(closedByAccount[accName].plBase, baseCurrency), closedByAccount[accName].plBase >= 0) + (getShowClosedFunds() ? closedByAccount[accName].rows.join("") : "") : ""}
                 </div>`).join("");
         }
 
@@ -20420,13 +25090,14 @@
         // single blended total the dashboard section shows.
         async function renderOwnerNetWorthReportPage() {
             const { accounts, nativeBalances } = await computeAccountBalances();
-            const grandTotal = summarizeOwnerAssetSplit(accounts, nativeBalances).total;
+            const insSvAllOwners = insSvNetWorth("all").base; // v488
+            const grandTotal = summarizeOwnerAssetSplit(accounts, nativeBalances, insSvAllOwners).total;
             document.getElementById("ownerNetWorthBaseCurrLabel").textContent = baseCurrency;
 
             const pctOf = (total) => grandTotal !== 0 ? ((total / grandTotal) * 100).toFixed(1) + "%" : "—";
 
-            const rowHTML = (label, colorDotsHTML, subset) => {
-                const { financial, realEstate, total } = summarizeOwnerAssetSplit(subset, nativeBalances);
+            const rowHTML = (label, colorDotsHTML, subset, insScope) => {
+                const { financial, realEstate, total } = summarizeOwnerAssetSplit(subset, nativeBalances, insSvNetWorth(insScope).base);
                 return `
                     <tr>
                         <td style="padding:8px 10px;">
@@ -20444,7 +25115,7 @@
             membersCache.forEach(m => {
                 const subset = filterAccountsByOwnership(accounts, "member", [m.id]);
                 const dot = `<span class="member-color-dot" style="background:${m.color};"></span>`;
-                rows += rowHTML(m.name, dot, subset);
+                rows += rowHTML(m.name, dot, subset, m.id);
             });
 
             const jointGroups = {};
@@ -20457,13 +25128,13 @@
                 const ids = key.split(",");
                 const subset = filterAccountsByOwnership(accounts, "joint", ids);
                 const dots = ids.map(id => `<span class="member-color-dot" style="background:${getMemberById(id)?.color || '#94a3b8'}; margin-left:-4px;"></span>`).join("");
-                rows += rowHTML(`${memberNamesForIds(ids)} (Joint)`, dots, subset);
+                rows += rowHTML(`${memberNamesForIds(ids)} (Joint)`, dots, subset, "joint");
             });
 
             const unassigned = accounts.filter(a => !Array.isArray(a.memberIds) || a.memberIds.length === 0);
-            if (unassigned.length > 0) {
+            if (unassigned.length > 0 || insSvNetWorth("unassigned").count > 0) {
                 const dot = `<span class="member-color-dot" style="background:#cbd5e1;"></span>`;
-                rows += rowHTML("Unassigned", dot, unassigned);
+                rows += rowHTML("Unassigned", dot, unassigned, "unassigned");
             }
 
             const wrap = document.getElementById("ownerNetWorthTableWrap");
@@ -20472,7 +25143,7 @@
                 return;
             }
 
-            const { financial: gFinancial, realEstate: gRealEstate } = summarizeOwnerAssetSplit(accounts, nativeBalances);
+            const { financial: gFinancial, realEstate: gRealEstate } = summarizeOwnerAssetSplit(accounts, nativeBalances, insSvAllOwners);
             wrap.innerHTML = `
                 <table style="width:100%; border-collapse:collapse; font-size:0.78rem; white-space:nowrap;">
                     <thead>
@@ -20570,7 +25241,7 @@
                 ? (() => { const ids = accountIdsForMemberFilter(accounts, filterMember); return accounts.filter(a => ids.has(a.id)); })()
                 : accounts;
 
-            const { byCurrency, totalBase: grandTotal } = summarizeCurrencySplit(subset, nativeBalances);
+            const { byCurrency, totalBase: grandTotal } = summarizeCurrencySplit(subset, nativeBalances, filterMember); // v488: filterMember = "all" | "joint" | member id
             const pctOf = (base) => grandTotal !== 0 ? ((base / grandTotal) * 100).toFixed(1) + "%" : "—";
 
             const wrap = document.getElementById("currencyReportTableWrap");
@@ -20635,6 +25306,118 @@
                         </tr>
                     </tfoot>
                 </table>`;
+        }
+
+        // --- INCOME AFTER TAX REPORT (v492) ---
+        // Standalone reference report: income since the start (or a chosen date) less tax paid, per year.
+        // Its category choices live in their own setting ("incomeAfterTaxCfg") and are read by nothing
+        // else, so no other report (incl. Net Savings Statement and its exclude flag) is affected.
+        // Income = income transactions in the ticked income categories (refunds excluded). Tax = expenses in
+        // the ticked tax categories, minus refunds (income + isRefund) of those categories.
+        let incomeTaxCfg = null;
+        let incomeTaxLast = null; // v493: what the page last showed, so the CSV export always matches it
+        async function loadIncomeTaxCfg() {
+            if (incomeTaxCfg) return incomeTaxCfg;
+            const rows = await readAllDB(STORES.SETTINGS);
+            const r = rows.find(x => x && x.key === "incomeAfterTaxCfg");
+            incomeTaxCfg = (r && r.value) || { incomeCats: null, taxCats: null, from: "" };
+            return incomeTaxCfg;
+        }
+        async function itCfgChange() {
+            const cfg = await loadIncomeTaxCfg();
+            cfg.from = document.getElementById("itFrom").value || "";
+            const picked = (id) => [...document.querySelectorAll("#" + id + " input:checked")].map(i => i.value);
+            cfg.incomeCats = picked("itIncomeList");
+            cfg.taxCats = picked("itTaxList");
+            await writeDB(STORES.SETTINGS, { key: "incomeAfterTaxCfg", value: cfg });
+            renderIncomeTaxPage(false);
+        }
+        function itCfgAll(el) {
+            const box = document.getElementById(el.dataset.list === "income" ? "itIncomeList" : "itTaxList");
+            box.querySelectorAll("input").forEach(i => { i.checked = el.dataset.on === "1"; });
+            itCfgChange();
+        }
+        async function renderIncomeTaxPage(rebuildLists = true) {
+            const cfg = await loadIncomeTaxCfg();
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const accounts = await readAllDB(STORES.ACCOUNTS);
+            const incNames = new Set(dynamicCategories.filter(c => c.type === "income").map(c => c.name));
+            const expNames = new Set(dynamicCategories.filter(c => c.type === "expense").map(c => c.name));
+            txs.forEach(t => { if (!t.cat) return; if (t.type === "income" && !t.isRefund) incNames.add(t.cat); else if (t.type === "expense") expNames.add(t.cat); });
+            const incList = [...incNames].sort(), expList = [...expNames].sort();
+            // not configured yet: every income category counts; tax categories start as those named "...tax..."
+            const incSel = new Set(cfg.incomeCats || incList);
+            const taxSel = new Set(cfg.taxCats || expList.filter(n => /tax/i.test(n)));
+            document.getElementById("itFrom").value = cfg.from || "";
+            if (rebuildLists) {
+                const boxes = (list, sel) => list.map(n => `<label style="display:flex; align-items:center; gap:8px; padding:5px 0; font-weight:600; font-size:0.85rem;"><input type="checkbox" value="${escapeHtml(n)}" ${sel.has(n) ? "checked" : ""} data-change="itCfgChange" style="width:18px; height:18px; flex:0 0 auto;"><span style="overflow-wrap:anywhere;">${escapeHtml(n)}</span></label>`).join("") || `<p style="color:var(--text-muted); font-size:0.8rem;">No categories yet.</p>`;
+                document.getElementById("itIncomeList").innerHTML = boxes(incList, incSel);
+                document.getElementById("itTaxList").innerHTML = boxes(expList, taxSel);
+            }
+            document.getElementById("itIncomeSummary").textContent = `Income categories counted (${[...incSel].filter(n => incNames.has(n)).length} of ${incList.length})`;
+            document.getElementById("itTaxSummary").textContent = `Tax categories (${[...taxSel].filter(n => expNames.has(n)).length} selected)`;
+            const years = {};
+            const yr = (y) => (years[y] = years[y] || { inc: 0, tax: 0 });
+            txs.forEach(t => {
+                if (!t.date || (cfg.from && t.date < cfg.from)) return;
+                const y = t.date.slice(0, 4), b = convertTxAmountToBase(t, accounts);
+                if (t.type === "income" && t.isRefund) { if (taxSel.has(t.cat)) yr(y).tax -= b; }
+                else if (t.type === "income") { if (incSel.has(t.cat)) yr(y).inc += b; }
+                else if (t.type === "expense") { if (taxSel.has(t.cat)) yr(y).tax += b; }
+            });
+            const ys = Object.keys(years).sort();
+            const pct = (tax, inc) => inc > 0 ? (tax / inc * 100).toFixed(1) + "%" : "—";
+            let ti = 0, tt = 0;
+            const td = "padding:8px 10px; text-align:right; white-space:nowrap;";
+            const rows = ys.map(y => { const r = years[y]; ti += r.inc; tt += r.tax;
+                return `<tr><td style="padding:8px 10px; font-weight:700;">${y}</td><td style="${td}">${formatCurrency(r.inc, baseCurrency)}</td><td style="${td}">${formatCurrency(r.tax, baseCurrency)}</td><td style="${td} font-weight:800;">${formatCurrency(r.inc - r.tax, baseCurrency)}</td><td style="${td}">${pct(r.tax, r.inc)}</td></tr>`; }).join("");
+            incomeTaxLast = { ys, years, ti, tt, from: cfg.from || "",
+                inc: incList.filter(n => incSel.has(n)), tax: expList.filter(n => taxSel.has(n)) };
+            document.getElementById("itResult").innerHTML = ys.length ? `
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
+                    <div><div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Total income</div><div style="font-weight:800;">${formatCurrency(ti, baseCurrency)}</div></div>
+                    <div><div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Tax paid</div><div style="font-weight:800;">${formatCurrency(tt, baseCurrency)}</div></div>
+                    <div><div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Income after tax</div><div style="font-weight:800; font-size:1.15rem;">${formatCurrency(ti - tt, baseCurrency)}</div></div>
+                    <div><div style="font-size:0.66rem; color:var(--text-muted); font-weight:700; text-transform:uppercase;">Tax %</div><div style="font-weight:800;">${pct(tt, ti)}</div></div>
+                </div>
+                <table style="width:100%; border-collapse:collapse; font-size:0.82rem;"><thead><tr style="color:var(--text-muted); font-size:0.68rem; text-transform:uppercase;"><th style="padding:6px 10px; text-align:left;">Year</th><th style="padding:6px 10px; text-align:right;">Income</th><th style="padding:6px 10px; text-align:right;">Tax</th><th style="padding:6px 10px; text-align:right;">After tax</th><th style="padding:6px 10px; text-align:right;">Tax %</th></tr></thead>
+                <tbody>${rows}</tbody>
+                <tfoot><tr style="border-top:2px solid var(--border-color); font-weight:800;"><td style="padding:8px 10px;">Total</td><td style="${td}">${formatCurrency(ti, baseCurrency)}</td><td style="${td}">${formatCurrency(tt, baseCurrency)}</td><td style="${td}">${formatCurrency(ti - tt, baseCurrency)}</td><td style="${td}">${pct(tt, ti)}</td></tr></tfoot></table>`
+                : `<p style="color:var(--text-muted); font-weight:600;">No income or tax found for the chosen categories.</p>`;
+        }
+        async function exportIncomeTaxCsv() {
+            await renderIncomeTaxPage(false);
+            const d = incomeTaxLast;
+            if (!d || !d.ys.length) { showToast("No income or tax to export"); return; }
+            const pct = (tax, inc) => inc > 0 ? (tax / inc * 100).toFixed(1) : "";
+            const row = (label, inc, tax) => [label, inc.toFixed(2), tax.toFixed(2), (inc - tax).toFixed(2), pct(tax, inc)];
+            const rows = [
+                ["Year", `Income (${baseCurrency})`, `Tax (${baseCurrency})`, `After tax (${baseCurrency})`, "Tax %"],
+                ...d.ys.map(y => row(y, d.years[y].inc, d.years[y].tax)),
+                row("Total", d.ti, d.tt),
+                [],
+                ["From", d.from || "first transaction"],
+                ["Income categories counted", d.inc.join("; ")],
+                ["Tax categories", d.tax.join("; ")],
+                ["Exported", todayLocalStr()]
+            ];
+            const csv = rows.map(r => r.map(csvEscape).join(",")).join("\r\n");
+            const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `income_after_tax_${todayLocalStr()}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+            showToast("\ud83d\udce4 Exported Income after Tax to CSV");
+        }
+
+        function navigateToIncomeTaxPage() {
+            workspaceScrollY = window.scrollY;
+            showPage("page-incometax");
+            window.scrollTo(0, 0);
+            pushVirtualState("incometax");
+            renderIncomeTaxPage();
         }
 
         function navigateToCurrencyReportPage() {
@@ -20959,6 +25742,8 @@
                 if (await isBiometricSupported()) {
                     const wantsBiometric = await customConfirm("Enable fingerprint / Face unlock for faster access next time?");
                     if (wantsBiometric) {
+                        // Returns false on failure (alerting where relevant); initBiometricToggleRow()
+                        // below re-syncs the toggle from the saved record, so nothing more to do here.
                         try { await enableBiometricUnlock(currentPasscode); } catch (err) { alert("Could not enable biometric unlock: " + (err && err.message ? err.message : err)); }
                     }
                 }
@@ -21014,6 +25799,8 @@
 
             const storedMonthlyTrendAutoScale = await readKeyDB("settings", "monthlyTrendAutoScale");
             if (storedMonthlyTrendAutoScale) monthlyTrendAutoScale = !!storedMonthlyTrendAutoScale.value;
+            const storedMonthlyTrendStyle = await readKeyDB("settings", "monthlyTrendStyle");
+            if (storedMonthlyTrendStyle) monthlyTrendStyle = storedMonthlyTrendStyle.value === "mirrored" ? "mirrored" : "grouped";
 
             const storedMonthlyTrendTableExpanded = await readKeyDB("settings", "monthlyTrendTableExpanded");
             // v374: only when nothing's been explicitly saved yet does the initial default depend
@@ -21046,6 +25833,7 @@
 
             const storedRecentTxCollapsed = await readKeyDB("settings", "recentTxCollapsed"); // v442
             if (storedRecentTxCollapsed) recentTxCollapsed = storedRecentTxCollapsed.value === true;
+
 
             const storedShowMonthlyTrend = await readKeyDB("settings", "showMonthlyTrendOnDashboard");
             if (storedShowMonthlyTrend) showMonthlyTrendOnDashboard = storedShowMonthlyTrend.value !== false;
@@ -21166,9 +25954,10 @@
         // CSV export button in the Ledger page header — exports either every transaction
         // (activeLedgerAccountView === "all", the Portfolio General Log reached via the sidebar's
         // "Transactions" link) or just the one account currently open, since those are the two
-        // scopes the page itself already represents. Deliberately does NOT also respect the
-        // page's Category/Type drill-down filters (activeCategoryView/directTypeView) — keeping
-        // the export to exactly "all accounts" or "this account" avoids a confusing mismatch
+        // scopes the page itself already represents. v535: it NOW also respects the Category/Type
+        // drill-down pages (activeCategoryView/directTypeView + the carried year/month), because a
+        // category page exporting every account was a mismatch with what the page shows. Previously
+        // the export stayed at exactly "all accounts" or "this account" to avoid a confusing mismatch
         // where the CSV silently omits transactions a user wouldn't expect missing.
         async function exportLedgerCsv() {
             const [txsAll, accounts] = await Promise.all([
@@ -21185,13 +25974,27 @@
             const accountName = (id) => {
                 if (!id) return "(Opening Balance)";
                 const a = accounts.find(acc => acc.id === id);
-                return a ? a.name : "(deleted account)";
+                // v536: same label the on-screen ledger shows, e.g. "KWSP (VF)" vs "KWSP (RS)" —
+                // two members can own accounts with the same name, so the bare name was ambiguous.
+                return a ? accountOptionLabel(a, accounts) : "(deleted account)";
             };
             const viewAccountId = activeLedgerAccountView;
 
-            const scoped = viewAccountId === "all"
-                ? txsAll
-                : txsAll.filter(t => t.src === viewAccountId || t.dest === viewAccountId);
+            // v535: a Category page (e.g. EPF Contrib.(EE)) or an Income/Expense type page is
+            // reached with activeLedgerAccountView === "all", so the export used to dump EVERY
+            // transaction of every account instead of what the page shows. It now applies the
+            // same filter (and the year/month carried in from the report) the page's list uses.
+            const inDrillPeriod = t => {
+                if (categoryDrillYear === "all" && categoryDrillMonth === "all") return true;
+                const d = new Date(t.date);
+                return (categoryDrillYear === "all" || d.getFullYear().toString() === categoryDrillYear)
+                    && (categoryDrillMonth === "all" || d.getMonth().toString() === categoryDrillMonth);
+            };
+            let scoped;
+            if (activeCategoryView !== "all") scoped = txsAll.filter(t => t.cat === activeCategoryView && inDrillPeriod(t));
+            else if (directTypeView !== "all") scoped = txsAll.filter(t => t.type === directTypeView && inDrillPeriod(t));
+            else if (viewAccountId === "all") scoped = txsAll;
+            else scoped = txsAll.filter(t => t.src === viewAccountId || t.dest === viewAccountId);
 
             // v341: an account can have an Opening Balance but zero real transactions yet — the
             // on-screen ledger still shows its "[Opening Balance Setup]" row in that case (see
@@ -21246,7 +26049,7 @@
             // just one year's page.
             if (hasOpeningBalanceRow) {
                 rows.push([
-                    "", "opening_balance", viewingAccForOpeningBalance.name, "", "",
+                    "", "opening_balance", accountOptionLabel(viewingAccForOpeningBalance, accounts), "", "",
                     "[Opening Balance Setup]", "Account Opening Initial Vault Point",
                     viewingAccForOpeningBalance.initialBalance.toFixed(2), viewingAccForOpeningBalance.currency || "", ""
                 ]);
@@ -21258,9 +26061,13 @@
             // into Notes) — the BOM makes Excel specifically detect it as UTF-8.
             const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
             const url = URL.createObjectURL(blob);
-            const scopeLabel = viewAccountId === "all"
-                ? "all-accounts"
-                : accountName(viewAccountId).replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "");
+            const slug = x => String(x).replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "");
+            const drillPeriod = (categoryDrillYear === "all" ? "" : `_${categoryDrillYear}`)
+                + (categoryDrillMonth === "all" ? "" : `_m${Number(categoryDrillMonth) + 1}`);
+            const scopeLabel = activeCategoryView !== "all" ? `category-${slug(activeCategoryView)}${drillPeriod}`
+                : directTypeView !== "all" ? `${slug(directTypeView)}${drillPeriod}`
+                : viewAccountId === "all" ? "all-accounts"
+                : slug(accountName(viewAccountId));
             const a = document.createElement("a");
             a.href = url;
             a.download = `ledger_export_${scopeLabel}_${todayLocalStr()}.csv`;
@@ -21389,7 +26196,19 @@
         // bundle object without duplicating this list of stores. exportBackup() itself still
         // does its own encryption/plaintext-confirmation/filename/download steps right after
         // calling this — nothing about the file-export flow changes.
-        async function buildBackupBundle() {
+        // v579: opts.slim = Google Drive upload shape — no image bytes, just attachmentIds (the images
+        // travel as their own Drive files, see syncImagesToDrive()). opts.allowIncomplete = local
+        // safety snapshots may be taken even while a Drive image pull is unfinished. A normal call
+        // (file export) is refused while images are missing locally, so a backup file can never
+        // silently come out without them.
+        async function buildBackupBundle(opts) {
+            opts = opts || {};
+            if (!opts.slim && !opts.allowIncomplete && driveImgPullIncomplete) {
+                throw new Error("Some images are still being downloaded from Google Drive. Tap Restore Latest in Settings → Google Drive to finish, then try again.");
+            }
+            const attachmentFields = opts.slim
+                ? { attachments: [], attachmentsExternal: true, attachmentIds: await getAllKeysDB(STORES.ATTACHMENTS) }
+                : { attachments: await readAllDB(STORES.ATTACHMENTS) };
             return {
                 accounts: await readAllDB(STORES.ACCOUNTS),
                 transactions: await readAllDB(STORES.TRANSACTIONS),
@@ -21400,7 +26219,7 @@
                 // v121: attachment file blobs (id/name/mime/data) referenced by transactions'
                 // own `attachments` arrays — without this, a restored backup's transactions
                 // would still list attachments, but tapping one would fail to load.
-                attachments: await readAllDB(STORES.ATTACHMENTS),
+                ...attachmentFields,
                 // v227: reusable Income/Expense transaction templates (see openTemplateFormModal()).
                 templates: await readAllDB(STORES.TEMPLATES),
                 // v257: trip/claim tag definitions (see renderTagsPage()) — the transactions
@@ -21425,6 +26244,8 @@
                 // "--- INSURANCE ---" section. Transactions/plannedPayments above carry their own
                 // `policyId`, so the links survive a restore as long as this list comes back too.
                 insurance: await readAllDB(STORES.INSURANCE),
+                // v537: timeline notes — see the "--- TIMELINE ---" section.
+                timeline: await readAllDB(STORES.TIMELINE),
                 // v65: full SETTINGS store dump ({key,value} rows — defaultPaymentAccount,
                 // defaultReceiveAccount, defaultIncomeCategory, defaultExpenseCategory, recentTx*
                 // widget filters, expandedAccountSubrows, plus baseCurrency/fxRates which are
@@ -21436,8 +26257,21 @@
             };
         }
 
+        // v512: filename-safe owner part for backup files. Keeps letters/digits of any language
+        // (so Chinese names survive), turns everything else into "-", lowercases Latin letters.
+        function backupFileOwnerPart(members) {
+            const list = Array.isArray(members) ? members : [];
+            const chosen = list.find(m => m && m.isPrimary && m.name) || list.find(m => m && m.name);
+            const clean = chosen
+                ? String(chosen.name).normalize("NFC").replace(/[^\p{L}\p{N}]+/gu, "-").toLowerCase().replace(/^-+|-+$/g, "")
+                : "";
+            return clean || "backup";
+        }
+
         async function exportBackup(forceEncrypted = false) {
-            const bundle = await buildBackupBundle();
+            let bundle;
+            try { bundle = await buildBackupBundle(); }
+            catch (err) { alert(err && err.message ? err.message : String(err)); return; }
 
             const toggle = document.getElementById("exportEncryptToggle");
             const wantsEncryption = forceEncrypted ? true : (toggle ? toggle.checked : true); // encrypted-by-default
@@ -21461,16 +26295,10 @@
                 if (!proceed) return;
             }
 
-            // Filename uses the first owner's (member's) name in place of "backup" — bundle.members
-            // is already in the same order as everywhere else in the app (Manage Members list,
-            // sidebar, etc.), since it comes straight from readAllDB(STORES.MEMBERS) above, so
-            // bundle.members[0] IS "the 1st owner". Sanitized the same way as the other CSV
-            // exports' scopeLabel (accounts_export, ledger_export, etc.) for filename safety.
-            // Falls back to "backup" if there are no members yet, or the name sanitizes to nothing.
-            const ownerLabel = (bundle.members[0] && bundle.members[0].name)
-                ? bundle.members[0].name.replace(/[^a-z0-9]+/gi, "-").toLowerCase().replace(/^-+|-+$/g, "")
-                : "";
-            const filenameOwnerPart = ownerLabel || "backup";
+            // v512: the name comes from the member marked "Use this name for backup file names"
+            // (isPrimary), NOT from list order, so re-ordering or adding members never changes
+            // it. Falls back to the first member in the list if none is marked, then to "backup".
+            const filenameOwnerPart = backupFileOwnerPart(bundle.members);
 
             const blob = new Blob([JSON.stringify(outputPayload)], { type: "application/json" });
             const url = URL.createObjectURL(blob);
@@ -21554,6 +26382,17 @@
         // uses — same clear/rewrite order, same in-memory-variable reapplication, same
         // Companion/re-render tail. Throws on invalid bundles instead of alert()-ing directly,
         // so each caller can word the error for its own context (file vs. Drive).
+        // v592: ATOMIC. Until v591 this cleared one store at a time and wrote records back one by one,
+        // each in its own tiny IndexedDB transaction — so an error, a closed tab or a dead phone half-way left
+        // a half-old, half-new ledger. Now every record is encrypted in memory FIRST (a failure there changes
+        // nothing), then ONE transaction across all the stores clears and rewrites them. IndexedDB commits a
+        // transaction all-or-nothing: if anything fails (bad record, quota, the app being killed) the browser
+        // rolls back and the previous data is exactly as it was. Nothing may be awaited while that
+        // transaction is open (it would auto-commit early), which is why all the encrypting happens before it.
+        // Image handling is unchanged: a slim Drive bundle prunes (inside the same transaction), a Local
+        // Snapshot (attachmentsExtraOnly) only adds, everything else clears and rewrites.
+        // If anything fails AFTER the commit (the screen refresh at the end), the error carries
+        // restoreCommitted = true so callers know the data itself did change.
         async function restoreFromBundle(bundle) {
             if (!bundle.accounts || !bundle.transactions) {
                 throw new Error("Invalid backup: missing required data.");
@@ -21564,133 +26403,104 @@
             // queue an upload of data we just DOWNLOADED, which is at best wasteful and at worst
             // a feedback loop with a slower/competing device. Suppressed for the duration of this
             // restore; see the flag's own comment near the Drive sync code.
+            // (v592: the transaction below bypasses writeDB() altogether, so it can't schedule anything
+            // itself; the flag still covers the helper calls at the end.)
+            const prevSuppress = driveSuppressAutoSync;
             driveSuppressAutoSync = true;
+            let committed = false;
             try {
-                    await clearStoreDB(STORES.ACCOUNTS);
-                    await clearStoreDB(STORES.TRANSACTIONS);
+                const has = (s) => db.objectStoreNames.contains(s);
+                const encryptAll = (store, list) => Promise.all((list || []).map(rec => encryptRecord(store, rec)));
 
-                    if (db.objectStoreNames.contains(STORES.CATEGORIES)) {
-                        await clearStoreDB(STORES.CATEGORIES);
-                    }
-                    if (db.objectStoreNames.contains(STORES.MEMBERS)) {
-                        await clearStoreDB(STORES.MEMBERS);
-                    }
-                    if (db.objectStoreNames.contains(STORES.FUNDS)) {
-                        await clearStoreDB(STORES.FUNDS);
-                    }
-                    if (db.objectStoreNames.contains(STORES.NAV_HISTORY)) {
-                        await clearStoreDB(STORES.NAV_HISTORY);
-                    }
-                    if (db.objectStoreNames.contains(STORES.ATTACHMENTS)) {
-                        await clearStoreDB(STORES.ATTACHMENTS);
-                    }
-                    if (db.objectStoreNames.contains(STORES.TEMPLATES)) {
-                        await clearStoreDB(STORES.TEMPLATES);
-                    }
-                    if (db.objectStoreNames.contains(STORES.TAGS)) {
-                        await clearStoreDB(STORES.TAGS);
-                    }
-                    if (db.objectStoreNames.contains(STORES.BUDGETS)) {
-                        await clearStoreDB(STORES.BUDGETS);
-                    }
-                    if (db.objectStoreNames.contains(STORES.INVENTORY)) {
-                        await clearStoreDB(STORES.INVENTORY);
-                    }
-                    if (db.objectStoreNames.contains(STORES.PLANNED_PAYMENTS)) {
-                        await clearStoreDB(STORES.PLANNED_PAYMENTS);
-                    }
-                    if (db.objectStoreNames.contains(STORES.REMINDERS)) {
-                        await clearStoreDB(STORES.REMINDERS);
-                    }
-                    if (db.objectStoreNames.contains(STORES.INSURANCE)) {
-                        await clearStoreDB(STORES.INSURANCE);
-                    }
+                const newBaseCurrency = bundle.baseCurrency ? bundle.baseCurrency : baseCurrency;
+                const newFxRates = bundle.fxRates ? bundle.fxRates : fxRates;
+                const settingsRows = (bundle.settings && Array.isArray(bundle.settings))
+                    ? bundle.settings.filter(rec => rec && rec.key && !isDeviceLocalDriveSetting(rec.key)) // v450: never take another device's sync state
+                    : [];
 
-                    if (bundle.baseCurrency) baseCurrency = bundle.baseCurrency;
-                    if (bundle.fxRates) fxRates = bundle.fxRates;
-                    await writeDB(STORES.SETTINGS, { key: "baseCurrency", value: baseCurrency });
-                    await writeDB(STORES.SETTINGS, { key: "fxRates", value: fxRates });
+                // 1. Prepare (no database changes yet). Order inside each store = order in the bundle.
+                // v296 note (kept): transactions keep their ORIGINAL ids — several fields store ANOTHER
+                // transaction's id (linkedFdPlacementId, refundOf/refundOfIds); the store is fully cleared
+                // first, so there is no collision. Same for attachments (the ids inside transactions'
+                // own `attachments` arrays), v121.
+                const plan = [];
+                const addPlan = async (store, list, clear) => { if (has(store)) plan.push({ store, clear, records: await encryptAll(store, list) }); };
+                await addPlan(STORES.ACCOUNTS, bundle.accounts, true);
+                await addPlan(STORES.TRANSACTIONS, bundle.transactions, true);
+                await addPlan(STORES.CATEGORIES, bundle.categories, true);
+                await addPlan(STORES.MEMBERS, bundle.members, true);
+                await addPlan(STORES.FUNDS, bundle.funds, true);
+                await addPlan(STORES.NAV_HISTORY, bundle.navHistory, true);
+                let pruneKeep = null; // Set of image ids to keep when this is a slim Drive bundle
+                if (has(STORES.ATTACHMENTS)) {
+                    if (bundle.attachmentsExternal) {
+                        // v579: slim Drive bundle — keep the image blobs this device already has, drop the
+                        // ones the backup no longer lists (that's how a delete made on another device
+                        // reaches this one); the missing ones are fetched from Drive right after by
+                        // pullMissingDriveImages().
+                        pruneKeep = new Set((bundle.attachmentIds || []).map(String));
+                        plan.push({ store: STORES.ATTACHMENTS, clear: false, records: [] });
+                    } else if (bundle.attachmentsExtraOnly) {
+                        // v591: a Local Snapshot carries only the images the overwrite destroyed — add
+                        // them back, never clear.
+                        await addPlan(STORES.ATTACHMENTS, bundle.attachments, false);
+                    } else {
+                        await addPlan(STORES.ATTACHMENTS, bundle.attachments, true);
+                    }
+                }
+                await addPlan(STORES.TEMPLATES, bundle.templates, true);
+                await addPlan(STORES.TAGS, bundle.tags, true);
+                await addPlan(STORES.BUDGETS, bundle.budgets, true); // (v264: was cleared but never written back)
+                await addPlan(STORES.INVENTORY, bundle.inventory, true);
+                await addPlan(STORES.PLANNED_PAYMENTS, bundle.plannedPayments, true);
+                await addPlan(STORES.REMINDERS, bundle.reminders, true);
+                await addPlan(STORES.INSURANCE, bundle.insurance, true);
+                await addPlan(STORES.TIMELINE, bundle.timeline, true);
+                // SETTINGS is never cleared — rows are overwritten one by one (this device's own sync
+                // state rows are skipped above). baseCurrency / fxRates first, then the preference dump.
+                plan.push({ store: STORES.SETTINGS, clear: false, records: await encryptAll(STORES.SETTINGS, [
+                    { key: "baseCurrency", value: newBaseCurrency },
+                    { key: "fxRates", value: newFxRates },
+                    ...settingsRows
+                ]) });
 
-                    for (const acc of bundle.accounts) await writeDB(STORES.ACCOUNTS, acc);
-                    // v296 fix: previously did `delete tx.id` before writing each transaction back,
-                    // deliberately letting IndexedDB's autoIncrement assign a fresh id to every one
-                    // on import — but several fields store ANOTHER transaction's id as a cross-
-                    // reference (linkedFdPlacementId, refundOf/refundOfIds), and a fresh id breaks
-                    // every one of them: the FD account's own Activity page stops grouping interest
-                    // payouts under their placement, the ✅ Claimed/Reimbursement badge disappears,
-                    // and — worse than cosmetic — findReimbursementFor()'s refundOfIds lookup (used
-                    // by the Settle Multiple Bills as One Claim candidate query) silently stops
-                    // matching, so an already-settled claim would reappear as unclaimed and risk
-                    // being settled twice. STORES.TRANSACTIONS is fully cleared just above, so there
-                    // is no id collision risk in keeping the originals — same reasoning the
-                    // attachments restore below already uses on purpose (see its own comment).
-                    for (const tx of bundle.transactions) await writeDB(STORES.TRANSACTIONS, tx);
+                // 2. One transaction over every store: all or nothing.
+                await new Promise((resolve, reject) => {
+                    let tx = null;
+                    try {
+                        tx = db.transaction(plan.map(p => p.store), "readwrite");
+                        tx.oncomplete = () => resolve();
+                        tx.onerror = () => reject(tx.error || new Error("Restore failed — nothing was changed."));
+                        tx.onabort = () => reject(tx.error || new Error("The browser cancelled the restore — nothing was changed."));
+                        for (const p of plan) {
+                            const os = tx.objectStore(p.store);
+                            if (p.clear) os.clear();
+                            for (const rec of p.records) os.put(rec);
+                        }
+                        if (pruneKeep) {
+                            const os = tx.objectStore(STORES.ATTACHMENTS);
+                            const keysReq = os.getAllKeys();
+                            keysReq.onsuccess = () => {
+                                for (const k of keysReq.result || []) if (!pruneKeep.has(String(k))) os.delete(k);
+                            };
+                        }
+                    } catch (err) {
+                        try { if (tx) tx.abort(); } catch (e) { /* already finished */ }
+                        reject(err);
+                    }
+                });
+                committed = true;
 
-                    if (bundle.categories) {
-                        for (const cat of bundle.categories) await writeDB(STORES.CATEGORIES, cat);
-                    }
-                    if (bundle.members) {
-                        for (const mem of bundle.members) await writeDB(STORES.MEMBERS, mem);
-                    }
-                    if (bundle.funds) {
-                        for (const fund of bundle.funds) await writeDB(STORES.FUNDS, fund);
-                    }
-                    if (bundle.navHistory) {
-                        for (const rec of bundle.navHistory) await writeDB(STORES.NAV_HISTORY, rec);
-                    }
-                    // v121: attachment blobs — written with their ORIGINAL ids (v296: transactions
-                    // now do too, see the comment above) so each restored transaction's own
-                    // `attachments[].id` refs keep resolving correctly.
-                    if (bundle.attachments) {
-                        for (const att of bundle.attachments) await writeDB(STORES.ATTACHMENTS, att);
-                    }
-                    // v227: reusable Income/Expense transaction templates — absent on older backups,
-                    // skipped entirely for those (same pattern as bundle.attachments above).
-                    if (bundle.templates) {
-                        for (const tpl of bundle.templates) await writeDB(STORES.TEMPLATES, tpl);
-                    }
-                    // v257: tag definitions — same "absent on older backups → skip" pattern.
-                    if (bundle.tags) {
-                        for (const tag of bundle.tags) await writeDB(STORES.TAGS, tag);
-                    }
-                    // v264: monthly/yearly Budget records — same "absent on older backups → skip"
-                    // pattern. (Fix: this store was being cleared above on every import but was
-                    // never actually written back from the bundle, so a restored backup always
-                    // showed "no budget set" even though the source device had one.)
-                    if (bundle.budgets) {
-                        for (const b of bundle.budgets) await writeDB(STORES.BUDGETS, b);
-                    }
-                    // v318: Inventory items — same "absent on older backups → skip" pattern.
-                    if (bundle.inventory) {
-                        for (const inv of bundle.inventory) await writeDB(STORES.INVENTORY, inv);
-                    }
-                    // v354: Planned Payments — same "absent on older backups → skip" pattern.
-                    if (bundle.plannedPayments) {
-                        for (const pp of bundle.plannedPayments) await writeDB(STORES.PLANNED_PAYMENTS, pp);
-                    }
-                    // v418: Reminders — same "absent on older backups → skip" pattern.
-                    if (bundle.reminders) {
-                        for (const rem of bundle.reminders) await writeDB(STORES.REMINDERS, rem);
-                    }
-                    // v468: Insurance policies — same "absent on older backups → skip" pattern.
-                    if (bundle.insurance) {
-                        for (const pol of bundle.insurance) await writeDB(STORES.INSURANCE, pol);
-                    }
-
-                    // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
-                    // defaultIncomeCategory, defaultExpenseCategory, recentTx* widget filters,
-                    // expandedAccountSubrows). Absent on older backups, so this is skipped entirely
-                    // for those — accounts/transactions/etc. still import fine, just without prefs.
-                    // baseCurrency/fxRates rows are included in this dump too but are already
-                    // applied above from bundle.baseCurrency/bundle.fxRates; writing them again here
-                    // is harmless (same values, same store row).
-                    // v347: this dump also now carries companionPetId/companionCustomImage — see
-                    // the dedicated reapply call right after this block, not a switch case here.
-                    if (bundle.settings && Array.isArray(bundle.settings)) {
-                        for (const rec of bundle.settings) {
-                            if (!rec || !rec.key) continue;
-                            if (isDeviceLocalDriveSetting(rec.key)) continue; // v450: never take another device's sync state
-                            await writeDB(STORES.SETTINGS, rec);
+                // 3. The data is in. Mirror it into the in-memory variables and refresh the screen.
+                baseCurrency = newBaseCurrency;
+                fxRates = newFxRates;
+                // v65: restore preferences from the SETTINGS store dump (defaultPaymentAccount,
+                // defaultIncomeCategory, defaultExpenseCategory, recentTx* widget filters,
+                // expandedAccountSubrows). Absent on older backups, so nothing is applied for those —
+                // accounts/transactions/etc. still import fine, just without prefs.
+                // v347: this dump also now carries companionPetId/companionCustomImage — see
+                // the dedicated reapply call right after this block, not a switch case here.
+                for (const rec of settingsRows) {
                             switch (rec.key) {
                                 case "defaultPaymentAccount": defaultPaymentAccount = rec.value || ""; break;
                                 case "defaultReceiveAccount": defaultReceiveAccount = rec.value || ""; break;
@@ -21698,6 +26508,7 @@
                                 case "reportCardPeriod2": reportCardPeriod2 = rec.value || "thisMonth"; break;
                                 case "monthlyTrendYear": monthlyTrendYear = rec.value || new Date().getFullYear().toString(); break;
                                 case "monthlyTrendAutoScale": monthlyTrendAutoScale = !!rec.value; break;
+                                case "monthlyTrendStyle": monthlyTrendStyle = rec.value === "mirrored" ? "mirrored" : "grouped"; break;
                                 case "monthlyTrendTableExpanded": monthlyTrendTableExpanded = rec.value !== false; break;
                                 case "defaultIncomeCategory": defaultIncomeCategory = rec.value || ""; break;
                                 case "defaultExpenseCategory": defaultExpenseCategory = rec.value || ""; break;
@@ -21707,6 +26518,7 @@
                                 case "recentTxCount": recentTxCount = rec.value || 5; break;
                                 case "recentTxCollapsed": recentTxCollapsed = rec.value === true; break; // v442
                                 case "showMonthlyTrendOnDashboard": showMonthlyTrendOnDashboard = rec.value !== false; break;
+                                case "includeInsuranceSvInNetWorth": break; // v518: retired setting — old backups still carry it; ignored
                                 case "dashboardWidgetOrder": dashboardWidgetOrder = rec.value === "recenttx-first" ? "recenttx-first" : "accounts-first"; break;
                                 case "dashboardBudgetCategoriesShown": dashboardBudgetCategoriesShown = Array.isArray(rec.value) ? rec.value : []; break;
                                 case "dashboardBudgetWidgetEnabled": dashboardBudgetWidgetEnabled = rec.value !== false; break;
@@ -21717,29 +26529,406 @@
                                     expandedAccountSubrows = new Set(Array.isArray(rec.value) ? rec.value : []);
                                     break;
                             }
-                        }
-                    }
+                }
 
-                    // v347: Companion (companionPetId / companionCustomImage) is handled outside
-                    // the switch above rather than with a case per key — unlike every other
-                    // setting here, it isn't mirrored into a plain in-memory variable; it's read
-                    // straight from IndexedDB each time it's applied. Reapplying once, after every
-                    // row above has already been written, is also order-independent: if
-                    // companionCustomImage happened to appear after companionPetId in bundle.settings,
-                    // a per-key case would risk re-painting the chip before the image it needs was
-                    // actually in the store yet. Safe to run even on a backup with no Companion
-                    // settings at all — it just reflects whatever this device already had.
-                    await applyCompanionPet(await getSavedCompanionId(), { save: false });
+                // v347: Companion (companionPetId / companionCustomImage) is handled outside
+                // the switch above rather than with a case per key — unlike every other
+                // setting here, it isn't mirrored into a plain in-memory variable; it's read
+                // straight from IndexedDB each time it's applied. Reapplying once, after every
+                // row above has already been written, is also order-independent: if
+                // companionCustomImage happened to appear after companionPetId in bundle.settings,
+                // a per-key case would risk re-painting the chip before the image it needs was
+                // actually in the store yet. Safe to run even on a backup with no Companion
+                // settings at all — it just reflects whatever this device already had.
+                await applyCompanionPet(await getSavedCompanionId(), { save: false });
 
-                    await syncAndLoadCategories();
-                    await loadMembersCache();
-                    await loadInsuranceCache(); // v468
-                    renderSidebarMembers();
-                    renderSidebarAccountTypeShortcuts();
-                    renderApp();
+                await syncAndLoadCategories();
+                await loadMembersCache();
+                await loadInsuranceCache(); // v468
+                renderSidebarMembers();
+                renderSidebarAccountTypeShortcuts();
+                renderApp();
+            } catch (err) {
+                if (err && typeof err === "object") err.restoreCommitted = committed;
+                throw err;
             } finally {
-                driveSuppressAutoSync = false;
+                driveSuppressAutoSync = prevSuppress;
             }
+        }
+
+
+        // ===================================================================================
+        // --- MERGE INSURANCE POLICIES FROM ANOTHER LEDGER'S BACKUP (v498) ---
+        // For the two-ledger setup: a second ledger holds only insurance policies (e.g. policies
+        // the parents pay for, with the "paid by parent" premium history). When the family takes
+        // the premiums over, the policies are brought into the main ledger WITHOUT touching
+        // anything else there. Unlike importBackup() this never clears a store: it reads only
+        // `insurance` (+ `members` for the insured-person link, + the policies' own attachment
+        // blobs) from a backup file and ADDS records. Accounts, transactions, categories,
+        // planned payments and settings in the file are ignored.
+        // Rules: a policy whose id is already here is skipped (re-importing the same file is
+        // harmless); the same policy number under a different id is flagged as a possible
+        // duplicate and left unticked; a newer copy of an existing policy only overwrites if
+        // ticked. The insured person is matched by name, created, or left unset - chosen per
+        // person in the preview. Drive auto-sync is NOT suppressed, so the merged data syncs.
+        // ===================================================================================
+        let insMergeState = null;
+
+
+        // v499/v500: "Export insurance only" - the file the second (insurance-only) ledger hands over.
+        // Holds just the chosen people's policies, the members they point at (name + colour, for the
+        // name match on merge) and those policies' own attachment blobs. Same encrypt / plain-text
+        // choice as exportBackup() (the Backup & Restore page toggle; encrypted by default). It has
+        // no accounts/transactions, so Import JSON refuses it before touching anything - it is only
+        // read by "Merge insurance only".
+        // v500: opens an options sheet first: pick whose policies go in, and (default on) turn the
+        // premiums recorded here as payments into "paid by parent" history rows inside the file, so
+        // payments / planned payments kept in THIS ledger still reach the other ledger. Nothing in
+        // this ledger is changed - only the exported copy gets the extra rows.
+        function insExportHistoryRows(p, txs) {
+            const cur = p.currency || baseCurrency;
+            const expIds = new Set(txs.filter(t => t.policyId === p.id && t.type === "expense").map(t => t.id));
+            const isRefund = (t) => t.type === "income" && t.isRefund
+                && [t.refundOf, ...(Array.isArray(t.refundOfIds) ? t.refundOfIds : [])].some(id => id != null && expIds.has(id));
+            return txs.filter(t => expIds.has(t.id) || isRefund(t)).map(t => {
+                const sign = t.type === "income" ? -1 : 1;
+                const amt = Math.round(sign * insConvert(t.amount, t.currency || cur, cur) * 100) / 100;
+                const fx = (t.currency && t.currency !== cur) ? " (" + t.currency + " " + (parseFloat(t.amount) || 0).toFixed(2) + ")" : "";
+                return { id: makeInsuranceId(), date: t.date || "", amount: amt, note: (sign < 0 ? "Refund" : "Payment") + fx + " (from ledger)", paidBy: "parent" };
+            }).filter(r => r.date);
+        }
+
+        // v510: Income entries linked to the policy (cashback received) -> history rows in the exported copy.
+        function insExportCashbackRows(p, txs) {
+            const cur = p.currency || baseCurrency;
+            return txs.filter(t => t.policyId === p.id && t.type === "income" && !t.isRefund && t.date).map(t => {
+                const amt = Math.round(insConvert(t.amount, t.currency || cur, cur) * 100) / 100;
+                const fx = (t.currency && t.currency !== cur) ? " (" + t.currency + " " + (parseFloat(t.amount) || 0).toFixed(2) + ")" : "";
+                return { id: makeInsuranceId(), date: t.date, amount: amt, note: "Cashback" + fx + " (from ledger)" };
+            });
+        }
+
+        async function openInsExportSheet() {
+            await loadInsuranceCache();
+            await loadMembersCache();
+            if (!insuranceCache.length) { alert("There are no insurance policies to export."); return; }
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const groups = new Map(); // key -> { name, count }
+            insuranceCache.forEach(p => {
+                const m = p.insuredMemberId ? getMemberById(p.insuredMemberId) : null;
+                const key = m ? m.id : "__none__";
+                if (!groups.has(key)) groups.set(key, { name: m ? m.name : "Not set", count: 0 });
+                groups.get(key).count++;
+            });
+            let payN = 0, payPol = 0, untagged = 0;
+            insuranceCache.forEach(p => (Array.isArray(p.premiumHistory) ? p.premiumHistory : []).forEach(r => { if (r && r.paidBy !== "parent") untagged++; }));
+            insuranceCache.forEach(p => { const n = insExportHistoryRows(p, txs).length; if (n) { payN += n; payPol++; } });
+            let cbN = 0, cbPol = 0;
+            insuranceCache.forEach(p => { const n = insExportCashbackRows(p, txs).length; if (n) { cbN += n; cbPol++; } });
+            let html = '<p style="font-size:0.75rem; font-weight:800; color:var(--text-muted); margin:0 0 6px;">WHOSE POLICIES</p>';
+            groups.forEach((g, key) => {
+                html += '<label style="display:flex; align-items:center; gap:10px; padding:6px 0; font-size:0.9rem; font-weight:600;"><input type="checkbox" data-ins-export-member="' + escapeHtml(key) + '" checked style="width:18px; height:18px; padding:0; flex:0 0 auto;"> ' + escapeHtml(g.name) + ' (' + g.count + ')</label>';
+            });
+            html += '<p style="font-size:0.72rem; color:var(--text-muted); font-weight:600; margin:2px 0 14px;">Untick anyone whose policies should stay in this ledger (e.g. your own).</p>';
+            html += '<label style="display:flex; align-items:flex-start; gap:10px; padding:6px 0; font-size:0.9rem; font-weight:600;"><input type="checkbox" id="insExportConvert"' + (payN ? " checked" : " disabled") + ' style="width:18px; height:18px; padding:0; flex:0 0 auto; margin-top:2px;"> <span>Add payments recorded in this ledger as “paid by parent” history<br><span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">'
+                + (payN ? payN + ' payment' + (payN === 1 ? '' : 's') + ' on ' + payPol + ' polic' + (payPol === 1 ? 'y' : 'ies') + ' (refunds count as minus). Only the file gets these rows; this ledger is not changed. Planned payments are not exported - once paid they are payments.' : 'No premium payments are linked to a policy in this ledger.')
+                + '</span></span></label>';
+            html += '<label style="display:flex; align-items:flex-start; gap:10px; padding:10px 0 6px; font-size:0.9rem; font-weight:600;"><input type="checkbox" id="insExportCashback"' + (cbN ? " checked" : " disabled") + ' style="width:18px; height:18px; padding:0; flex:0 0 auto; margin-top:2px;"> <span>Add cashback received (recorded in this ledger) as history<br><span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">'
+                + (cbN ? cbN + ' payout' + (cbN === 1 ? '' : 's') + ' on ' + cbPol + ' polic' + (cbPol === 1 ? 'y' : 'ies') + '. They show on the policy in the other ledger as earlier cashback and count in its totals, but are not income there. Only the file gets these rows; this ledger is not changed.' : 'No cashback is linked to a policy in this ledger.')
+                + '</span></span></label>';
+            html += '<label style="display:flex; align-items:flex-start; gap:10px; padding:10px 0 6px; font-size:0.9rem; font-weight:600;"><input type="checkbox" id="insExportMarkAll"' + (untagged ? " checked" : " disabled") + ' style="width:18px; height:18px; padding:0; flex:0 0 auto; margin-top:2px;"> <span>Mark all earlier premium rows as “paid by parent”<br><span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">'
+                + (untagged ? untagged + ' typed-in premium row' + (untagged === 1 ? '' : 's') + ' not yet tagged P. Only the file is tagged; this ledger is not changed. Untick if some of these were paid by the child.' : 'Every earlier premium row is already tagged P (or there are none).')
+                + '</span></span></label>';
+            document.getElementById("insExportBody").innerHTML = html;
+            openModal("insExportModal");
+        }
+
+        async function insExportRun() {
+            const modal = document.getElementById("insExportModal");
+            const keys = [...modal.querySelectorAll("input[data-ins-export-member]:checked")].map(el => el.dataset.insExportMember);
+            if (!keys.length) { alert("Tick at least one person."); return; }
+            const conv = document.getElementById("insExportConvert");
+            const convert = !!(conv && conv.checked && !conv.disabled);
+            const markEl = document.getElementById("insExportMarkAll");
+            const markAll = !!(markEl && markEl.checked && !markEl.disabled);
+            const cbEl = document.getElementById("insExportCashback");
+            const cashback = !!(cbEl && cbEl.checked && !cbEl.disabled); // v510
+            closeModalAndThen("insExportModal", () => exportInsuranceOnly({ keys, convert, markAll, cashback }));
+        }
+
+        async function exportInsuranceOnly(opts) {
+            opts = opts || {};
+            await loadInsuranceCache();
+            await loadMembersCache();
+            const keySet = opts.keys ? new Set(opts.keys) : null;
+            const chosen = insuranceCache.filter(p => {
+                if (!keySet) return true;
+                const m = p.insuredMemberId ? getMemberById(p.insuredMemberId) : null;
+                return keySet.has(m ? m.id : "__none__");
+            });
+            if (!chosen.length) { alert("There are no insurance policies to export."); return; }
+            const txs = (opts.convert || opts.cashback) ? await readAllDB(STORES.TRANSACTIONS) : [];
+            let converted = 0, tagged = 0, cbAdded = 0;
+            const policies = chosen.map(p => {
+                const rec = JSON.parse(JSON.stringify(p));
+                if (opts.convert) {
+                    const add = insExportHistoryRows(p, txs);
+                    if (add.length) {
+                        converted += add.length;
+                        rec.premiumHistory = [...(rec.premiumHistory || []), ...add].sort((x, y) => String(x.date).localeCompare(String(y.date)));
+                        // "Ledger tracking starts" = where typed-in history ends. The rows just added run up to the
+                        // latest payment, so later payments recorded in the receiving ledger are not flagged as duplicates.
+                        const latest = add.reduce((m, r) => r.date > m ? r.date : m, "");
+                        if (latest > (rec.historyCutoff || "")) rec.historyCutoff = latest;
+                    }
+                }
+                if (opts.cashback) { // v510
+                    const addCb = insExportCashbackRows(p, txs);
+                    if (addCb.length) { cbAdded += addCb.length; rec.cashbackHistory = [...(rec.cashbackHistory || []), ...addCb].sort((x, y) => String(x.date).localeCompare(String(y.date))); }
+                }
+                if (opts.markAll && Array.isArray(rec.premiumHistory)) {
+                    rec.premiumHistory.forEach(r => { if (r && r.paidBy !== "parent") { r.paidBy = "parent"; tagged++; } });
+                }
+                return rec;
+            });
+            const memberIds = new Set(policies.map(p => p.insuredMemberId).filter(Boolean));
+            const attIds = new Set();
+            policies.forEach(p => (Array.isArray(p.attachments) ? p.attachments : []).forEach(a => { if (a && a.id != null) attIds.add(a.id); }));
+            const allAtts = await readAllDB(STORES.ATTACHMENTS);
+            const bundle = {
+                insuranceOnly: true,
+                exportedAt: todayLocalStr(),
+                insurance: policies,
+                members: membersCache.filter(m => memberIds.has(m.id)),
+                attachments: allAtts.filter(a => a && attIds.has(a.id))
+            };
+
+            const toggle = document.getElementById("exportEncryptToggle");
+            const wantsEncryption = toggle ? toggle.checked : true;
+            let outputPayload = bundle;
+            let suffix = "";
+            if (wantsEncryption) {
+                if (!currentPasscode) { alert("The app must be unlocked to create an encrypted file."); return; }
+                const salt = crypto.getRandomValues(new Uint8Array(16));
+                const saltB64 = bufToB64(salt);
+                const key = await deriveKeyFromPasscode(currentPasscode, saltB64, PBKDF2_ITERATIONS);
+                const { iv, data } = await aesEncryptString(key, JSON.stringify(bundle));
+                outputPayload = { encrypted: true, salt: saltB64, iterations: PBKDF2_ITERATIONS, iv, data };
+                suffix = "_encrypted";
+            } else {
+                const proceed = await customConfirm("This file will be saved as plain, unencrypted text. Anyone with the file can read it. Continue?");
+                if (!proceed) return;
+            }
+            const blob = new Blob([JSON.stringify(outputPayload)], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url; a.download = `ledger_insurance_${todayLocalStr()}${suffix}.json`;
+            a.click(); URL.revokeObjectURL(url);
+            showToast("🛡️ " + policies.length + " polic" + (policies.length === 1 ? "y" : "ies") + " exported" + (converted ? ", " + converted + " payment" + (converted === 1 ? "" : "s") + " added as history" : "") + (cbAdded ? ", " + cbAdded + " cashback payout" + (cbAdded === 1 ? "" : "s") + " added" : "") + (tagged ? ", " + tagged + " row" + (tagged === 1 ? "" : "s") + " tagged P" : "") + (wantsEncryption ? " (encrypted)" : ""));
+        }
+
+        function openInsMergePicker() {
+            const inp = document.getElementById("insMergeInput");
+            if (inp) { inp.value = ""; inp.click(); }
+        }
+
+        function insMergeKey(s) { return String(s || "").trim().toLowerCase(); }
+
+        async function insMergeFileChosen(e) {
+            const file = e.target.files && e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = async function (evt) {
+                try {
+                    const parsed = JSON.parse(evt.target.result);
+                    let bundle = parsed;
+                    if (parsed && parsed.encrypted) {
+                        bundle = await decryptBackupBundle(parsed);
+                        if (!bundle) return; // passcode prompt cancelled
+                    }
+                    if (!bundle || !Array.isArray(bundle.insurance) || !bundle.insurance.length) {
+                        alert("No insurance policies were found in this file.");
+                        return;
+                    }
+                    await insMergePrepare(bundle);
+                } catch (err) {
+                    alert("Could not read this file: " + (err && err.message ? err.message : "not a valid backup."));
+                } finally {
+                    e.target.value = "";
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        async function insMergePrepare(bundle) {
+            await loadInsuranceCache();
+            await loadMembersCache();
+            const srcMembers = Array.isArray(bundle.members) ? bundle.members.filter(m => m && m.id) : [];
+            const srcMemberById = new Map(srcMembers.map(m => [m.id, m]));
+            const attBlobs = new Map();
+            (Array.isArray(bundle.attachments) ? bundle.attachments : []).forEach(a => { if (a && a.id != null) attBlobs.set(a.id, a); });
+            const existingById = new Map(insuranceCache.map(p => [p.id, p]));
+            const existingByNo = new Map();
+            insuranceCache.forEach(p => { const k = insMergeKey(p.policyNo); if (k) existingByNo.set(k, p); });
+
+            const rows = bundle.insurance.filter(p => p && p.id).map(p => {
+                let kind = "new";
+                const same = existingById.get(p.id);
+                if (same) kind = String(p.updated || "") > String(same.updated || "") ? "newer" : "same";
+                else { const k = insMergeKey(p.policyNo); if (k && existingByNo.has(k)) kind = "dup"; }
+                return { policy: p, kind, checked: kind === "new" };
+            });
+            if (!rows.length) { alert("No insurance policies were found in this file."); return; }
+
+            const usedIds = [];
+            rows.forEach(r => { const id = r.policy.insuredMemberId; if (id && srcMemberById.has(id) && !usedIds.includes(id)) usedIds.push(id); });
+            insMergeState = { rows, srcMemberById, usedIds, attBlobs, filter: "all", choice: {} };
+            insMergeRender();
+            openModal("insMergeModal");
+        }
+
+        // Does a row belong to the current "Insured person" filter? ("all" | source member id | "__none__")
+        function insMergeRowVisible(st, r) {
+            if (st.filter === "all") return true;
+            const id = r.policy.insuredMemberId;
+            const known = !!(id && st.srcMemberById.has(id));
+            return st.filter === "__none__" ? !known : id === st.filter;
+        }
+
+        // Copies what is on screen (ticks + member choices) back into the state, so changing the
+        // filter and re-drawing never loses a tick or a choice the person already made.
+        function insMergeSync() {
+            const st = insMergeState; if (!st) return;
+            const modal = document.getElementById("insMergeModal");
+            modal.querySelectorAll("input[data-ins-merge-row]").forEach(el => {
+                const r = st.rows[Number(el.dataset.insMergeRow)];
+                if (r && !el.disabled) r.checked = el.checked;
+            });
+            modal.querySelectorAll("select[data-ins-merge-member]").forEach(s => { st.choice[s.dataset.insMergeMember] = s.value; });
+        }
+
+        function insMergeFilterChanged(el) {
+            const st = insMergeState; if (!st) return;
+            insMergeSync();
+            st.filter = el.value || "all";
+            insMergeRender();
+        }
+
+        function insMergeRender() {
+            const st = insMergeState; if (!st) return;
+            const kindLabel = {
+                "new": ["New", "#10b981"],
+                "same": ["Already in this ledger", "#64748b"],
+                "newer": ["Already here, file has a newer version (ticking overwrites it)", "#f59e0b"],
+                "dup": ["Same policy number already here, possible duplicate", "#f59e0b"]
+            };
+            const visible = st.rows.map((r, i) => ({ r, i })).filter(x => insMergeRowVisible(st, x.r));
+            let html = '<p style="font-size:0.8rem; color:var(--text-muted); font-weight:600; margin:0 0 12px;">Only insurance policies are added. Nothing else in this ledger is changed or removed. A policy marked "leave out of Net Worth" in the other ledger is counted normally here.</p>';
+
+            // Filter by insured person - only worth showing when the file covers more than one group.
+            const noneCount = st.rows.filter(r => !(r.policy.insuredMemberId && st.srcMemberById.has(r.policy.insuredMemberId))).length;
+            if (st.usedIds.length > 1 || (st.usedIds.length === 1 && noneCount > 0)) {
+                let fopts = '<option value="all"' + (st.filter === "all" ? " selected" : "") + '>All people (' + st.rows.length + ')</option>';
+                st.usedIds.forEach(sid => {
+                    const n = st.rows.filter(r => r.policy.insuredMemberId === sid).length;
+                    fopts += '<option value="' + escapeHtml(sid) + '"' + (st.filter === sid ? " selected" : "") + '>' + escapeHtml(st.srcMemberById.get(sid).name) + ' (' + n + ')</option>';
+                });
+                if (noneCount) fopts += '<option value="__none__"' + (st.filter === "__none__" ? " selected" : "") + '>Not set (' + noneCount + ')</option>';
+                html += '<p style="font-size:0.75rem; font-weight:800; color:var(--text-muted); margin:0 0 6px;">SHOW POLICIES OF</p>'
+                    + '<select class="form-input" data-change="insMergeFilterChanged" style="width:100%; margin:0 0 4px;">' + fopts + '</select>'
+                    + '<p style="font-size:0.72rem; color:var(--text-muted); font-weight:600; margin:0 0 12px;">Only the policies shown below are imported; the others in the file are left out.</p>';
+            }
+
+            // Insured-person mapping: only for people who appear in the policies currently shown.
+            const shownIds = st.usedIds.filter(sid => visible.some(x => x.r.policy.insuredMemberId === sid));
+            if (shownIds.length) {
+                html += '<p style="font-size:0.75rem; font-weight:800; color:var(--text-muted); margin:0 0 6px;">INSURED PERSON</p>';
+                shownIds.forEach(sid => {
+                    const sm = st.srcMemberById.get(sid);
+                    const match = membersCache.find(m => insMergeKey(m.name) === insMergeKey(sm.name));
+                    const cur = st.choice[sid] !== undefined ? st.choice[sid] : (match ? match.id : "__new__");
+                    let opts = membersCache.map(m => '<option value="' + escapeHtml(m.id) + '"' + (cur === m.id ? " selected" : "") + '>' + escapeHtml(m.name) + '</option>').join("");
+                    opts += '<option value="__new__"' + (cur === "__new__" ? " selected" : "") + '>＋ Create "' + escapeHtml(sm.name) + '" here</option>';
+                    opts += '<option value="__none__"' + (cur === "__none__" ? " selected" : "") + '>Not set</option>';
+                    html += '<div style="display:flex; align-items:center; gap:8px; margin:0 0 8px;"><span style="flex:0 0 38%; font-size:0.85rem; font-weight:700; overflow:hidden; text-overflow:ellipsis;">' + escapeHtml(sm.name) + '</span><span aria-hidden="true">→</span><select class="form-input" data-ins-merge-member="' + escapeHtml(sid) + '" style="flex:1; min-width:0;">' + opts + '</select></div>';
+                });
+            }
+
+            html += '<p style="font-size:0.75rem; font-weight:800; color:var(--text-muted); margin:14px 0 6px;">POLICIES (' + visible.length + (visible.length !== st.rows.length ? ' of ' + st.rows.length : '') + ')</p>';
+            visible.forEach(({ r, i }) => {
+                const p = r.policy;
+                const lab = kindLabel[r.kind];
+                const icon = INS_TYPE_ICONS[p.type] || "📄";
+                const title = [p.product, p.insurer].filter(Boolean).join(" · ") || "(unnamed policy)";
+                const who = p.insuredMemberId && st.srcMemberById.has(p.insuredMemberId) ? st.srcMemberById.get(p.insuredMemberId).name : "";
+                const freq = INS_FREQ[p.frequency] ? INS_FREQ[p.frequency][0] : "";
+                const prem = (p.premium != null && p.premium !== "") ? ((p.currency || "") + " " + Number(p.premium).toLocaleString(undefined, { maximumFractionDigits: 2 }) + (freq ? " " + freq.toLowerCase() : "")).trim() : "";
+                const hist = Array.isArray(p.premiumHistory) ? p.premiumHistory : [];
+                const parentN = hist.filter(h => h && h.paidBy === "parent").length;
+                const cbRowsN = Array.isArray(p.cashbackHistory) ? p.cashbackHistory.length : 0;
+                const meta = [who, prem, hist.length ? (hist.length + " earlier premium row" + (hist.length === 1 ? "" : "s") + (parentN ? ", " + parentN + " paid by parent" : "")) : "", parseFloat(p.cashbackPct) > 0 ? ("cashback " + p.cashbackPct + "%" + (cbRowsN ? ", " + cbRowsN + " payout" + (cbRowsN === 1 ? "" : "s") + " received" : "")) : (cbRowsN ? cbRowsN + " cashback row" + (cbRowsN === 1 ? "" : "s") : "")].filter(Boolean).join(" · "); // v510
+                html += '<label style="display:flex; align-items:flex-start; gap:10px; padding:10px 0; border-top:1px solid var(--border-color);' + (r.kind === "same" ? " opacity:0.6;" : "") + '">'
+                    + '<input type="checkbox" data-ins-merge-row="' + i + '"' + (r.checked ? " checked" : "") + (r.kind === "same" ? " disabled" : "") + ' style="width:18px; height:18px; padding:0; flex:0 0 auto; margin-top:2px;">'
+                    + '<span style="min-width:0;"><span style="font-size:0.9rem; font-weight:800;">' + icon + " " + escapeHtml(title) + '</span>'
+                    + (meta ? '<br><span style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">' + escapeHtml(meta) + '</span>' : "")
+                    + '<br><span style="font-size:0.72rem; font-weight:700; color:' + lab[1] + ';">' + lab[0] + '</span></span></label>';
+            });
+            document.getElementById("insMergeBody").innerHTML = html;
+        }
+
+        async function insMergeConfirm() {
+            const st = insMergeState; if (!st) return;
+            const modal = document.getElementById("insMergeModal");
+            const picked = [...modal.querySelectorAll("input[data-ins-merge-row]:checked")]
+                .map(el => st.rows[Number(el.dataset.insMergeRow)]).filter(Boolean);
+            if (!picked.length) { alert("Tick at least one policy to import."); return; }
+            const choice = {};
+            modal.querySelectorAll("select[data-ins-merge-member]").forEach(s => { choice[s.dataset.insMergeMember] = s.value; });
+
+            let created = 0, written = 0, missingAtt = 0;
+            try {
+                // 1) Members: only create the ones a ticked policy actually needs.
+                const resolved = {};
+                const needed = new Set(picked.map(r => r.policy.insuredMemberId).filter(Boolean));
+                for (const sid of needed) {
+                    const sel = choice[sid];
+                    if (sel === undefined || sel === "__none__") { resolved[sid] = null; continue; }
+                    if (sel === "__new__") {
+                        const sm = st.srcMemberById.get(sid);
+                        const newId = "mem_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 6);
+                        await writeDB(STORES.MEMBERS, { id: newId, name: sm.name, color: sm.color || MEMBER_COLORS[(membersCache.length + created) % MEMBER_COLORS.length] });
+                        resolved[sid] = newId; created++;
+                    } else {
+                        resolved[sid] = sel;
+                    }
+                }
+                // 2) Policies (+ their attachment blobs, written first so no ref points at nothing).
+                for (const r of picked) {
+                    const rec = JSON.parse(JSON.stringify(r.policy));
+                    delete rec.excludeFromNetWorth; // v500: once it is in MY ledger it is my policy - counted in Net Worth as usual
+                    rec.insuredMemberId = rec.insuredMemberId && resolved[rec.insuredMemberId] ? resolved[rec.insuredMemberId] : null;
+                    if (Array.isArray(rec.attachments)) {
+                        const kept = [];
+                        for (const a of rec.attachments) {
+                            const blob = a && st.attBlobs.get(a.id);
+                            if (blob) { await writeDB(STORES.ATTACHMENTS, blob); kept.push(a); } else { missingAtt++; }
+                        }
+                        rec.attachments = kept;
+                    }
+                    await writeDB(STORES.INSURANCE, rec);
+                    written++;
+                }
+            } catch (err) {
+                alert("Merge stopped after " + written + " policy(ies): " + (err && err.message ? err.message : err));
+            }
+
+            insMergeState = null;
+            closeModal("insMergeModal");
+            await loadInsuranceCache();
+            if (created) { await afterMembersChanged(); } else { await loadMembersCache(); }
+            const insPage = document.getElementById("page-insurance");
+            if (insPage && !insPage.classList.contains("hidden")) { await renderInsurancePage(); }
+            showToast("🛡️ " + written + " polic" + (written === 1 ? "y" : "ies") + " merged" + (created ? ", " + created + " member" + (created === 1 ? "" : "s") + " added" : "") + (missingAtt ? " (" + missingAtt + " attachment" + (missingAtt === 1 ? "" : "s") + " missing in file)" : ""));
         }
 
         async function importBackup(e) {
@@ -21791,6 +26980,13 @@
         const GOOGLE_CLIENT_ID = "285114774867-demqcuh6htn67926nim8iqc5jsl4grdd.apps.googleusercontent.com";
         const GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.appdata";
         const DRIVE_BACKUP_FILENAME = "ledger-backup.json";
+        // v579: images are no longer packed inside ledger-backup.json. Each attachment is its own
+        // encrypted file in the appDataFolder, named after its attachment id, so a sync only
+        // uploads/downloads the images the other side doesn't have yet. ledger-primary.json is a
+        // tiny plaintext record saying which device is allowed to auto-upload.
+        const DRIVE_IMG_PREFIX = "ledger-img-";
+        const DRIVE_IMG_SUFFIX = ".json";
+        const DRIVE_PRIMARY_FILENAME = "ledger-primary.json";
         const DRIVE_AUTOSYNC_DEBOUNCE_MS = 4000;
 
         let driveTokenClient = null;
@@ -21855,6 +27051,17 @@
         // looked at later instead of having to reason from a single live case. See
         // enterDriveSyncPause()/the resolve* functions for what gets written into an entry.
         let driveConflictLog = [];
+        // v579: true from the moment a pull starts replacing this device's data with a slim
+        // (images-separate) backup until every image it references has been fetched or confirmed
+        // missing from Drive. Persisted, so an app restart mid-download can't lead to an upload
+        // that silently drops the not-yet-downloaded images. Uploads/file exports refuse while set.
+        let driveImgPullIncomplete = false;
+        // v579: what the last primary-device check found. status: "unknown" | "none" | "any" | "me" | "other"
+        let drivePrimaryState = { status: "unknown", deviceName: "" };
+        let driveBlockedByPrimary = false;
+        // v582: last primary record seen (rec === null = none). A record in Drive is what switches this Google
+        // account to the new image-per-file backup format; no record = the original single-file backup.
+        let drivePrimaryRecCache = { rec: null, at: 0 };
 
         // Small helper for every "this write is Drive-sync's own bookkeeping, not a real local
         // edit" write (driveDirtyStoreSet, driveLastKnownRemoteRev, driveSyncPauseState,
@@ -21918,6 +27125,8 @@
             // exact "auto-sync might clobber something" window this feature exists to close.
             const storedDirty = await readKeyDB("settings", "driveDirtyStoreSet");
             driveDirtyStoreSet = new Set(storedDirty && Array.isArray(storedDirty.value) ? storedDirty.value : []);
+            const storedImgIncomplete = await readKeyDB("settings", "driveImgPullIncomplete");
+            driveImgPullIncomplete = !!(storedImgIncomplete && storedImgIncomplete.value);
             const storedRemoteRev = await readKeyDB("settings", "driveLastKnownRemoteRev");
             driveLastKnownRemoteRev = storedRemoteRev ? (storedRemoteRev.value || null) : null;
             const storedPause = await readKeyDB("settings", "driveSyncPauseState");
@@ -22108,6 +27317,7 @@
         async function manualSyncGoogleDrive(btnEl) {
             setButtonBusy("manualSyncGoogleDrive", btnEl, true);
             try {
+                if (!(await confirmManualDriveUpload())) return;
                 await uploadBackupToDrive();
                 showToast("☁️ Uploaded to Google Drive");
             } catch (err) {
@@ -22289,6 +27499,528 @@
             return driveFileId;
         }
 
+        // ===== v579: per-image Drive files + primary device ============================================
+        // All image traffic goes through the helpers below. Design notes:
+        //  * File name = attachment id (ledger-img-<id>.json), so "what's missing" is a plain list
+        //    comparison: upload = local ids − Drive ids, download = backup's ids − local ids.
+        //  * Every image file is its own AES-GCM message with its OWN random IV (aesEncryptString()
+        //    makes a fresh one per call). The key is derived from the passcode + a per-device salt that
+        //    is written into each file, so any device can decrypt any file, and PBKDF2 only runs once
+        //    per distinct salt per session (cached), not once per image.
+        //  * Images are uploaded BEFORE the small data file, so a device that sees the new data file
+        //    can always find the images it lists.
+        //  * Nothing is ever deleted from Drive here — removing an image just drops it from the data
+        //    file's attachmentIds. Purging orphaned Drive files is a separate, later step.
+        let driveImgKeyCache = new Map();
+
+        function getAllKeysDB(storeName) {
+            return new Promise((resolve, reject) => {
+                try {
+                    const tx = db.transaction([storeName], "readonly");
+                    const req = tx.objectStore(storeName).getAllKeys();
+                    req.onsuccess = () => resolve(req.result || []);
+                    req.onerror = () => reject(req.error);
+                } catch (err) { reject(err); }
+            });
+        }
+
+        async function pruneLocalAttachments(keepIds) {
+            if (!db.objectStoreNames.contains(STORES.ATTACHMENTS)) return;
+            const keep = new Set((keepIds || []).map(String));
+            const local = await getAllKeysDB(STORES.ATTACHMENTS);
+            for (const k of local) {
+                if (!keep.has(String(k))) await deleteDB(STORES.ATTACHMENTS, k);
+            }
+        }
+
+        function getDriveImgSalt() {
+            try {
+                let salt = localStorage.getItem("ledgerDriveImgSalt");
+                if (!salt) {
+                    salt = bufToB64(crypto.getRandomValues(new Uint8Array(16)));
+                    localStorage.setItem("ledgerDriveImgSalt", salt);
+                }
+                return salt;
+            } catch (err) { return bufToB64(crypto.getRandomValues(new Uint8Array(16))); }
+        }
+
+        // Called after a passcode change: images already in Drive were encrypted under the old
+        // passcode, so start a fresh salt and re-upload every image on the next sync.
+        function resetDriveImageKeys() {
+            driveImgKeyCache = new Map();
+            try {
+                localStorage.removeItem("ledgerDriveImgSalt");
+                localStorage.setItem("ledgerDriveImgReuploadAll", "1");
+            } catch (err) { /* non-fatal */ }
+        }
+
+        async function getDriveImgKey(saltB64, iterations) {
+            if (!currentPasscode) throw new Error("Unlock the app first.");
+            const ck = saltB64 + ":" + iterations;
+            if (!driveImgKeyCache.has(ck)) driveImgKeyCache.set(ck, await deriveKeyFromPasscode(currentPasscode, saltB64, iterations));
+            return driveImgKeyCache.get(ck);
+        }
+
+        async function encryptDriveImage(rec) {
+            const salt = getDriveImgSalt();
+            const key = await getDriveImgKey(salt, PBKDF2_ITERATIONS);
+            const { iv, data } = await aesEncryptString(key, JSON.stringify(rec));
+            return { v: 1, salt, iterations: PBKDF2_ITERATIONS, iv, data };
+        }
+
+        async function decryptDriveImage(payload) {
+            const key = await getDriveImgKey(payload.salt, payload.iterations);
+            return JSON.parse(await aesDecryptString(key, payload.iv, payload.data));
+        }
+
+        function driveImgFileName(id) { return DRIVE_IMG_PREFIX + String(id) + DRIVE_IMG_SUFFIX; }
+
+        // One list call returns every image file in the appDataFolder. Returns { map, dups }:
+        // map = attachment id -> { fileId, modifiedTime }; dups = extra same-named files (Drive allows
+        // duplicates; two devices uploading the same image at once can create one).
+        async function listDriveImageFiles(token) {
+            const map = new Map();
+            const dups = [];
+            let pageToken = "";
+            do {
+                const url = "https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&pageSize=1000&fields=nextPageToken,files(id,name,modifiedTime,size)" + (pageToken ? "&pageToken=" + encodeURIComponent(pageToken) : "");
+                const resp = await driveFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+                if (!resp.ok) throw new Error(`Drive image list failed (${resp.status})`);
+                const data = await resp.json();
+                for (const f of (data.files || [])) {
+                    if (!f.name || f.name.indexOf(DRIVE_IMG_PREFIX) !== 0 || !f.name.endsWith(DRIVE_IMG_SUFFIX)) continue;
+                    const id = f.name.slice(DRIVE_IMG_PREFIX.length, f.name.length - DRIVE_IMG_SUFFIX.length);
+                    const prev = map.get(id);
+                    if (!prev) { map.set(id, { fileId: f.id, modifiedTime: f.modifiedTime, size: Number(f.size || 0) }); continue; }
+                    if (new Date(f.modifiedTime) > new Date(prev.modifiedTime)) { dups.push(prev.fileId); map.set(id, { fileId: f.id, modifiedTime: f.modifiedTime, size: Number(f.size || 0) }); }
+                    else dups.push(f.id);
+                }
+                pageToken = data.nextPageToken || "";
+            } while (pageToken);
+            return { map, dups };
+        }
+
+        async function runDrivePool(items, limit, worker) {
+            let next = 0;
+            const runners = [];
+            const failure = { err: null };
+            for (let i = 0; i < Math.min(limit, items.length); i++) {
+                runners.push((async () => {
+                    while (next < items.length && !failure.err) {
+                        const item = items[next++];
+                        try { await worker(item); } catch (e) { failure.err = failure.err || e; }
+                    }
+                })());
+            }
+            await Promise.all(runners);
+            if (failure.err) throw failure.err;
+        }
+
+        async function uploadDriveImageFile(token, id, payload, existingFileId) {
+            const metadata = existingFileId ? { name: driveImgFileName(id) } : { name: driveImgFileName(id), parents: ["appDataFolder"] };
+            const boundary = "ledgerdriveimg";
+            const body =
+                `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+                `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(payload)}\r\n--${boundary}--`;
+            const url = existingFileId
+                ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id`
+                : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`;
+            const resp = await driveFetch(url, {
+                method: existingFileId ? "PATCH" : "POST",
+                headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+                body
+            }, 90000);
+            if (!resp.ok) throw new Error(`Drive image upload failed (${resp.status})`);
+        }
+
+        // Uploads only the images (from `ids`) that Drive doesn't have yet. Returns how many it sent.
+        async function syncImagesToDrive(token, ids) {
+            if (!ids || !ids.length) return 0;
+            const { map, dups } = await listDriveImageFiles(token);
+            let reuploadAll = false;
+            try { reuploadAll = localStorage.getItem("ledgerDriveImgReuploadAll") === "1"; } catch (err) { /* ignore */ }
+            const todo = ids.filter(id => reuploadAll || !map.has(String(id)));
+            let done = 0;
+            await runDrivePool(todo, 3, async (id) => {
+                const rec = await readKeyDB(STORES.ATTACHMENTS, id);
+                if (!rec) return; // removed locally since the bundle was built
+                const payload = await encryptDriveImage(rec);
+                const existing = map.get(String(id));
+                await uploadDriveImageFile(await ensureDriveAccessToken(), id, payload, existing ? existing.fileId : null);
+                done++;
+                if (todo.length > 4 && done % 5 === 0) showToast(`☁️ Uploading images ${done}/${todo.length}…`);
+            });
+            if (reuploadAll) { try { localStorage.removeItem("ledgerDriveImgReuploadAll"); } catch (err) { /* ignore */ } }
+            for (const fileId of dups) {
+                try { await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }); } catch (err) { /* best-effort */ }
+            }
+            return done;
+        }
+
+        // Downloads only the images (from `ids`) this device doesn't have yet. Network failures throw
+        // (the pull stays "incomplete" and is retried); an image that is simply absent from Drive or
+        // can't be decrypted is counted and skipped so it can't block every future sync.
+        async function pullMissingDriveImages(ids) {
+            const result = { downloaded: 0, absent: 0, undecryptable: 0 };
+            if (!ids || !ids.length) return result;
+            const token = await ensureDriveAccessToken();
+            const local = new Set((await getAllKeysDB(STORES.ATTACHMENTS)).map(String));
+            const missing = ids.filter(id => !local.has(String(id)));
+            if (!missing.length) return result;
+            const { map } = await listDriveImageFiles(token);
+            let n = 0;
+            const prevSuppress = driveSuppressAutoSync;
+            driveSuppressAutoSync = true;
+            try {
+                await runDrivePool(missing, 3, async (id) => {
+                    const f = map.get(String(id));
+                    if (!f) { result.absent++; return; }
+                    const t = await ensureDriveAccessToken();
+                    const resp = await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.fileId}?alt=media`, { headers: { Authorization: `Bearer ${t}` } }, 90000);
+                    if (!resp.ok) throw new Error(`Drive image download failed (${resp.status})`);
+                    const payload = await resp.json();
+                    let rec;
+                    try { rec = await decryptDriveImage(payload); } catch (e) { result.undecryptable++; return; }
+                    await writeDB(STORES.ATTACHMENTS, rec);
+                    result.downloaded++;
+                    n++;
+                    if (missing.length > 4 && n % 5 === 0) showToast(`☁️ Downloading images ${n}/${missing.length}…`);
+                });
+            } finally {
+                driveSuppressAutoSync = prevSuppress;
+            }
+            return result;
+        }
+
+        // ----- primary device ----------------------------------------------------------------------
+        function getDriveDeviceName() {
+            try {
+                let name = localStorage.getItem("ledgerDriveDeviceName");
+                if (!name) {
+                    name = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent || "") ? "Phone" : "Computer";
+                    localStorage.setItem("ledgerDriveDeviceName", name);
+                }
+                return name;
+            } catch (err) { return "This device"; }
+        }
+
+        // Returns { fileId, rec } — rec is null when no primary record exists yet. Duplicate record files
+        // (two devices claiming at once) are resolved to the newest and the rest removed.
+        async function fetchDrivePrimary(token) {
+            const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='${DRIVE_PRIMARY_FILENAME}'&fields=files(id,modifiedTime)`;
+            const resp = await driveFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+            if (!resp.ok) throw new Error(`Drive primary lookup failed (${resp.status})`);
+            const files = (await resp.json()).files || [];
+            if (!files.length) return { fileId: null, rec: null };
+            let chosen = null;
+            for (const f of files) if (!chosen || new Date(f.modifiedTime) > new Date(chosen.modifiedTime)) chosen = f;
+            for (const f of files) {
+                if (f.id === chosen.id) continue;
+                try { await fetch(`https://www.googleapis.com/drive/v3/files/${f.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } }); } catch (err) { /* best-effort */ }
+            }
+            const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${chosen.id}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+            if (!r.ok) throw new Error(`Drive primary read failed (${r.status})`);
+            let rec = null;
+            try { rec = await r.json(); } catch (err) { rec = null; }
+            return { fileId: chosen.id, rec };
+        }
+
+        async function writeDrivePrimary(token, rec, fileId) {
+            const metadata = fileId ? { name: DRIVE_PRIMARY_FILENAME } : { name: DRIVE_PRIMARY_FILENAME, parents: ["appDataFolder"] };
+            const boundary = "ledgerdriveprimary";
+            const body =
+                `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+                `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(rec)}\r\n--${boundary}--`;
+            const url = fileId
+                ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&fields=id`
+                : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`;
+            const resp = await driveFetch(url, {
+                method: fileId ? "PATCH" : "POST",
+                headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+                body
+            });
+            if (!resp.ok) throw new Error(`Drive primary write failed (${resp.status})`);
+        }
+
+        // v583: last known "this device is primary" answer, kept in localStorage so the dashboard star shows
+        // straight after a relaunch / while offline, until the next Drive check says otherwise.
+        const DRIVE_PRIMARY_ME_KEY = "ledgerDrivePrimaryMe";
+        function drivePrimaryMeRemembered() { try { return localStorage.getItem(DRIVE_PRIMARY_ME_KEY) === "1"; } catch (e) { return false; } }
+        function rememberDrivePrimaryMe(isMe) { try { if (isMe) localStorage.setItem(DRIVE_PRIMARY_ME_KEY, "1"); else localStorage.removeItem(DRIVE_PRIMARY_ME_KEY); } catch (e) { /* non-fatal */ } }
+        function drivePrimaryIsMe() { return drivePrimaryState.status === "me" || (drivePrimaryState.status === "unknown" && drivePrimaryMeRemembered()); }
+        function setDrivePrimaryState(rec) {
+            drivePrimaryRecCache = { rec: rec || null, at: Date.now() };
+            const me = getDriveDeviceId();
+            if (!rec) drivePrimaryState = { status: "none", deviceName: "" };
+            else if (rec.mode === "any") drivePrimaryState = { status: "any", deviceName: "" };
+            else if (rec.deviceId === me) drivePrimaryState = { status: "me", deviceName: rec.deviceName || getDriveDeviceName() };
+            else drivePrimaryState = { status: "other", deviceName: rec.deviceName || "Another device" };
+            rememberDrivePrimaryMe(drivePrimaryState.status === "me"); // v583
+            renderDrivePrimaryUI();
+        }
+
+        function renderDrivePrimaryUI() {
+            const el = document.getElementById("drivePrimaryText");
+            if (!el) return;
+            const st = drivePrimaryState;
+            if (st.status === "me") el.textContent = `⭐ Primary device: this device (${st.deviceName}). Only the primary device auto-uploads.`;
+            else if (st.status === "other") el.textContent = `Primary device: ${st.deviceName}. This device only pulls changes — upload from here manually when you need to.`;
+            else if (st.status === "any") el.textContent = "No primary device — every device with auto-sync on may upload (last upload wins).";
+            else if (st.status === "none") el.textContent = "Off — Drive uses the original single-file backup and every device may auto-upload. Tap Make This Device Primary to switch this Google account to the newer image-per-file format.";
+            else el.textContent = "Primary device: checking…";
+        }
+
+        async function refreshDrivePrimaryUI() {
+            try {
+                const connectedRow = document.getElementById("driveConnectedRow");
+                if (!connectedRow || connectedRow.classList.contains("hidden")) return;
+                const token = await ensureDriveAccessToken();
+                const { rec } = await fetchDrivePrimary(token);
+                setDrivePrimaryState(rec);
+                driveBlockedByPrimary = drivePrimaryState.status === "other";
+                updateDriveStatusLine();
+            } catch (err) { /* leave "checking…" — non-fatal */ }
+        }
+
+        // Auto-upload gate. "go" = this device may upload now; "blocked" = another device is primary.
+        // v581: opt-in. With NO primary record nothing is restricted — every device behaves exactly as
+        // it did before v579 (so family members who were never told about this are unaffected). The
+        // restriction only exists once someone presses "Make This Device Primary".
+        async function driveAutoUploadRole(token) {
+            const me = getDriveDeviceId();
+            const { rec } = await fetchDrivePrimary(token);
+            if (!rec) {
+                setDrivePrimaryState(null);
+                driveBlockedByPrimary = false;
+                return "go";
+            }
+            setDrivePrimaryState(rec);
+            driveBlockedByPrimary = !(rec.mode === "any" || rec.deviceId === me);
+            return driveBlockedByPrimary ? "blocked" : "go";
+        }
+
+        // v582: the primary record doubles as the opt-in switch for the new Drive format. Used by the cached
+        // upload-time check so an upload doesn't add a Drive call when the auto-sync gate just fetched it.
+        async function getDrivePrimaryRecCached(token, maxAgeMs) {
+            if (Date.now() - drivePrimaryRecCache.at < (maxAgeMs || 20000)) return drivePrimaryRecCache.rec;
+            const { rec } = await fetchDrivePrimary(token);
+            setDrivePrimaryState(rec);
+            return rec;
+        }
+
+        async function confirmEnableNewDriveFormat() {
+            return await customConfirm("This switches your Google Drive backup to the newer format (each image stored as its own file) for EVERY device using this Google account. Update all those devices to this version first — an older version that pulls the new format would lose its local images. Continue?");
+        }
+
+        async function makeThisDevicePrimary() {
+            try {
+                const token = await ensureDriveAccessToken();
+                const { fileId, rec } = await fetchDrivePrimary(token);
+                const me = getDriveDeviceId();
+                if (!rec && !(await confirmEnableNewDriveFormat())) return;
+                if (rec && rec.mode === "primary" && rec.deviceId !== me) {
+                    const ok = await customConfirm(`Make this device the primary? ${rec.deviceName || "The other device"} will stop auto-uploading and only pull changes. Make sure it has finished syncing first.`);
+                    if (!ok) return;
+                }
+                await writeDrivePrimary(token, { mode: "primary", deviceId: me, deviceName: getDriveDeviceName(), claimedAt: Date.now() }, fileId);
+                const again = await fetchDrivePrimary(token);
+                setDrivePrimaryState(again.rec);
+                driveBlockedByPrimary = drivePrimaryState.status === "other";
+                updateDriveStatusLine();
+                showToast("⭐ This device is now the primary");
+                if (driveDirtyStoreSet.size > 0) scheduleDriveAutoSync();
+            } catch (err) { alert("Couldn't change the primary device: " + (err && err.message ? err.message : err)); }
+        }
+
+        async function allowAllDevicesToUpload() {
+            try {
+                const t0 = await ensureDriveAccessToken();
+                if (!(await fetchDrivePrimary(t0)).rec && !(await confirmEnableNewDriveFormat())) return;
+            } catch (err) { alert("Couldn't check the primary device: " + (err && err.message ? err.message : err)); return; }
+            const ok = await customConfirm("Allow every device to auto-upload? If two devices change data at the same time, the later upload wins and the other device's changes can be lost.");
+            if (!ok) return;
+            try {
+                const token = await ensureDriveAccessToken();
+                const { fileId } = await fetchDrivePrimary(token);
+                await writeDrivePrimary(token, { mode: "any", claimedAt: Date.now() }, fileId);
+                const again = await fetchDrivePrimary(token);
+                setDrivePrimaryState(again.rec);
+                driveBlockedByPrimary = false;
+                updateDriveStatusLine();
+                showToast("🔓 All devices may auto-upload");
+            } catch (err) { alert("Couldn't change the primary device: " + (err && err.message ? err.message : err)); }
+        }
+
+        // Manual "Upload to Drive" guard: returns true to go ahead. Warns (instead of silently
+        // overwriting) when Drive has moved on since this device last synced, or when a different
+        // device is the primary.
+        async function confirmManualDriveUpload() {
+            const token = await ensureDriveAccessToken();
+            await findDriveBackupFileId();
+            const remoteMoved = !!driveFileId && driveLastLookupModifiedTime !== driveLastKnownRemoteRev;
+            let rec = null;
+            try { rec = (await fetchDrivePrimary(token)).rec; setDrivePrimaryState(rec); } catch (err) { /* guard is best-effort */ }
+            const otherPrimary = !!rec && rec.mode === "primary" && rec.deviceId !== getDriveDeviceId();
+            if (!remoteMoved && !otherPrimary) return true;
+            let msg = "";
+            if (remoteMoved) msg += "Google Drive has changes this device hasn't pulled yet (probably from another device) — uploading now overwrites them. ";
+            if (otherPrimary) msg += `${rec.deviceName || "Another device"} is the primary device. `;
+            msg += remoteMoved ? "OK = overwrite Drive anyway. Cancel = stop, then use Restore Latest first." : "Upload from this device anyway?";
+            return await customConfirm(msg);
+        }
+        // ===== end v579 block ============================================================================
+
+        // ===== v580: "Clean up unused images" (button only, primary device) ==========================
+        // Drive never learns WHEN an image became unused (an image file's own timestamp is its upload
+        // time), so the first time a cleanup run sees an image that no backup lists it writes that date
+        // into ledger-orphans.json; only images unused for DRIVE_ORPHAN_GRACE_DAYS+ are ever deleted.
+        // The grace period also covers an image uploaded just before its data file (looks unused for a
+        // moment) and an offline device that still lists an image.
+        const DRIVE_ORPHANS_FILENAME = "ledger-orphans.json";
+        const DRIVE_ORPHAN_GRACE_DAYS = 30;
+
+        async function fetchDriveSmallJson(token, name) {
+            const url = `https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&q=name='${name}'&fields=files(id,modifiedTime)`;
+            const resp = await driveFetch(url, { headers: { Authorization: `Bearer ${token}` } });
+            if (!resp.ok) throw new Error(`Drive lookup failed (${resp.status})`);
+            const files = (await resp.json()).files || [];
+            if (!files.length) return { fileId: null, rec: null };
+            let chosen = null;
+            for (const f of files) if (!chosen || new Date(f.modifiedTime) > new Date(chosen.modifiedTime)) chosen = f;
+            const r = await driveFetch(`https://www.googleapis.com/drive/v3/files/${chosen.id}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+            if (!r.ok) throw new Error(`Drive read failed (${r.status})`);
+            let rec = null;
+            try { rec = await r.json(); } catch (err) { rec = null; }
+            return { fileId: chosen.id, rec };
+        }
+
+        async function writeDriveSmallJson(token, name, rec, fileId) {
+            const metadata = fileId ? { name } : { name, parents: ["appDataFolder"] };
+            const boundary = "ledgerdrivesmall";
+            const body =
+                `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+                `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(rec)}\r\n--${boundary}--`;
+            const url = fileId
+                ? `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=multipart&fields=id`
+                : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id`;
+            const resp = await driveFetch(url, {
+                method: fileId ? "PATCH" : "POST",
+                headers: { Authorization: `Bearer ${token}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+                body
+            });
+            if (!resp.ok) throw new Error(`Drive write failed (${resp.status})`);
+            return (await resp.json()).id;
+        }
+
+        // Works out which Drive images are unused and how long each has been. An image counts as used
+        // if its id is in the data file's attachmentIds OR appears anywhere in the data file's text
+        // (belt and braces: a transaction that still names it keeps it). Updates ledger-orphans.json.
+        async function planDriveImageCleanup(token, referencedIds, dataJson, now) {
+            const { map } = await listDriveImageFiles(token);
+            const ref = new Set((referencedIds || []).map(String));
+            const candidates = [];
+            for (const [id, f] of map) {
+                if (ref.has(id)) continue;
+                if (dataJson.indexOf(id) !== -1) continue;
+                candidates.push({ id, fileId: f.fileId, size: f.size || 0 });
+            }
+            const orph = await fetchDriveSmallJson(token, DRIVE_ORPHANS_FILENAME);
+            const seen = (orph.rec && orph.rec.seen && typeof orph.rec.seen === "object") ? Object.assign({}, orph.rec.seen) : {};
+            const candSet = new Set(candidates.map(c => c.id));
+            let changed = false;
+            for (const id of Object.keys(seen)) if (!candSet.has(id)) { delete seen[id]; changed = true; } // used again, or file gone
+            for (const c of candidates) if (!seen[c.id]) { seen[c.id] = now; changed = true; }
+            let orphFileId = orph.fileId;
+            if (changed) orphFileId = await writeDriveSmallJson(token, DRIVE_ORPHANS_FILENAME, { v: 1, seen }, orphFileId);
+            const graceMs = DRIVE_ORPHAN_GRACE_DAYS * 86400000;
+            const eligible = candidates.filter(c => now - seen[c.id] >= graceMs);
+            const waiting = candidates.filter(c => now - seen[c.id] < graceMs);
+            return { candidates, eligible, waiting, seen, orphFileId, totalImages: map.size };
+        }
+
+        async function deleteDriveImages(token, items, plan) {
+            let deleted = 0;
+            await runDrivePool(items, 3, async (it) => {
+                const r = await fetch(`https://www.googleapis.com/drive/v3/files/${it.fileId}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
+                if (!r.ok && r.status !== 404) throw new Error(`Drive delete failed (${r.status})`);
+                deleted++;
+            });
+            if (deleted && plan && plan.orphFileId) {
+                const seen = Object.assign({}, plan.seen);
+                for (const it of items) delete seen[it.id];
+                await writeDriveSmallJson(token, DRIVE_ORPHANS_FILENAME, { v: 1, seen }, plan.orphFileId);
+            }
+            return deleted;
+        }
+
+        function formatDriveBytes(n) {
+            if (!n) return "0 KB";
+            return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB";
+        }
+
+        async function cleanUpUnusedDriveImages(btnEl) {
+            setButtonBusy("cleanUpUnusedDriveImages", btnEl, true);
+            let tookLock = false;
+            try {
+                if (!currentPasscode) { alert("Unlock the app first."); return; }
+                if (driveSyncInFlight || driveAutoSyncPending) { alert("A sync is running — try again in a moment."); return; }
+                if (driveSyncPauseState || driveImgPullIncomplete || driveDirtyStoreSet.size > 0) {
+                    alert("Sync first. This device has changes not yet on Drive, or an unfinished pull — the cleanup must compare against Drive's latest backup.");
+                    return;
+                }
+                const token = await ensureDriveAccessToken();
+                const { rec } = await fetchDrivePrimary(token);
+                setDrivePrimaryState(rec);
+                if (rec && rec.mode === "primary" && rec.deviceId !== getDriveDeviceId()) {
+                    alert(`${rec.deviceName || "Another device"} is the primary device — run the cleanup there (or make this device primary first).`);
+                    return;
+                }
+                await findDriveBackupFileId();
+                if (!driveFileId) { alert("No backup in Drive yet."); return; }
+                if (driveLastLookupModifiedTime !== driveLastKnownRemoteRev) { alert("Drive has newer changes than this device. Tap Restore Latest first."); return; }
+                const startRev = driveLastLookupModifiedTime;
+                driveSyncInFlight = true; tookLock = true; // no uploads from this device while we decide
+                const resp = await driveFetch(`https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`, { headers: { Authorization: `Bearer ${token}` } });
+                if (!resp.ok) throw new Error(`Drive download failed (${resp.status})`);
+                const payload = await resp.json();
+                const bundle = payload.encrypted ? await decryptBackupBundle(payload) : payload;
+                if (!bundle) return; // passcode prompt cancelled
+                if (!bundle.attachmentsExternal || !Array.isArray(bundle.attachmentIds)) {
+                    alert("The Drive backup is still in the old format (images inside it). Upload once from this device with v579 or later, then try again.");
+                    return;
+                }
+                const localKeys = await getAllKeysDB(STORES.ATTACHMENTS);
+                if (bundle.attachmentIds.length === 0 && localKeys.length > 0) {
+                    alert("Safety stop: the Drive backup lists no images but this device has some. Nothing was deleted — upload from this device first.");
+                    return;
+                }
+                const plan = await planDriveImageCleanup(token, bundle.attachmentIds, JSON.stringify(bundle), Date.now());
+                const sum = (arr) => arr.reduce((t, c) => t + (c.size || 0), 0);
+                if (!plan.candidates.length) { showToast("🧹 No unused images in Drive"); return; }
+                if (!plan.eligible.length) {
+                    alert(`${plan.waiting.length} unused image(s) (${formatDriveBytes(sum(plan.waiting))}) found. They were first noticed today, so nothing is deleted yet — run this again after ${DRIVE_ORPHAN_GRACE_DAYS} days.`);
+                    return;
+                }
+                const waitNote = plan.waiting.length ? ` ${plan.waiting.length} newer unused image(s) are kept.` : "";
+                const ok = await customConfirm(`Delete ${plan.eligible.length} image(s) (${formatDriveBytes(sum(plan.eligible))}) from Google Drive that haven't been used for ${DRIVE_ORPHAN_GRACE_DAYS}+ days?${waitNote} This can't be undone.`);
+                if (!ok) return;
+                // Drive may have changed while the dialog was open (another device synced) — if so, stop.
+                await findDriveBackupFileId();
+                if (driveLastLookupModifiedTime !== startRev) { alert("Drive changed while you were deciding. Nothing was deleted — run the cleanup again."); return; }
+                const deleted = await deleteDriveImages(token, plan.eligible, plan);
+                showToast(`🧹 Deleted ${deleted} unused image(s) from Drive`);
+            } catch (err) {
+                alert("Cleanup failed: " + (err && err.message ? err.message : err));
+            } finally {
+                if (tookLock) {
+                    driveSyncInFlight = false;
+                    if (driveResyncNeeded) { driveResyncNeeded = false; armDriveAutoSyncTimer(); }
+                }
+                setButtonBusy("cleanUpUnusedDriveImages", btnEl, false);
+            }
+        }
+        // ===== end v580 block ============================================================================
+
         // Builds the same encrypted payload shape exportBackup() writes to a file, and
         // PATCHes (or, on the very first sync, POSTs/creates) it as the single Drive-appdata
         // backup file. Requires the app to be unlocked (currentPasscode set) — same requirement
@@ -22298,8 +28030,15 @@
             if (driveSyncInFlight) return;
             driveSyncInFlight = true;
             try {
+                if (driveImgPullIncomplete) throw new Error("Images from Google Drive are still being downloaded — tap Restore Latest first, so they aren't left out of the next upload.");
                 const token = await ensureDriveAccessToken();
-                const bundle = await buildBackupBundle();
+                // v579: slim bundle (no image bytes). The images it lists are uploaded FIRST, only the
+                // ones Drive doesn't have yet, so anyone who sees the new data file can find them.
+                // v582: only when a primary record exists in Drive (someone opted in); otherwise the
+                // original full single-file bundle, exactly as before v579.
+                const slim = !!(await getDrivePrimaryRecCached(token));
+                const bundle = slim ? await buildBackupBundle({ slim: true }) : await buildBackupBundle();
+                if (slim) await syncImagesToDrive(token, bundle.attachmentIds);
                 const salt = crypto.getRandomValues(new Uint8Array(16));
                 const saltB64 = bufToB64(salt);
                 const key = await deriveKeyFromPasscode(currentPasscode, saltB64, PBKDF2_ITERATIONS);
@@ -22371,23 +28110,114 @@
             }
         }
 
-        // v433: encrypts and stores a local snapshot bundle into STORES.DRIVE_SNAPSHOTS, keeping
-        // only the most recent 5 (oldest dropped first). Same encrypted shape uploadBackupToDrive()
-        // writes to Drive, so restoreDriveSnapshot() below can reuse decryptBackupBundle() as-is.
-        async function saveDriveSnapshot(bundle) {
+        // v591: Local Snapshots are safety copies of THIS device's data, taken right before a Drive
+        // pull (or a snapshot restore) would overwrite it. Until v590 every snapshot was a full backup
+        // including every image, encrypted twice (passcode layer + app-lock layer) -> ~45 MB each with
+        // ~25 MB of images, 5 of them = ~230 MB. Now a snapshot holds all the data plus ONLY the images
+        // the overwrite would destroy (local images the incoming data doesn't list); every other image
+        // is just an id in `attachmentIds`. See buildSnapshotBundle() / restoreDriveSnapshot().
+        const DRIVE_SNAPSHOT_KEEP = 5;
+        const DRIVE_SNAPSHOT_MAX_BYTES = 60 * 1024 * 1024; // soft total cap, only evaluated when a snapshot is saved
+        const DRIVE_SNAPSHOT_DATA_STORES = [STORES.ACCOUNTS, STORES.TRANSACTIONS, STORES.CATEGORIES, STORES.MEMBERS, STORES.FUNDS, STORES.NAV_HISTORY, STORES.ATTACHMENTS, STORES.TEMPLATES, STORES.TAGS, STORES.BUDGETS, STORES.INVENTORY, STORES.PLANNED_PAYMENTS, STORES.REMINDERS, STORES.INSURANCE, STORES.TIMELINE, STORES.SETTINGS];
+
+        // Every image id a bundle refers to: slim / snapshot bundles list them in attachmentIds, full
+        // bundles carry the image records themselves.
+        function bundleAttachmentIds(b) {
+            if (!b) return [];
+            if (Array.isArray(b.attachmentIds)) return b.attachmentIds.map(String);
+            return Array.isArray(b.attachments) ? b.attachments.filter(a => a && a.id !== undefined).map(a => String(a.id)) : [];
+        }
+
+        // v591: builds the (slim) snapshot of what is on this device right now. `incoming` is the bundle
+        // about to be restored over it: local images it doesn't list are the ones that restore will
+        // delete, so those (and only those) are copied into the snapshot. A snapshot restore
+        // (attachmentsExtraOnly) never deletes images, and incoming === null means "no images needed".
+        async function buildSnapshotBundle(incoming) {
+            const bundle = await buildBackupBundle({ slim: true, allowIncomplete: true });
+            const localIds = bundle.attachmentIds;
+            delete bundle.attachmentsExternal;
+            bundle.attachmentsExtraOnly = true;
+            bundle.attachments = [];
+            if (incoming && !incoming.attachmentsExtraOnly) {
+                const listed = new Set(bundleAttachmentIds(incoming));
+                for (const id of localIds) {
+                    if (listed.has(String(id))) continue;
+                    const rec = await readKeyDB(STORES.ATTACHMENTS, id);
+                    if (rec) bundle.attachments.push(rec);
+                }
+            }
+            return bundle;
+        }
+
+        // Encrypts and stores a snapshot bundle into STORES.DRIVE_SNAPSHOTS, then prunes (see
+        // pruneDriveSnapshots()). Same encrypted shape uploadBackupToDrive() writes to Drive, so
+        // restoreDriveSnapshot() below reuses decryptBackupBundle() as-is. opts.label is a short
+        // human label shown in the list ("Before Drive restore" / "Before restore").
+        async function saveDriveSnapshot(bundle, opts) {
+            opts = opts || {};
             const salt = crypto.getRandomValues(new Uint8Array(16));
             const saltB64 = bufToB64(salt);
             const key = await deriveKeyFromPasscode(currentPasscode, saltB64, PBKDF2_ITERATIONS);
             const { iv, data } = await aesEncryptString(key, JSON.stringify(bundle));
+            const row = { createdAt: Date.now(), encrypted: true, salt: saltB64, iterations: PBKDF2_ITERATIONS, iv, data };
+            if (opts.label) row.label = String(opts.label);
+            const prevSuppress = driveSuppressAutoSync;
             driveSuppressAutoSync = true;
             try {
-                await writeDB(STORES.DRIVE_SNAPSHOTS, {
-                    createdAt: Date.now(), encrypted: true, salt: saltB64, iterations: PBKDF2_ITERATIONS, iv, data
-                });
+                await writeDB(STORES.DRIVE_SNAPSHOTS, row);
                 await pruneDriveSnapshots();
             } finally {
-                driveSuppressAutoSync = false;
+                driveSuppressAutoSync = prevSuppress;
             }
+        }
+
+        // v591: row ids + stored sizes WITHOUT decrypting anything (a cursor, so only one row is in memory
+        // at a time). Newest first. Size = length of the stored ciphertext string.
+        function listDriveSnapshotRows() {
+            return new Promise((resolve, reject) => {
+                try {
+                    const out = [];
+                    const tx = db.transaction([STORES.DRIVE_SNAPSHOTS], "readonly");
+                    const req = tx.objectStore(STORES.DRIVE_SNAPSHOTS).openCursor();
+                    req.onsuccess = () => {
+                        const c = req.result;
+                        if (c) {
+                            const v = c.value;
+                            out.push({ id: c.key, size: (v && typeof v.data === "string") ? v.data.length : 0 });
+                            c.continue();
+                        } else {
+                            resolve(out.sort((a, b) => b.id - a.id));
+                        }
+                    };
+                    req.onerror = () => reject(req.error);
+                } catch (err) { reject(err); }
+            });
+        }
+
+        function deleteDriveSnapshotRow(id) {
+            return new Promise((resolve, reject) => {
+                const tx = db.transaction([STORES.DRIVE_SNAPSHOTS], "readwrite");
+                tx.objectStore(STORES.DRIVE_SNAPSHOTS).delete(id);
+                tx.oncomplete = resolve;
+                tx.onerror = () => reject(tx.error);
+            });
+        }
+
+        // Decrypts the outer (app-lock) layer of one stored row; legacy plain-stored rows fall back to
+        // the raw row (same handling listDriveSnapshots() has always had).
+        async function unwrapDriveSnapshotRow(raw) {
+            try { return await decryptRecord(STORES.DRIVE_SNAPSHOTS, raw); }
+            catch (err) { return raw; }
+        }
+
+        async function loadDriveSnapshot(id) {
+            const raw = await new Promise((resolve, reject) => {
+                const tx = db.transaction([STORES.DRIVE_SNAPSHOTS], "readonly");
+                const req = tx.objectStore(STORES.DRIVE_SNAPSHOTS).get(id);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => reject(req.error);
+            });
+            return raw ? await unwrapDriveSnapshotRow(raw) : null;
         }
 
         async function listDriveSnapshots() {
@@ -22401,15 +28231,13 @@
                     // handed decryptBackupBundle() a record with no salt, so no snapshot could be
                     // restored. Unwrap the outer layer here (falling back to the raw row for any
                     // legacy plain-stored snapshot) and keep the row's id for pruning.
+                    // v591: also keeps the stored size, for the list.
                     const raw = (req.result || []).sort((a, b) => b.id - a.id);
                     const out = [];
                     for (const r of raw) {
-                        try {
-                            const plain = await decryptRecord(STORES.DRIVE_SNAPSHOTS, r);
-                            out.push({ ...plain, id: r.id });
-                        } catch (err) {
-                            out.push(r);
-                        }
+                        const size = (r && typeof r.data === "string") ? r.data.length : 0;
+                        const plain = await unwrapDriveSnapshotRow(r);
+                        out.push({ ...plain, id: r.id, size });
                     }
                     resolve(out);
                 };
@@ -22417,40 +28245,147 @@
             });
         }
 
+        // v591: keeps the newest DRIVE_SNAPSHOT_KEEP snapshots AND at most DRIVE_SNAPSHOT_MAX_BYTES in total
+        // (oldest dropped first, the newest is never dropped). Works on raw rows, no decrypting. When the
+        // size cap (not the count) removed something, a note is saved (device-local "drive*" setting) and
+        // shown at the top of the Local Snapshots list, so the clean-up is never silent.
         async function pruneDriveSnapshots() {
-            const all = await listDriveSnapshots(); // newest first
-            const toDrop = all.slice(5); // keep newest 5
-            for (const snap of toDrop) {
-                await new Promise((resolve, reject) => {
-                    const tx = db.transaction([STORES.DRIVE_SNAPSHOTS], "readwrite");
-                    tx.objectStore(STORES.DRIVE_SNAPSHOTS).delete(snap.id);
-                    tx.oncomplete = resolve;
-                    tx.onerror = () => reject(tx.error);
-                });
+            const rows = await listDriveSnapshotRows(); // newest first
+            let kept = 0, total = 0, cut = false, sizeDropped = 0, sizeDroppedBytes = 0;
+            for (let i = 0; i < rows.length; i++) {
+                const r = rows[i];
+                if (!cut && i >= 1 && total + r.size > DRIVE_SNAPSHOT_MAX_BYTES) cut = true;
+                if (i >= DRIVE_SNAPSHOT_KEEP || cut) {
+                    await deleteDriveSnapshotRow(r.id);
+                    if (i < DRIVE_SNAPSHOT_KEEP) { sizeDropped++; sizeDroppedBytes += r.size; }
+                    continue;
+                }
+                kept++; total += r.size;
+            }
+            if (sizeDropped > 0) await persistDriveBookkeeping("driveSnapshotCleanupNote", { at: Date.now(), count: sizeDropped, bytes: sizeDroppedBytes });
+        }
+
+        // After a snapshot restore the restored data differs from what Drive holds, so every restored
+        // store is flagged as an unsynced local change — exactly what a normal edit does. The device then
+        // uploads it (primary device) or raises the normal conflict pause if Drive moved on, and a later
+        // Restore Latest takes its own safety snapshot first instead of overwriting the restored data.
+        async function markAllDriveDataStoresDirty() {
+            for (const s of DRIVE_SNAPSHOT_DATA_STORES) {
+                if (db.objectStoreNames.contains(s)) await markStoreDirty(s);
             }
         }
 
-        // Settings entry point ("Local Snapshots" under Backup & Restore) — lets the user browse
-        // and restore one of the safety-net snapshots saved automatically by downloadBackupFromDrive()
-        // below, e.g. if they resolved a sync conflict with "Use Remote" and want their pre-overwrite
-        // local data back after all.
+        // Settings entry point ("Local Snapshots" under Backup & Restore): lists the safety-net snapshots,
+        // each with Restore / Delete. v591: a real list instead of a prompt() asking for a number.
         async function openDriveSnapshotsModal() {
+            await renderDriveSnapshotsList();
+            const modal = document.getElementById("driveSnapshotsModal");
+            if (modal && !modal.classList.contains("active")) openModal("driveSnapshotsModal");
+        }
+
+        async function renderDriveSnapshotsList() {
+            const listEl = document.getElementById("driveSnapshotsList");
+            const summaryEl = document.getElementById("driveSnapshotsSummary");
+            const noteEl = document.getElementById("driveSnapshotsNote");
+            if (!listEl) return;
             const snapshots = await listDriveSnapshots();
+            const total = snapshots.reduce((n, s) => n + (s.size || 0), 0);
+            if (summaryEl) summaryEl.textContent = snapshots.length
+                ? `${snapshots.length} snapshot${snapshots.length === 1 ? "" : "s"} · ${formatDriveBytes(total)} (keeps the newest ${DRIVE_SNAPSHOT_KEEP}, max ${Math.round(DRIVE_SNAPSHOT_MAX_BYTES / 1048576)} MB in total)`
+                : "";
+            if (noteEl) {
+                let note = null;
+                try { const rec = await readKeyDB("settings", "driveSnapshotCleanupNote"); note = rec && rec.value; } catch (err) { note = null; }
+                if (note && note.count) {
+                    noteEl.textContent = `Auto-cleaned ${note.count} older snapshot${note.count === 1 ? "" : "s"} (~${formatDriveBytes(note.bytes || 0)}) on ${new Date(note.at).toLocaleString()} to stay under ${Math.round(DRIVE_SNAPSHOT_MAX_BYTES / 1048576)} MB.`;
+                    noteEl.classList.remove("hidden");
+                } else {
+                    noteEl.textContent = "";
+                    noteEl.classList.add("hidden");
+                }
+            }
             if (snapshots.length === 0) {
-                alert("No local snapshots yet — one is saved automatically the next time a Drive restore would overwrite unsynced local changes.");
+                listEl.innerHTML = `<p style="font-size:0.8rem; color:var(--text-muted);">No local snapshots yet — one is saved automatically the next time a Drive restore would overwrite unsynced local changes, and one before every snapshot restore.</p>`;
                 return;
             }
-            const lines = snapshots.map((s, i) => `${i + 1}. ${new Date(s.createdAt).toLocaleString()}`).join("\n");
-            const choice = prompt(`Local snapshots (most recent first) — enter a number to restore it, or Cancel:\n\n${lines}`);
-            if (!choice) return;
-            const idx = parseInt(choice, 10) - 1;
-            if (isNaN(idx) || idx < 0 || idx >= snapshots.length) return;
-            const ok = await customConfirm(`Restore the snapshot from ${new Date(snapshots[idx].createdAt).toLocaleString()}? This replaces THIS device's current accounts, transactions, and categories.`);
+            listEl.innerHTML = snapshots.map(s => {
+                const when = s.createdAt ? new Date(s.createdAt).toLocaleString() : "Unknown date";
+                const label = s.label ? ` · ${escapeHtml(s.label)}` : "";
+                return `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; padding:8px 0; border-top:1px solid var(--border-color, rgba(128,128,128,0.25));">` +
+                    `<div style="min-width:0;"><div style="font-size:0.85rem; font-weight:700;">${escapeHtml(when)}</div>` +
+                    `<div style="font-size:0.72rem; color:var(--text-muted);">${escapeHtml(formatDriveBytes(s.size || 0))}${label}</div></div>` +
+                    `<div style="display:flex; gap:6px; flex-shrink:0;">` +
+                    `<button type="button" class="btn-util" data-click="restoreDriveSnapshot" data-id="${escapeHtml(s.id)}">Restore</button>` +
+                    `<button type="button" class="btn-util" data-click="deleteDriveSnapshot" data-id="${escapeHtml(s.id)}">Delete</button>` +
+                    `</div></div>`;
+            }).join("");
+        }
+
+        async function deleteDriveSnapshot(el) {
+            const id = Number(el.dataset.id);
+            if (!Number.isFinite(id)) return;
+            const ok = await customConfirm("Delete this local snapshot? This can't be undone.");
             if (!ok) return;
-            const bundle = await decryptBackupBundle(snapshots[idx]);
+            await deleteDriveSnapshotRow(id);
+            await renderDriveSnapshotsList();
+            showToast("Snapshot deleted");
+        }
+
+        async function restoreDriveSnapshot(el) {
+            const id = Number(el.dataset.id);
+            if (!Number.isFinite(id)) return;
+            const snap = await loadDriveSnapshot(id);
+            if (!snap) { await renderDriveSnapshotsList(); return; }
+            const when = snap.createdAt ? new Date(snap.createdAt).toLocaleString() : "unknown date";
+            const ok = await customConfirm(`Restore the snapshot from ${when}? This replaces ALL of THIS device's current ledger data (accounts, transactions, categories, members, funds, budgets, tags, templates, inventory, planned payments, reminders, insurance, timeline and settings). A copy of the current data is saved to Local Snapshots first, and the restored data then counts as this device's unsynced changes, so it syncs to Google Drive.`);
+            if (!ok) return;
+            const bundle = await decryptBackupBundle(snap);
             if (!bundle) return;
-            await restoreFromBundle(bundle);
-            showToast("Restored local snapshot");
+            if (!bundle.accounts || !bundle.transactions) { alert("This snapshot is not valid — nothing was changed."); return; }
+
+            // A slim snapshot lists images it doesn't carry. Fetch the ones this device no longer has from
+            // Drive BEFORE touching any data: that step only adds images, so if it fails (offline, Drive not
+            // connected) nothing has changed yet. Images Drive no longer has are skipped and counted.
+            let imgResult = null;
+            if (bundle.attachmentsExtraOnly) {
+                const have = new Set((await getAllKeysDB(STORES.ATTACHMENTS)).map(String));
+                for (const a of (bundle.attachments || [])) if (a && a.id !== undefined) have.add(String(a.id));
+                const missing = bundleAttachmentIds(bundle).filter(x => !have.has(x));
+                if (missing.length) {
+                    try { imgResult = await pullMissingDriveImages(missing); }
+                    catch (err) {
+                        alert(`This snapshot refers to ${missing.length} image${missing.length === 1 ? "" : "s"} that this device no longer has, and they couldn't be downloaded from Google Drive (${err && err.message ? err.message : err}). Nothing was changed — try again while online and connected to Drive.`);
+                        return;
+                    }
+                }
+            }
+
+            try {
+                await saveDriveSnapshot(await buildSnapshotBundle(bundle), { label: "Before restore" });
+            } catch (err) {
+                alert("Couldn't save a safety copy of the current data, so nothing was restored: " + (err && err.message ? err.message : err));
+                return;
+            }
+            let refreshError = null;
+            try {
+                await restoreFromBundle(bundle);
+            } catch (err) {
+                if (err && err.restoreCommitted) {
+                    // v592: the data was written (the restore is atomic) and only the screen refresh failed —
+                    // carry on as a normal restore, and tell the user to reload.
+                    refreshError = err;
+                } else {
+                    // v592: nothing was written — the restore is all-or-nothing, so the previous data is untouched.
+                    alert("The restore didn't go through and nothing was changed: " + (err && err.message ? err.message : err));
+                    await renderDriveSnapshotsList();
+                    return;
+                }
+            }
+            await markAllDriveDataStoresDirty();
+            scheduleDriveAutoSync();
+            await renderDriveSnapshotsList();
+            const unavailable = imgResult ? imgResult.absent + imgResult.undecryptable : 0;
+            showToast("Restored local snapshot" + (unavailable ? ` · ⚠ ${unavailable} image${unavailable === 1 ? "" : "s"} unavailable` : "") + (refreshError ? " · reload the app to refresh the screen" : ""));
         }
 
         // v433: best-effort, non-authoritative diff — compares each top-level store array between
@@ -22463,10 +28398,15 @@
             const keys = new Set([...Object.keys(bundleA || {}), ...Object.keys(bundleB || {})]);
             for (const k of keys) {
                 if (k === "syncedAt" || k === "exportedAt") continue;
+                // v591: a snapshot / slim bundle carries image ids (and only some image records) while a full
+                // bundle carries every record, so compare the SET of image ids once, below, instead of the
+                // raw fields — otherwise "attachments" always looked changed.
+                if (k === "attachments" || k === "attachmentIds" || k === "attachmentsExternal" || k === "attachmentsExtraOnly") continue;
                 if (JSON.stringify(bundleA ? bundleA[k] : undefined) !== JSON.stringify(bundleB ? bundleB[k] : undefined)) {
                     changed.push(k);
                 }
             }
+            if (bundleAttachmentIds(bundleA).sort().join("|") !== bundleAttachmentIds(bundleB).sort().join("|")) changed.push("attachments");
             return changed;
         }
 
@@ -22503,10 +28443,21 @@
                 // risk) so the common fast-forward case doesn't spend a snapshot write on nothing.
                 let localSnapshotBundle = null;
                 if (driveDirtyStoreSet.size > 0) {
-                    localSnapshotBundle = await buildBackupBundle();
-                    await saveDriveSnapshot(localSnapshotBundle);
+                    // v591: slim snapshot — data plus only the local images this pull is about to delete
+                    // (the ones the incoming bundle doesn't list), see buildSnapshotBundle().
+                    localSnapshotBundle = await buildSnapshotBundle(bundle);
+                    await saveDriveSnapshot(localSnapshotBundle, { label: "Before Drive restore" });
                 }
+                // v579: a slim bundle lists its images by id; they are fetched right after the data is
+                // restored. The "incomplete" flag stays set (persisted) until that finishes, and
+                // uploads/file exports refuse in between, so half-downloaded images can't be dropped.
+                if (bundle.attachmentsExternal) await persistDriveBookkeeping("driveImgPullIncomplete", (driveImgPullIncomplete = true));
                 await restoreFromBundle(bundle);
+                let imgResult = null;
+                if (bundle.attachmentsExternal) {
+                    imgResult = await pullMissingDriveImages(bundle.attachmentIds);
+                    await persistDriveBookkeeping("driveImgPullIncomplete", (driveImgPullIncomplete = false));
+                }
                 // v430: same infinite-auto-sync-loop fix as uploadBackupToDrive() above — this
                 // bookkeeping write must not re-arm scheduleDriveAutoSync().
                 const now = Date.now();
@@ -22539,7 +28490,10 @@
                 const restoredAt = payload.syncedAt ? new Date(payload.syncedAt).toLocaleString() : "unknown time";
                 const dupNote = driveLastLookupFileCount > 1 ? ` (${driveLastLookupFileCount} same-named files were found — used the newest, removed the rest)` : "";
                 const snapNote = localSnapshotBundle ? " — your previous unsynced data was saved to Local Snapshots" : "";
-                showToast(`☁️ Restored backup from Drive — uploaded ${restoredAt}${dupNote}${snapNote}`);
+                const imgNote = imgResult
+                    ? (imgResult.downloaded ? ` · ${imgResult.downloaded} image(s) downloaded` : "") + ((imgResult.absent || imgResult.undecryptable) ? ` · ⚠ ${imgResult.absent + imgResult.undecryptable} image(s) unavailable` : "")
+                    : "";
+                showToast(`☁️ Restored backup from Drive — uploaded ${restoredAt}${dupNote}${snapNote}${imgNote}`);
             } finally {
                 driveSuppressAutoSync = false;
                 driveSyncInFlight = false;
@@ -22562,6 +28516,7 @@
         function armDriveAutoSyncTimer() {
             clearTimeout(driveAutoSyncTimer);
             driveAutoSyncPending = true;
+            updateDriveStatusLine(); // v519: "Waiting to upload…" straight away
             driveAutoSyncTimer = setTimeout(() => {
                 driveAutoSyncPending = false;
                 attemptAutoSync().catch((err) => {
@@ -22614,6 +28569,11 @@
                 const remoteModifiedTime = driveFileId ? driveLastLookupModifiedTime : null;
                 const remoteChanged = remoteModifiedTime !== driveLastKnownRemoteRev;
                 if (!remoteChanged) {
+                    // v579: only the primary device auto-uploads (a device with no primary yet claims
+                    // it). Everyone else keeps pulling below but leaves uploading to the manual button.
+                    const role = await driveAutoUploadRole(await ensureDriveAccessToken());
+                    if (role === "blocked") { updateDriveStatusLine(); return; }
+                    updateDriveStatusLine();
                     await uploadBackupToDrive();
                     return;
                 }
@@ -22675,6 +28635,7 @@
         // Settings page is opened for as long as driveSyncPauseState is non-null — so a user who
         // dismissed/missed the toast still has a durable way to notice and resolve it.
         function renderDriveSyncPauseBanner() {
+            refreshDrivePrimaryUI(); // v579: also refresh the "Primary device" line whenever Settings → Drive is shown
             const banner = document.getElementById("driveSyncPauseBanner");
             if (!banner) return;
             if (!driveSyncPauseState) { banner.classList.add("hidden"); return; }
@@ -22742,11 +28703,55 @@
             const connectedRow = document.getElementById("driveConnectedRow");
             if (disconnectedRow) disconnectedRow.classList.remove("hidden");
             if (connectedRow) connectedRow.classList.add("hidden");
+            updateDriveStatusLine(); // v519
+        }
+
+        // v519: one small status line under the Dashboard header so a sync can be confirmed without going
+        // to Setting. Read-only: it only looks at the existing sync state. Hidden when Drive is not connected.
+        //   Waiting to upload… (a write is waiting out the 4 s debounce / not uploaded yet) -> Syncing… -> Synced 12:14 PM
+        //   Amber: Auto-sync off, Not uploaded yet — retrying, Sync paused.
+        let driveStatusLineText = "";
+        function driveStatusTimeLabel(ts) {
+            const d = new Date(ts), now = new Date();
+            const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+            return d.toDateString() === now.toDateString() ? time : `${d.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
+        }
+        function updateDriveStatusLine() {
+            const el = document.getElementById("driveStatusLine");
+            if (!el) return;
+            const connectedRow = document.getElementById("driveConnectedRow");
+            const connected = !!connectedRow && !connectedRow.classList.contains("hidden");
+            if (!connected) { el.classList.add("hidden"); driveStatusLineText = ""; return; }
+            const toggle = document.getElementById("driveAutoSyncToggle");
+            const autoOn = !toggle || toggle.checked;
+            const t = driveLastSyncedAtShown ? driveStatusTimeLabel(driveLastSyncedAtShown) : "";
+            let text, warn = false;
+            if (driveSyncPauseState) { text = "⚠ Sync paused — resolve in Setting"; warn = true; }
+            else if (driveSyncErrorNote) { text = "⚠ Not uploaded yet — retrying"; warn = true; }
+            else if (driveSyncInFlight) text = "☁ Syncing…";
+            else if (!autoOn) { text = "☁ Auto-sync off" + (t ? " · last " + t : ""); warn = true; }
+            else if (driveBlockedByPrimary && driveDirtyStoreSet.size > 0) text = "☁ " + (drivePrimaryState.deviceName || "Another device") + " is primary — upload manually";
+            else if (driveAutoSyncPending || driveDirtyStoreSet.size > 0) text = "☁ Waiting to upload…";
+            else text = t ? "☁ Synced " + t : "☁ Not synced yet";
+            if (drivePrimaryIsMe()) text = "⭐ " + text; // v583: this device is the primary — star only, no extra text
+            el.classList.remove("hidden");
+            el.classList.toggle("warn", warn);
+            if (text !== driveStatusLineText) { driveStatusLineText = text; el.textContent = text; }
+        }
+        setInterval(() => { if (!document.hidden) updateDriveStatusLine(); }, 1000);
+        // Tap: retry now when something is waiting, otherwise show the full last-synced date and time.
+        function driveStatusLineTap() {
+            const waiting = !driveSyncInFlight && !driveSyncPauseState && (driveDirtyStoreSet.size > 0 || driveSyncErrorNote);
+            if (waiting) { kickDriveSyncIfDirty(); showToast("☁ Trying to upload now…"); }
+            else if (driveLastSyncedAtShown) { const d = new Date(driveLastSyncedAtShown); showToast(`☁ Last synced ${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` + (drivePrimaryIsMe() ? " · ⭐ primary device" : "")); }
+            updateDriveStatusLine();
+            refreshDrivePrimaryUI(); // v583: re-check who is primary (fixes a stale star if another device took over)
         }
 
         function updateDriveLastSyncedText(lastSyncedAt) {
             const el = document.getElementById("driveLastSyncedText");
             if (lastSyncedAt) driveLastSyncedAtShown = lastSyncedAt;
+            updateDriveStatusLine(); // v519
             if (!el) return;
             const note = driveSyncErrorNote ? "  " + driveSyncErrorNote : "";
             if (!lastSyncedAt) { el.textContent = "Not synced yet" + note; return; }
@@ -22765,10 +28770,13 @@
         // ---------------------------------------------------------------------------------
         const CLICK_ACTIONS = {
             openSidebar: () => openSidebar(),
+            driveStatusLineTap: () => driveStatusLineTap(), // v519
             closeSidebar: () => closeSidebar(),
             monthlyTrendBarTap: (el, e) => { e.stopPropagation(); showMonthlyTrendTooltip(e, el); },
             hideMonthlyTrendTooltip: () => hideMonthlyTrendTooltip(),
             toggleMonthlyTrendAutoScale: () => toggleMonthlyTrendAutoScale(),
+            toggleMonthlyTrendStyle: () => toggleMonthlyTrendStyle(),
+            monthlyTrendBalanceClick: (el) => navigateToSavingsPage(el.dataset.year, el.dataset.month),
             toggleMonthlyTrendTable: () => toggleMonthlyTrendTable(),
             navigateToNetWorthStatementPage: () => navigateToNetWorthStatementPage(),
             // v249: replaces navigateToNetWorthStatementPage as the net-worth card's own
@@ -22892,6 +28900,12 @@
             navigateToDashboardWidgetsPage: () => navigateToDashboardWidgetsPage(),
             navigateToMonthlyTrendPage: () => navigateToMonthlyTrendPage(),
             selectBgTheme: (el) => selectBgTheme(el),
+            selectAppFont: (el) => selectAppFont(el), // v577 (click map — the font buttons use data-click)
+            selectZhFont: (el) => selectZhFont(el), // v584 (same click map)
+            selectZhSize: (el) => selectZhSize(el), // v588
+            toggleZhPackMenu: () => toggleZhPackMenu(), // v594 (offline font copy: ⋯ menu, save now, remove)
+            zhPackSaveNow: (el) => zhPackSaveNow(el),
+            zhPackRemoveCopy: (el) => zhPackRemoveCopy(el),
             // v403: navigateToCompanionPage() has no data-click of its own anymore (Companion's
             // rail icon/page merged into Net Worth Card's) — it's still called directly from JS
             // by toggleCompanionSettingsFromDashboard()/toggleMonthlyTrendMascotSettingsFromDashboard()
@@ -22943,21 +28957,44 @@
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportLedgerCsv: () => exportLedgerCsv(),
             exportAccountsCsv: () => exportAccountsCsv(),
+            setAccountsViewMode: (el) => setAccountsViewMode(el), // v571
+            selectAccountsCardGroup: (el) => selectAccountsCardGroup(el), // v571
+            selectAccountCard: (el) => selectAccountCard(el.dataset.id, false), // v571
+            flipAccountCard: (el) => flipAccountCard(el), // v571
+            accountsCardAddEntry: (el) => accountsCardAddEntry(el), // v571
+            selectAccountsCardSubgroup: (el) => selectAccountsCardSubgroup(el), // v572
+            accountsCardCounterTap: () => accountsCardCounterTap(), // v572
+            accountsCardJump: (el) => accountsCardJump(el), // v572
+            accountsCardGoFirst: () => accountsCardGoFirst(), // v572
+            accountsCardStep: (el) => accountsCardStep(el), // v575
             exportInventoryCsv: () => exportInventoryCsv(),
             exportTotalSummaryCsv: () => exportTotalSummaryCsv(),
+            exportTagReportCsv: () => exportTagReportCsv(), // v555
             exportBackup: () => exportBackup(),
             exportBackupQuick: () => exportBackupQuick(),
             openImportInput: () => document.getElementById("importInput").click(),
+            openInsMergePicker: () => openInsMergePicker(),
+            exportInsuranceOnly: () => openInsExportSheet(),
+            insExportRun: () => insExportRun(),
+            insMergeConfirm: () => insMergeConfirm(),
             connectGoogleDrive: () => connectGoogleDrive(),
             disconnectGoogleDrive: () => disconnectGoogleDrive(),
             manualSyncGoogleDrive: (el) => manualSyncGoogleDrive(el),
             manualRestoreFromDrive: (el) => manualRestoreFromDrive(el),
+            makeThisDevicePrimary: () => makeThisDevicePrimary(),
+            allowAllDevicesToUpload: () => allowAllDevicesToUpload(),
+            cleanUpUnusedDriveImages: (el) => cleanUpUnusedDriveImages(el),
             resolveDriveSyncKeepLocal: () => resolveDriveSyncKeepLocal(),
             resolveDriveSyncUseRemote: () => resolveDriveSyncUseRemote(),
             openDriveSnapshotsModal: () => openDriveSnapshotsModal(),
+            restoreDriveSnapshot: (el) => restoreDriveSnapshot(el), // v591
+            deleteDriveSnapshot: (el) => deleteDriveSnapshot(el), // v591
             handleLedgerBackClick: () => handleLedgerBackClick(),
             navigateToWorkspace: () => navigateToWorkspace(),
             saveFxRates: () => saveFxRates(),
+            fxLockPreview: () => fxLockPreview(),
+            fxLockConfirm: () => fxLockConfirm(),
+            fxLockUndo: (el) => fxLockUndo(el),
             addMultiCurrencyRow: () => addMultiCurrencyRow(),
             addFdPlacementRow: () => addFdPlacementRow(),
             handleCreateAccountMobile: () => handleCreateAccountMobile(),
@@ -23062,6 +29099,9 @@
             deleteBudgetRecord: () => deleteBudgetRecord(),
             copyBudgetFromPreviousPeriod: () => copyBudgetFromPreviousPeriod(),
             openCategoryBudgetModal: () => openCategoryBudgetModal(),
+            addCategoryBudgetFor: (el) => openCategoryBudgetModal(el.dataset.cat), // v616
+            toggleBudgetPaceHelp: () => toggleBudgetPaceHelp(), // v616
+            toggleBudgetBreakdownAll: () => toggleBudgetBreakdownAll(), // v617
             editCategoryBudget: (el) => editCategoryBudget(el),
             handleSaveCategoryBudget: () => handleSaveCategoryBudget(),
             removeCategoryBudget: () => removeCategoryBudget(),
@@ -23078,8 +29118,12 @@
             navigateToInventoryPage: () => navigateToInventoryPage(),
             navigateToPlannedPaymentsPage: () => navigateToPlannedPaymentsPage(),
             inventorySetStatusFilter: (el) => inventorySetStatusFilter(el),
+            inventoryCategoryChip: (el) => inventoryCategoryChip(el), // v559
+            invNoop: () => {}, // v558: swallows clicks on the inline category picker so the row's own tap (open item) doesn't fire
             inventoryWarrantyStripTap: () => inventoryWarrantyStripTap(),
-            inventoryItemCardTap: (el) => openInventoryItemModal(el.dataset.id),
+            inventoryItemCardTap: (el) => openInventoryDetail(el.dataset.id), // v613: tap = read-only detail; Edit is inside
+            invDetailEdit: (el) => { const id = el.dataset.id; closeModalAndThen("inventoryDetailModal", () => openInventoryItemModal(id)); },
+            openInvDetailAttachment: (el) => { const a = invDetailAtts[parseInt(el.dataset.idx, 10)]; if (a) openAttachment(a, null); },
             openInventoryItemModalNew: () => openInventoryItemModal(null),
             addTxInvWarrantyRow: () => addWarrantyRow("txInvWarrantyRows", "txInvWr"),
             addInvWarrantyRow: () => addWarrantyRow("invWarrantyRows", "invWr"),
@@ -23087,34 +29131,77 @@
             handleSaveInventoryItem: () => handleSaveInventoryItem(),
             handleDeleteInventoryItem: () => handleDeleteInventoryItem(),
             removeExistingInvAttachment: (el) => removeExistingInvAttachment(el),
+            openInvFormAttachment: (el) => openInvFormAttachment(el),
             removeTempInvAttachment: (el) => removeTempInvAttachment(el),
             openInvAttachmentsBadge: (el, e) => openInvAttachmentsBadge(el, e),
             warrantyReminderItemTap: (el) => { navigateToInventoryPage(); setTimeout(() => openInventoryItemModal(el.dataset.id), 60); },
             // v418: REMINDERS
             navigateToRemindersPage: () => navigateToRemindersPage(),
+            revealAccountRef: (el) => revealAccountRef(el), // v615
+            toggleAccountsDormantFilter: () => toggleAccountsDormantFilter(), // v614
+            navigateToDormantAccounts: () => navigateToDormantAccounts(), // v614
             reminderSetStatusFilter: (el) => reminderSetStatusFilter(el),
             openReminderModalNew: () => openReminderModal(null),
             handleSaveReminder: () => handleSaveReminder(),
             handleDeleteReminderFromModal: () => handleDeleteReminderFromModal(),
             reminderRowTap: (el) => reminderRowTap(el),
+            // v537: TIMELINE
+            navigateToTimelinePage: () => navigateToTimelinePage(),
+            timelineSetType: (el) => timelineSetType(el),
+            timelineSetStyle: (el) => timelineSetStyle(el), // v621
+            timelineToggleNote: (el) => timelineToggleNote(el),
+            timelineEdit: (el) => timelineEdit(el),
+            timelineOpenLink: (el) => timelineOpenLink(el),
+            openTimelineModalNew: () => openTimelineModal(null),
+            handleSaveTimeline: () => handleSaveTimeline(),
+            timelineAddAmountRow: (el) => timelineAddAmountRow(el), // v539
+            timelineRemoveAmountRow: (el) => timelineRemoveAmountRow(el), // v539
+            handleDeleteTimeline: () => handleDeleteTimeline(),
             // v468: INSURANCE
             navigateToInsurancePage: () => navigateToInsurancePage(),
+            insuranceSetView: (el) => insuranceSetView(el), // v474
+            insSumToggle: (el) => { insSumOpen = (insSumOpen === el.dataset.k) ? null : el.dataset.k; insSumApplyOpen(true); }, // v514 (in place since v515)
+            openInsurancePrintSheet: () => openInsurancePrintSheet(), // v496
+            insurancePrintRun: () => insurancePrintRun(), // v496
+            insToggleReturnNote: (el) => { const w = el.closest(".ins-ret-wrap"); const n = w && w.querySelector(".ins-med-note"); if (n) n.classList.toggle("open"); }, // v487
+            insPeopleToggleAll: (el) => { const ds = [...document.querySelectorAll("#insuranceReport details.insp-kind, details.insp-kind")]; const open = ds.some(d => !d.open); ds.forEach(d => { d.open = open; }); el.textContent = open ? "Collapse all" : "Expand all"; }, // v520
+            insToggleMedNote: (el) => { const row = el.closest(".ins-kind-row"); const n = row && row.querySelector(".ins-med-note"); if (n) n.classList.toggle("open"); }, // v479
             insuranceSetStatusFilter: (el) => insuranceSetStatusFilter(el),
+            insuranceSetGroup: (el) => insuranceSetGroup(el), // v521
+            insuranceCycleGroup: () => insuranceCycleGroup(), // v522
+            insSumInfo: (el) => { const c = el.closest(".ins-sum-card"); const h = c && c.querySelector(".ins-sum-help"); const bar = document.querySelector("#insuranceSummary .ins-sum-helpbar"); if (!c || !h || !bar) return; const same = bar.dataset.k === c.dataset.k && bar.style.display !== "none"; bar.textContent = same ? "" : h.textContent; bar.dataset.k = c.dataset.k; bar.style.display = same ? "none" : "block"; }, // v521: one shared explanation strip under the cards (keeps the cards the same height)
             openInsuranceModalNew: () => openInsuranceModal(null),
             insurancePolicyTap: (el) => insurancePolicyTap(el),
             handleSaveInsurance: () => handleSaveInsurance(),
             handleDeleteInsurance: () => handleDeleteInsurance(),
             addInsCoverageRow: () => addInsCoverageRow(null),
+            addInsRiderRow: () => addInsRiderRow(null), // v472
+            toggleInsRefund: (el) => toggleInsRefund(el), // v473
             addInsPaymentRow: () => addInsPaymentRow(null, true),
+            addInsCashbackRow: () => addInsCashbackRow(null, true), // v510
+            insuranceRecordCashback: () => insuranceRecordCashback(), // v510
+            toggleInsParent,
+            itCfgAll: (el) => itCfgAll(el),
+            exportIncomeTaxCsv: () => exportIncomeTaxCsv(),
+            toggleSidebarGroup: (el) => toggleSidebarGroup(el),
             addInsSvRow: () => insAddSvRowForType(),
             addInsFundLine: (el) => addInsFundLine(el), // v471
             removeInsFundLine: (el) => removeInsFundLine(el),
             removeInsRow: (el) => removeInsRow(el),
+            insAgentFromNotes: () => insAgentFromNotes(), // v485
+            insJumpTo: (el) => insJumpTo(el), // v595
+            toggleInsHelp: (el) => toggleInsHelp(el), // v596
+            openInsAttachment: (el) => openInsAttachment(el), // v486
+            removeExistingInsAttachment: (el) => removeExistingInsAttachment(el),
+            removeTempInsAttachment: (el) => removeTempInsAttachment(el),
+            addInsSchedStep: (el) => addInsSchedStep(el), // v482 (v483: moved here from CHANGE_ACTIONS — buttons fire click, not change)
+            insSchedPasteFromNote: (el) => insSchedPasteFromNote(el), // v482 (v483: same fix)
             insuranceDetailEdit: () => insuranceDetailEdit(),
+            insuranceRecordSv: () => insuranceRecordSv(), // v599
             insuranceRecordPremium: () => insuranceRecordPremium(),
-            insuranceOpenPlanPicker: () => insuranceOpenPlanPicker(),
+            insuranceOpenPlanPicker: (el) => insuranceOpenPlanPicker(el), // v511: el.dataset.kind
             insurancePickPlan: (el) => insurancePickPlan(el),
-            insuranceUnlinkPlan: () => insuranceUnlinkPlan(),
+            insuranceUnlinkPlan: (el) => insuranceUnlinkPlan(el), // v511
             closeReminderActionsModal: () => closeReminderActionsModal(),
             editReminderFromActionsModal: () => editReminderFromActionsModal(),
             archiveReminderFromActionsModal: () => archiveReminderFromActionsModal(),
@@ -23126,11 +29213,14 @@
         };
 
         const CHANGE_ACTIONS = {
+            inventorySetCategory: (el) => inventorySetCategory(el), // v558
             resetLedgerPageAndRender: () => { ledgerRenderLimit = LEDGER_PAGE_SIZE; renderApp(); },
             renderTagReportPage: () => renderTagReportPage(),
             renderAttachmentReviewPage: () => renderAttachmentReviewPage(),
             toggleBudgetCarryover: (el) => toggleBudgetCarryover(el),
             importBackup: (el, e) => importBackup(e),
+            insMergeFileChosen: (el, e) => insMergeFileChosen(e),
+            insMergeFilterChanged: (el) => insMergeFilterChanged(el),
             handleExportEncryptToggleChange: () => handleExportEncryptToggleChange(),
             handleDriveAutoSyncToggleChange: () => handleDriveAutoSyncToggleChange(),
             handleBiometricToggleChange: () => handleBiometricToggleChange(),
@@ -23143,6 +29233,9 @@
             handleAccLogoFileSelected: (el) => handleAccLogoFileSelected(el),
             toggleTxPlannedRepeatFields: () => toggleTxPlannedRepeatFields(),
             toggleReminderRepeatFields: () => toggleReminderRepeatFields(),
+            timelineRender: () => renderTimelinePage(), // v537
+            timelinePrecisionChange: () => timelinePrecisionChange(), // v537
+            timelineRefCurChange: () => timelineRefCurChange(), // v539
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             handleAutoLockChange: () => handleAutoLockChange(),
@@ -23154,11 +29247,14 @@
             resetSavingsPageAndRender: () => renderSavingsStatement(),
             savingsMonthSelectChange: (el) => savingsMonthSelectChange(el),
             toggleTxManualFx: () => toggleTxManualFx(),
+            fxLockSelectionChanged: () => fxLockSelectionChanged(),
+            fxLockInvalidate: () => fxLockInvalidate(),
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
             renderSpendingBreakdownPage: () => renderSpendingBreakdownPage(),
             renderIncomeBreakdownPage: () => renderIncomeBreakdownPage(),
             renderPortfolioReportPage: () => renderPortfolioReportPage(),
             renderCurrencyReportPage: () => renderCurrencyReportPage(),
+            itCfgChange: () => itCfgChange(),
             handleCurrencyReportSecondaryChange: () => handleCurrencyReportSecondaryChange(),
             renderTotalSummaryPage: () => renderTotalSummaryPage(),
             toggleTxTransferFx: () => toggleTxTransferFx(),
@@ -23171,6 +29267,7 @@
             handlePinnedAccountSlotChange: (el) => handlePinnedAccountSlotChange(el),
             ledgerYearSelectChange: () => ledgerYearSelectChange(),
             handleAccGroupChange: () => handleAccGroupChange(),
+            toggleAccDormantFields: () => toggleAccDormantFields(), // v614
             toggleRedrawFacilityFields: () => toggleRedrawFacilityFields(),
             toggleLeaseFields: () => toggleLeaseFields(),
             handleFundTxTypeChange: () => handleFundTxTypeChange(),
@@ -23192,8 +29289,11 @@
             insSvTotalChange: (el) => insSvTotalChange(el), // v469
             insSvPartChange: (el) => insSvPartChange(el),
             insTypeChanged: () => updateInsSvAddUi(), // v471
+            insCovKindChange: (el) => insCovKindChange(el), // v472
+            insBonusToggle: () => insBonusToggle(), // v473
             insRecalcPaymentTotal: () => insRecalcPaymentTotal(),
             handleInvAttachmentsSelected: (el, e) => handleInvAttachmentsSelected(e),
+            handleInsAttachmentsSelected: (el, e) => handleInsAttachmentsSelected(e), // v486
             recalcWarrantyRowEnd: (el) => recalcWarrantyRowEnd(el),
         };
 
@@ -23201,6 +29301,8 @@
             recalcClaimSettlePreview: () => recalcClaimSettlePreview(),
             recalcTxFdMaturity: () => { recalcTxFdMaturity(); syncTransferFxOnAmountChange(); recalcTxSplitTotal(); },
             insRecalcPaymentTotal: () => insRecalcPaymentTotal(), // v468
+            insRecalcCashbackTotal: () => insRecalcCashbackTotal(), // v510
+            insAgentMoveRefresh: () => insAgentMoveRefresh(), // v485
             insSvRowInput: (el) => insSvRowInput(el), // v469
             insSvTotalInput: (el) => insSvTotalInput(el),
             insFundLineInput: (el) => insFundLineInput(el), // v471
@@ -23209,11 +29311,14 @@
             recalcResolveFdMaturity: () => recalcResolveFdMaturity(),
             recalcFdOpeningRowMaturity: (el) => recalcFdOpeningRowMaturity(el.dataset.rowId),
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
+            fxLockInvalidate: () => fxLockInvalidate(),
             recalcTransferFxFromRate: () => recalcTransferFxFromRate(),
             recalcTransferFxFromDestAmount: () => recalcTransferFxFromDestAmount(),
             recalcFundTxTotal: () => recalcFundTxTotal(),
             recalcFundTxPriceFromTotal: () => recalcFundTxPriceFromTotal(),
             handleNavPriceInput: (el) => handleNavPriceInput(el),
+            timelineRender: () => renderTimelinePage(), // v537
+            timelineNoteInput: () => timelineNoteInput(), // v539
             recalcTxSplitTotal: () => recalcTxSplitTotal(),
             recalcTplSplitTotal: () => recalcTplSplitTotal(),
             recalcSalaryPreview: () => recalcSalaryPreview(),

@@ -11,6 +11,7 @@ ledger.js       ← all app logic (external file — see CSP notes in index.html
 sw.js           ← Service Worker: offline caching (CACHE_NAME / ASSETS_TO_CACHE)
 manifest.json   ← Web App Manifest (installable as a PWA)
 icon-192.png / icon-512.png
+privacy.html     ← privacy-policy page (v620), linked from the Google OAuth consent screen
 lib/pdfjs-6.4.299/ ← vendored pdf.js 6.4.299: pdf.min.mjs + pdf.worker.min.mjs and
                   wasm/ (its image decoders: .wasm + plain-JS *_nowasm_fallback.js),
                   used by the transaction-attachment PDF viewer added in v121 —
@@ -3662,3 +3663,996 @@ For a policy whose Type is **Investment-linked**, "＋ Add fund value" creates a
 - Not in this version: pulling the latest NAV from the Funds page (units × current price as a live estimate).
 
 - `APP_VERSION` / `CACHE_NAME` → v471.
+
+## v472: Insurance — preset coverage types, coverage expiry, medical limits, riders
+
+- **Coverage(s) in this policy**: each row is a preset type — Life (Whole Life), Term Life, Health / Medical, Critical Illness, Personal Accident, Car, Home / Fire, Travel, Other (free-text name, e.g. TPD) — plus an optional **Sum insured** and an optional **Coverage expiry** for a coverage that ends on a different date from the policy. Because the type is a preset rather than free text, per-person totals by type (life cover, medical limits…) can be added later.
+- **Health / Medical** rows also take **Annual limit**, **Lifetime limit** and **Lifetime remaining** (all optional; sum insured too). Remaining is copied from the insurer's statement — the app can't know what has been claimed. The policy detail shows each coverage as a card: type chip + sum insured, then `ANNUAL LIMIT` and `LIFETIME LIMIT REMAINING / total`, then `Until …` / `Expired …`.
+- **Riders**: name + optional start and expiry date; shown on the policy detail (`Until …` / `Ended …`). A rider that has its own sum insured is best also entered as a coverage row so the sum counts.
+- Policy **Type** gains Car, Home / Fire and Travel.
+- Coverage records: `{ id, kind, label (only for "other"), sumAssured, expiry, annualLimit, lifetimeLimit, lifetimeRemaining }`; policy gains `riders: [{id, name, startDate, endDate}]`. A coverage saved by v468–v471 (free-text label + sum, no `kind`) opens as **Other** with its label as the name, and keeps showing under that name. Nothing is rewritten until the policy is saved again.
+
+- `APP_VERSION` / `CACHE_NAME` → v472.
+
+## v473: Insurance — paid-by-bonus flag, refunds, sort by insurer, card shows notes
+
+- **"Premium currently paid via Accumulated Cash Bonus"** (checkbox + "Since" date) on a policy: the insurer deducts the premium from the accumulated dividend, so there is no cash payment. A yellow `💰 Premium currently paid via Accumulated Cash Bonus · since …` strip appears on the policy card and the detail sheet, and such a policy is **left out of the "Yearly premium" figure** (that figure is the cash outlay). New fields `paidByBonus`, `paidByBonusSince`. Recorded premiums still count in "Premiums paid".
+- **Policy card shows the Notes** (first two lines, e.g. the agent's name and phone) under the bonus strip; the detail sheet shows the notes at the top instead of at the bottom. The Notes box in the editor is restyled (rounded, padded, the app's focus colour) and relabelled.
+- **List order: Insurer → Type → Plan name** (blank insurer last; types in the order of the Type list, so Life comes before Medical). It used to be insured person → plan name.
+- **No "No surrender value yet" text.** A policy with no surrender value entry shows nothing for it on the card; the detail sheet leaves out the Surrender value column and the Surrender value history section too (term, medical, motor… never have one). Add one from Edit when there is one.
+- **Refunds.** Earlier payments (before the ledger): each row has a **↩** button — tap it for a refund (overpaid premium, premium returned…). It is stored as a **negative amount** (`premiumHistory[].amount < 0`), shown green with a leading `+` in the payment list, and subtracted from every total; the editor's total reads `23 payments + 1 refund · total …`. Continuing a row (`＋ Add payment`) copies the last real payment, not a refund. In the **ledger**, a refund made with ⋮ → Refund on a premium (an income entry with `isRefund` and `refundOf`/`refundOfIds`) is subtracted from the policy that the refunded expense is linked to — the refund itself carries no `policyId`.
+
+- `APP_VERSION` / `CACHE_NAME` → v473.
+
+## v474: Insurance — reports by person and for car / home / travel; sidebar remembers Financial Accounts; coloured member tag
+
+- **Two reports**, as tabs at the top of the Insurance page (**Policies | By person | Car · Home · Travel**). Only IN-FORCE policies count.
+  - **By person:** for each insured person (member colour dot + name), the Sum insured of every coverage row of their policies added up per type — Life, Term Life, Health / Medical, Critical Illness, Personal Accident, Other — in the base currency (other currencies converted at the day's rates), with the policies behind each total listed underneath; Health / Medical rows also add up the annual limit and lifetime limit / remaining. Header shows the person's policy count and **cash** premium per year (policies paid from accumulated bonus are left out, as in the summary). An **Everyone** card on top when there is more than one person. A policy with no insured person goes under "Insured person not set"; in-force policies that have no coverage rows are listed in a ⚠️ line (tap one to open it) because they are missing from the totals. A footnote reminds that medical limits of different plans overlap.
+  - **Car · Home · Travel:** policies of those three types are about things or a trip, so they are left out of the per-person report and get their own: one section per type with sum insured and yearly premium, each policy showing insurer / policy no. / owner or traveller (coloured tag), sum insured, yearly premium and **end date with days left** (amber within 60 days, red ⚠️ once expired), nearest end date first.
+- **Sidebar "Financial Accounts" remembers expand / collapse** per device (`localStorage` key `ledger.sidebarAccountShortcutsExpanded`, same pattern as the other UI preferences) — closing the app or locking and logging back in used to reset it to expanded. No saved value → expanded, as before.
+- **Policy card shows the insured person as the coloured "● Name" tag** used on the Accounts page (member's own colour) instead of plain grey text.
+- The person box in the policy editor is relabelled by Type: **Owner (optional)** for Car / Home / Fire, **Traveller (optional)** for Travel, **Insured person** otherwise — a fire policy on a warehouse has no insured person, and leaving it empty is correct.
+
+- `APP_VERSION` / `CACHE_NAME` → v474.
+
+## v475: Insurance — Savings / investment policies comparison
+
+- **The all-policy "Premiums paid" no longer sits next to Surrender value on its own.** It mixes protection cover (medical, PA, fire, travel — premiums spent, never returned) with cash-value plans, so it is relabelled **Premiums paid (all)** and stays as the cost-of-insurance view.
+- **New "Savings / investment policies" panel** under the summary on Policies: only policies that have a surrender value (the SV entry is the filter — no new Type field), showing **Paid to SV date**, **Surrender value** (net of any policy loan, as before), **Net** (green gain / red loss) and **SV as % of premiums paid**, with **"SV as of <date>"** (a range when policies differ; ⚠️ if the oldest is over a year old). Follows the In force / Ended / All filter; hidden when no policy in view has an SV.
+- **Premiums are counted only up to each policy's latest SV date** (earlier-payments rows + linked ledger expenses, refunds netted), so a March SV is not compared against premiums paid since. The per-policy "Paid" on each card is unchanged.
+- Net is a rough guide, not an investment return (riders, participating bonuses and ILP fund prices move). IRR / break-even year would need payment-date history per policy — not done.
+- `APP_VERSION` / `CACHE_NAME` → v475.
+
+## v476: Insurance — primary tabs and status filter no longer look alike
+
+- **Policies | By person | Car · Home · Travel** are now **underline tabs** (active one gets an indigo underline, thin divider below) — they are pages.
+- **In force | Ended | All** is now a row of small left-aligned **pills** under a "Show" label (active pill = light indigo tint + indigo border, not a solid fill), and sits **above** the Yearly premium / Savings totals because it changes them. Hidden on the two report tabs as before.
+- Styling is scoped to new `.ins-tabs` / `.ins-pills` modifier classes; the shared `.nav-view-toggle` look on other pages (Budget, Inventory, Reminders, NAV update…) is unchanged. No logic change — the same buttons and handlers.
+- `APP_VERSION` / `CACHE_NAME` → v476.
+
+## v477: Insurance — summary de-duplicated, clearer SV date label
+
+- **Top summary row is now Yearly premium + Premiums paid (all) only.** The Surrender value cell was an exact duplicate of the one in the Savings / investment panel and sat beside an all-policy paid figure it can't be compared with; it now appears once, in the Savings panel.
+- **SV date label reworded:** "Surrender values as of <date>" when all policies share a date, otherwise "Surrender values dated <oldest> to <newest> (varies by policy)" (per-policy dates stay on each card). The ⚠️ is now its own red line — "Oldest surrender value is over a year old — update it from the latest statement" — shown when the oldest SV date is more than 365 days back.
+- `APP_VERSION` / `CACHE_NAME` → v477.
+
+## v478: Insurance — policy cards show the sum insured
+
+- **New "Sum insured" line on each policy card** (under the insurer / member tag, above "Next premium"): e.g. `Sum insured Life RM100,000 · Critical Illness RM50,000`. It reads the coverage rows already entered in the policy editor — no new fields.
+- Rows of the same type are **merged (summed)**; **at most 2 items** are shown, the rest as "+N more" (the detail sheet has the full list). Figures are in the **policy's own currency**, not converted, and are **never added into one grand total** across different cover types.
+- **Health / Medical shows its annual limit** (else lifetime limit, else sum insured) — labelled "Health/Medical annual limit …". Home / Fire, Car and Travel show their sum insured the same way.
+- An **in-force policy with no amount entered** shows a muted "Sum insured not set ⚠️"; ended policies show nothing in that case.
+- `APP_VERSION` / `CACHE_NAME` → v478.
+
+## v479: Insurance — By person report tidy-up
+
+- **Per-policy lines are now a list**, one policy per line (name left, amount right, thin left rule) instead of one dot-separated paragraph; first 3 shown, the rest under a tap-to-open **"+N more"** (`<details>`, no JS).
+- **Rider tag:** a coverage that isn't the policy's own main cover (e.g. a Personal Accident rider on a life plan) is marked "· rider" instead of reading like a separate product. Custom "Other" coverages still show their name (e.g. Personal Liability).
+- **Everyone card only from 3 people up** (with two it just repeated them).
+- **Medical note moved into an (i) button** next to the Health/Medical heading (tap to show / hide, works on phones); the footer keeps only the "In-force policies only / /yr" note.
+- **Tab / pill outline fixed:** the dark box on the tab or pill you just clicked is gone (underline / tint already marks it); keyboard focus still shows a ring. Scoped to `.ins-tabs` / `.ins-pills`.
+- **Blank gap above the reports fixed:** the empty Policies list kept its 90px bottom padding in report view; it is now 0 there (90px restored on Policies).
+- `APP_VERSION` / `CACHE_NAME` → v479.
+
+## v480: Insurance — By person report, second polish pass
+
+- **Totals stand out:** the per-policy amounts are now regular-weight muted text; only the category total is bold and dark.
+- **"rider" is a small pill** (light indigo tint, rounded, uppercase) instead of plain "· rider" text.
+- **Rows sorted biggest first, own-cover before riders**, so the rows folded under the toggle are the small ones. The toggle reads **"Show N more ▾" / "Show less ▴"** with a larger tap area.
+- **Single-policy categories no longer repeat the amount** — the heading carries it, the row just names the policy.
+- **Health / Medical:** heading amount captioned "sum insured"; the limits line is muted and reads "Lifetime limit remaining … / …" (was bold "Lifetime remaining"), so it no longer looks like a second total. (Policy cards on the Policies tab show the annual limit for medical — a different number from this sum.)
+- `APP_VERSION` / `CACHE_NAME` → v480.
+
+## v481: Insurance — Policies tab polish
+
+- **Summary numbers (Yearly premium, Premiums paid (all), the Savings panel) use the app's normal sans-serif with tabular digits** instead of the handwriting font, so six-figure amounts line up and compare cleanly. Insurance page only; other pages keep Kalam.
+- **Right side of a card with a surrender value:** `Paid` is regular weight and muted; **`SV` is bold with a small "% of paid" chip** (green at/above premiums paid up to the SV date, neutral indigo below — not red, since a young policy is normally below); the SV date is its own muted line, "as of <date>" (red + ⚠️ when over a year old). Cards without an SV keep a single Paid line.
+- **"Sum insured" is one cover per row** (name, then its amount right after it) under a small "SUM INSURED" label — up to 4 rows, then "+N more" — instead of one wrapping sentence that left an amount orphaned on its own line.
+- `APP_VERSION` / `CACHE_NAME` → v481.
+
+## v482: Insurance — reducing-cover schedule (replaces schedules typed into Notes)
+
+- **New optional "↘ Reducing cover schedule" inside each coverage row** of the policy editor: date + sum insured per step (`schedule: [{date, amount}]` on the coverage record; the row's own Sum insured is the starting amount). **＋ Add step** continues from the last one (same day next year, same amount).
+- **"Paste from note"** reads lines like `12/11/2026 - 497,587` (dd/mm/yyyy) from the policy's Notes, shows a preview, adds the steps on confirm (skipping dates already there), then offers to remove those lines from the Notes.
+- **Current sum insured follows the schedule:** the latest step dated on or before today (before the first step, the row's own Sum insured). Used by the policy card, the By person report and its totals, and the detail sheet — so Term Life no longer counts the original, pre-reduction amount.
+- **Detail sheet:** a collapsed accordion under the coverage with a small table (Date | Sum insured | Change); the step in force is highlighted ("now"), the next one flagged ("next").
+- **Policy card:** one muted line "↘ Reducing · next RM… from <date>" (no accordion on the card itself — the whole card is a tap target that opens the sheet, so a nested toggle would fight with it).
+- Nothing is calculated: type the steps from the insurer's schedule. Existing policies are unaffected until a schedule is added.
+- `APP_VERSION` / `CACHE_NAME` → v482.
+
+
+## v483: Fix — reducing-cover "Add step" / "Paste from note" buttons did nothing
+- Cause: in v482 `addInsSchedStep` and `insSchedPasteFromNote` were registered in `CHANGE_ACTIONS`, but the buttons use `data-click`, which is dispatched from `CLICK_ACTIONS`. Moved both entries to `CLICK_ACTIONS`.
+- `APP_VERSION` / `CACHE_NAME` → v483.
+
+## v484: Insurance list — phone layout
+- Savings / investment panel: on screens ≤600px the three figures (Paid to SV date / Surrender value / Net) stack as label-left, value-right rows; the "…" truncation is gone everywhere (values now wrap instead of ellipsis).
+- Policy cards on phones: Paid and SV (with the % chip and "as of" date) move to their own full-width row below the title/coverage, so plan names and sum insured use the full card width. Desktop layout unchanged.
+- `APP_VERSION` / `CACHE_NAME` → v484.
+
+## v485: Insurance — separate Agent name / Agent phone-email fields
+- New policy fields `agentName`, `agentContact` (stored on the policy record, so backups/Drive sync carry them automatically; no DB version change).
+- Edit Policy: two rows under Policy number. If both are empty and the Notes contain a line starting with "Agent", a "Move the 'Agent …' line from Notes here" button appears: it splits name vs. contact (at the first digit / email), asks to confirm, fills the fields and removes that line from Notes.
+- Policy detail sheet: an Agent box above the Notes; phone numbers in the contact text are tap-to-call (`tel:`) links.
+- Policy list card: a "🧑‍💼 name · contact" line above the Notes (plain text — the card itself is tappable).
+- Notes placeholder no longer suggests putting agent details there. `APP_VERSION` / `CACHE_NAME` → v485.
+
+## v486: Insurance — policy attachments (PDF + images)
+- Edit Policy: new "Attachments" section above Notes — 📷 Camera and 📎 Add Files (images are re-encoded as JPEG at max 1600px / quality 0.8 with a 96px thumb; PDFs stored as-is, >8 MB asks first). Files are only written on Save; each can be removed with ✕ in the form.
+- Storage: same as transaction / planned-payment / inventory attachments — the policy holds refs `attachments: [{id,name,mime,thumb,size}]`, the bytes live in `STORES.ATTACHMENTS`, so export/import and Drive sync already carry them (no DB version change).
+- Policy detail sheet: "Attachments (N)" rows under the notes; tap opens the shared attachment viewer (images / PDF via pdf.js, Download button). The viewer's Delete button is hidden here — remove files from Edit.
+- List card: "📎 N attachments" line. Removing a file in Edit (after Save) or deleting the policy deletes the blobs from `STORES.ATTACHMENTS`.
+- `APP_VERSION` / `CACHE_NAME` → v486.
+
+## v487: Insurance detail — clearer "Premiums paid / Surrender value" box
+- "Before ledger … · In ledger …" is gone. The line now only appears when BOTH parts have an amount, in plain words: "RM… entered manually (earlier years) · RM… recorded in the ledger" (`insPaidBreakdownHtml()`).
+- Surrender-value make-up (Guaranteed / Dividend / Terminal bonus, plus "Other" if the parts don't add up) is now a stacked bar with a legend (colour swatch + % + amount) instead of one long sentence (`insSvBreakdownHtml()`); uses `var(--primary)` at different opacities so every theme works; the bar has an aria-label. Unit-linked (fund) policies keep the Fund value line and get no bar. A note says the terminal bonus isn't guaranteed.
+- The payback line is bold: "149.5% of premiums paid" (green at/above 100%, primary colour below), followed by "annualised return ≈ x.x%" with an (i) explanation (`insPayoutLineHtml()`).
+- Annualised return = XIRR over every premium dated on/before the latest surrender-value date (typed-in history + ledger rows, refunds as money back) vs the surrender value (net of policy loan) on that date (`insAnnualisedReturn()`, `insXirr()`, bisection). Hidden when: fewer than 2 dated payments, span under 1 year, no surrender value, or the typed-in earlier payments don't match the insurer's statement total.
+- `APP_VERSION` / `CACHE_NAME` → v487.
+
+## v488: Net Worth switch for insurance surrender value
+- New switch in Setting > Net Worth Card > INSURANCE: "Count surrender value in Net Worth" (`includeInsuranceSvInNetWorth`, SETTINGS store, **off by default** — with it off every Net Worth figure is exactly what it was in v487). Saved in the SETTINGS store, so it rides along with Backup & Restore and Drive sync.
+- When on, every policy that is still in force (In force / Paid-up) and has a surrender value on file adds its LATEST surrender value minus any policy loan outstanding (the "net SV" the policy detail shows), converted to the base currency, to Net Worth as a financial asset. Lapsed / Surrendered / Matured policies and policies with no surrender value (term, medical, car, home, travel) are left out. One helper does all of it: `insSvNetWorth(scope)`.
+- Where it shows up: Dashboard Portfolio Net Worth (+ the Financial Assets / Real Estate split and the secondary-currency badge), Net Worth Statement (one extra "Insurance (surrender value)" row under What I Have — not tappable — and in the CSV export), Net Worth by Member rows and a member's own page (policy counts under its insured member; a policy with no / a deleted member goes to "Unassigned"; joint groups get none), Financial Assets vs Real Estate report, Net Worth by Currency report (added to the policy's own currency; follows the member filter).
+- `APP_VERSION` / `CACHE_NAME` → v488.
+
+## v489: Insurance surrender value switch also on the Dashboard card
+- A small "🛡️ Insurance SV" on/off chip now sits on the Portfolio Net Worth card, so the figure can be compared with and without insurance in one tap. It is the same setting as Setting > Net Worth Card > Insurance (`includeInsuranceSvInNetWorth`); both checkboxes stay in step (`updateInsuranceSvChip()`).
+- Hovering (or keyboard-focusing) the chip shows a tooltip: what the switch counts, and how many policies are involved. The tooltip never shows an amount, because it is plain text and would show through Privacy Mode.
+- The chip is hidden when no in-force policy has a surrender value. `insSvNetWorth(scope, ignoreToggle)` gained the `ignoreToggle` argument for this.
+- `APP_VERSION` / `CACHE_NAME` → v489.
+
+## v490: Dashboard Insurance SV switch — hover tooltip removed
+- The tooltip from v489 is gone: on a PC it covered the Financial Assets amount, which is exactly what you look at when switching On/Off to compare. The description is in Setting > Net Worth Card > Insurance. The chip itself (tap to switch, auto-hidden when no policy has a surrender value) is unchanged.
+- `APP_VERSION` / `CACHE_NAME` → v490.
+
+## v491: Insurance premium history — "Paid by parent" tag and parent / you split
+- Each row in a policy's premium history (Premiums paid before this ledger) has a small **P** button: on = that premium was paid by a parent. A new row copies the previous row's tag, so a yearly premium is "＋ Add payment" (next year, same amount, same tag). Stored as `paidBy: "parent"` on the row; untagged rows and linked ledger expenses count as paid by the ledger owner.
+- Policy detail > Premiums paid: when any row is tagged, a small box shows **Paid by parent** and **Paid by you** (they add up to the combined total). Payback % and annualised return still use the combined total. The box also warns if the typed-in history does not match the insurer's total paid.
+- List cards unchanged. `computePolicyFigures` gained `parentTotal`, `selfTotal`, `hasParentSplit`; `insPaidBreakdownHtml(f, cur, p)`; new action `toggleInsParent`.
+- `APP_VERSION` / `CACHE_NAME` -> v491.
+
+## v492: New report — Income after Tax (standalone)
+- Sidebar > Income after Tax (`page-incometax`). Total income since the first transaction (or a From date) less tax paid, per year plus Total, with Income / Tax / After tax / Tax %.
+- Own category choices: tick the income categories to count and the expense categories that are tax (stored in the setting `incomeAfterTaxCfg`, included in backups). Until set up, all income categories count and expense categories with "tax" in the name are pre-ticked. Tax refunds (income + isRefund in a ticked tax category) reduce tax paid.
+- Nothing else reads this setting, and it ignores the "Exclude from Net Savings Report" flag, so Net Savings Statement and every other report are unchanged. Base currency only.
+- `APP_VERSION` / `CACHE_NAME` -> v492.
+
+## v493: Income after Tax — Export to CSV
+- 📤 button in the page header. The file has Year / Income / Tax / After tax / Tax % per year plus Total, then the From date and the income and tax categories that were counted, and the export date, so the file records what it included. Re-renders first, so it always matches the page.
+- `APP_VERSION` / `CACHE_NAME` -> v493.
+
+## v494: Sidebar regrouped, Reports in collapsible groups
+- Overview now holds only Dashboard, Financial Accounts, Transactions. New **Manage** section: Inventory, Planned Payments, Reminders, Insurance, Daily NAV Update (moved out of Overview; same action).
+- Reports split into three collapsible groups: **Cash flow** (Total Bill Summary, Monthly Trend, Net Savings Statement, Income after Tax, Budget), **Spending & income** (Spending Breakdown, Income Breakdown, Spending by Tag), **Net worth & assets** (Net Worth Statement, Net Worth by Currency, Financial Assets vs Real Estate, Unit Trust Portfolio).
+- Open/closed choice is saved per device (`localStorage` key `sidebarGroupsOpen`, default all open; not in backups). The group containing the current page is shown while the drawer is open without changing the saved choice. New: `toggleSidebarGroup`, `applySidebarGroups` (called from `updateSidebarActiveState`).
+- Income after Tax icon changed from "$" to a percent mark.
+- `APP_VERSION` / `CACHE_NAME` -> v494.
+
+
+## v495: Insurance tabs no longer overlap
+- **Policies** lists life / medical / other policies only (no car, home or travel). Yearly premium and Premiums paid cover just that list, with a one-line scope note under them ("Premiums paid (all)" -> "Premiums paid").
+- **Car · Home · Travel** now follows the In force / Ended / All filter. Ended policies are dimmed with their status and are left out of the section totals.
+- **By person** unchanged (in-force cover totals, no filter).
+- Display only: `insurance` store, backup/import, Drive sync, net-worth SV and the transaction policy picker are untouched; `DB_VERSION` unchanged.
+- `APP_VERSION` / `CACHE_NAME` -> v495.
+
+## v496: Insurance print report
+- New 🖨️ button in the Insurance header (the floating print button on this page opens the same thing). It opens an options sheet: **In-force only / All incl. ended**, **a detail block for each policy**, **policy numbers & agent contacts** (untick before sharing). The browser's print dialog then opens (Save as PDF to keep a copy).
+- The report is built from the data (`buildInsuranceReportHtml()`), not copied from the screen, so it does not depend on the open tab. Landscape A4 (named `@page insr`), fixed print colours, plain font, header row repeats on each page.
+- Sections: Summary (policies, yearly premium, premiums paid, savings/investment SV panel) → Needs attention (overdue / due within 30 days premiums, policies ended or ending within 60 days, surrender values over a year old, sum insured not set) → Cover by person → Policy register (life / medical / other) → Car, home & travel → Agents → optional per-policy details (covers incl. reducing schedule, latest 12 premium payments, surrender-value history).
+- New: `openInsurancePrintSheet`, `insurancePrintRun`, `printInsuranceReport`, `buildInsuranceReportHtml`, `insPrintCoverLines`; `#insurancePrintModal`, `#insurancePrintReport` (hidden on screen; shown only while `body.ins-printing`). `printCurrentApp()` hands the Insurance page over to the sheet.
+- No data or DB change. `APP_VERSION` / `CACHE_NAME` -> v496.
+
+## v497: Insurance report grouped by insured
+- The Policy register (and the Car, home & travel table) is grouped by insured person: a heading row per person, that person's policies, a Subtotal row (yearly premium in force, paid to date), then the grand Total. People appear in the usual member order, "Insured person not set" last. The Insured column is gone (the heading says it). With only one group and no person set, no headings are drawn.
+- The optional per-policy detail blocks follow the same person order.
+- Print layout only; no data change. `APP_VERSION` / `CACHE_NAME` -> v497.
+
+## v498: Insurance - merge policies from another ledger's backup
+- For the two-ledger setup (a second ledger that holds only insurance policies, e.g. ones the parents pay for): **📥** in the Insurance header, or **🛡️ Merge insurance only** on Backup & Restore. Pick the other ledger's backup file (encrypted files ask for their passcode as usual).
+- It **only adds policies**. Nothing is cleared or replaced (unlike Import JSON); accounts, transactions, categories, planned payments and settings in the file are ignored. Policy attachments travel with their policy. The premium history rows keep their "paid by parent" tags.
+- Preview sheet: each policy is marked **New** (ticked), **Already in this ledger** (same id; locked), **newer version in the file** (unticked; ticking overwrites that policy) or **same policy number under another id** (unticked, possible duplicate). The insured person is mapped per name: an existing member, create it here, or Not set (defaults to a same-name match, else create).
+- Not carried over: ledger transactions and planned payments linked to the policy (they belong to the other ledger), so "Next premium" is blank until a planned payment is linked here.
+- Drive auto-sync is not paused during the merge, so the merged policies sync like any other edit. No DB change (`DB_VERSION` unchanged). `APP_VERSION` / `CACHE_NAME` -> v498.
+
+## v499: Insurance - "Export insurance only" and a per-person filter when merging
+- **📤** in the Insurance header (and **🛡️ Export insurance only** on Backup & Restore) saves a small file with just the policies, the insured members they point at and the policies' own attachments. It follows the Backup & Restore "Encrypt this backup export" toggle (encrypted by default). It has no accounts/transactions, so **Import JSON refuses it before changing anything**; it is read only by **Merge insurance only**.
+- The merge preview has a **SHOW POLICIES OF** filter (All people / each insured person / Not set) when the file covers more than one group. Only the policies shown are imported, so one child's policies can be merged without the other children's. Ticks and the insured-person choices survive changing the filter. The insured-person mapping lists only the people in the policies currently shown.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v499.
+
+## v500: Leave a policy out of Net Worth; export turns ledger payments into "paid by parent" history
+- **Policy form: "Leave out of my Net Worth"** (`excludeFromNetWorth`). `insSvNetWorth()` skips such a policy, so its surrender value is not counted in the Dashboard Net Worth, the Net Worth Statement, Net Worth by Member / a member's own page, Financial Assets vs Real Estate or Net Worth by Currency, nor in the Dashboard chip. Card shows "🚫 not in Net Worth". The Insurance page's own Savings comparison is unchanged. Merge clears the flag, so a policy is counted normally once it lands in the receiving ledger.
+- **Export insurance only** now opens an options sheet: tick whose policies go in (per insured person, so e.g. your own stay out), and (default on) **add payments recorded in this ledger as "paid by parent" history rows** in the file. Premium expenses linked to a policy (`policyId`) become rows (amount in the policy currency at the current rate; refunds negative; note "Payment (from ledger)"), and `historyCutoff` in the file moves to the latest such payment so payments recorded later in the receiving ledger are not flagged as duplicates. This ledger is not changed. Planned payments are not exported.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v500.
+
+## v501: Export insurance only - "Mark all earlier premium rows as paid by parent"
+- New option on the export sheet (on by default while any typed-in premium row is not yet tagged P): every row of the exported policies' premium history gets `paidBy: "parent"` in the FILE. This ledger is not changed. Untick it if some rows were paid by the child. Rows converted from ledger payments are tagged either way. The toast reports how many rows were tagged.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v501.
+
+## v502: Riders shown on the policy card and in Insurance > By person
+- A policy's **Riders** (the name + "Until" date entered in the policy form, e.g. a waiver-of-premium rider) used to appear only in the policy's detail sheet. They now also show on the **policy card** (a "Riders (N)" block under Sum insured: max 2, then "+N more"; a long name clamps to 2 lines; the until-date turns red "Ended …" once past) and in **By person**, as a "🧩 Riders" row under each insured person (rider name, then the policy it belongs to + until-date; first 3, then "Show N more").
+- Riders have no sum insured of their own, so they are listed separately and do not change any coverage totals. The By person "Everyone" card is unchanged.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v502.
+
+## v503: Insurance > By person - "Everyone" card removed
+- The "👪 Everyone" household-total card at the top of By person is gone, so the first person's card is now visible straight away. Its summed sums insured were not what any one person is covered for (medical limits overlap, "Other" mixes liability/property cover). Each person's own card is unchanged.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v503.
+
+## v504: Insurance printable report - "Everyone" block removed
+- The "👪 Everyone" household-total table is also gone from the printable Insurance report's "Cover by person" section (it was already removed from the By person tab in v503). Each person's own table is unchanged.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v504.
+
+## v505: Riders on the printable Insurance report
+- **Policy register:** each rider is listed as a small "Rider: name · until date" line under the policy's Sum insured.
+- **Policy details** (when included in the report): a "Riders (N)" table (name, From, Until, "(ended)" once past) sits under the Cover table.
+- Riders still have no sum insured of their own, so no totals change. No DB change. `APP_VERSION` / `CACHE_NAME` -> v505.
+
+## v506: Insurance > Policies - per-person breakdown under "Savings / investment policies"
+- Under the Savings / investment panel a collapsed **By person ▾** toggle opens a small table: per insured person, Paid to SV date, Surrender value, and Net (+ SV as a % of paid), in the base currency. Policies with no insured person go on an "Insured person not set" row.
+- Only shown when two or more people have a surrender value; follows the same status filter (In force / Ended / All) as the panel above it. The headline totals are unchanged.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v506.
+
+## v507: Printable Insurance report - surrender values are summed
+- The policy register's **Subtotal** rows (per insured person) and the **Total** row now add up the Surrender value column (it was left blank). Each policy's latest SV, net of any policy loan (same figure as the Insurance page), converted to the base currency; policies with no SV count as nothing, and "net of policy loan" is noted when a loan is involved. Car · Home · Travel has no SV column, so it is unchanged.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v507.
+
+## v508: Print insurance report - choose whose policies go in
+- The print sheet has a new **Whose policies** section: one tick per insured person who has a policy (with their colour dot and policy count, plus "Insured person not set" if any), all ticked by default. Untick people to print only some, e.g. one person's report to hand over. Hidden when everything belongs to a single person; at least one must stay ticked.
+- The whole report follows the choice (summary, needs attention, cover by person, register, car/home/travel, agents, detail blocks), and the report subtitle lists the people included.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v508.
+
+## v509: Printable Insurance report - ended riders marked like the policy card
+- In the policy register a rider reads "Rider: name · Until <date>" while active and a red "Rider: name · Ended <date>" once its date has passed, the same wording as the policy card. The Riders table in the detail blocks shows "Ended <date>" in the Until column. Nothing is hidden.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v509.
+
+## v510: Insurance - cashback (annual payout) on a policy
+- **Policy form -> "Cashback / payouts"**: *Cashback %* of the sum insured, *Based on* (which coverage kind, default Life) and an optional *First payout year*; plus a list of **cashback received in earlier years** (date / amount / note), like the earlier premium rows.
+- **New payouts are plain Income entries linked to the policy**: on an Income form the Policy row now shows for insurance / cashback / rebate-looking categories (label "Policy cashback"), and the policy page has a **🎁 Record cashback** button (shown when the policy has a cashback % or any cashback) that opens the Income form pre-filled (amount = estimate, editable). A refund is never cashback: it still lowers "Premiums paid" only through Refund on the premium. Planned payments stay premium-only.
+- **Card and policy page** show `🎉 Cashback benefit: 5% of RM 50,000.00 - next payout ~RM 2,500.00 on 2027-10-01` (payout day = policy anniversary, needs the Start date; the amount follows the reducing-cover schedule on that date) and `🎁 Cashback received RM x - n payouts`. If the expected payout day has passed with nothing recorded it turns amber: `payout due <date> ... not recorded yet`. The policy page also gets a **Cashback received (N)** list (typed-in rows + linked income).
+- **Return figures**: "% of premiums paid" = (surrender value + cashback received) / premiums paid, and the annualised return counts each payout up to the surrender-value date as money back on its day. The Savings panel adds a `+ cashback received -> SV + cashback is x%` line.
+- **Export to another ledger / print**: "Merge insurance only" export has a new option *Add cashback received (recorded in this ledger) as history* (rows land in the file's cashback history; this ledger is unchanged); the merge preview shows cashback %, and payout rows. The printable report gets a Cashback fact and a Cashback received table in the detail blocks.
+- DB: no new store; new optional policy fields `cashbackPct`, `cashbackBase`, `cashbackFirstYear`, `cashbackHistory` and an Income transaction may now carry `policyId`. `APP_VERSION` / `CACHE_NAME` -> v510.
+
+## v511: Insurance - link the cashback plan to the policy
+- A policy now has **two** linked planned payments, one per kind: the premium plan (an expense, "Next premium") and the **cashback plan** (an income, new "Next cashback" section on the policy page with Link / Unlink, like the premium one). A policy with a cashback % or any cashback shows the section.
+- **Save as Planned now stores the Policy row** of the form (it was ignored before, for premiums too): choose the policy on an Income form, tap Save as Planned, and the plan is linked by itself. A plan of the same kind already linked to that policy is released (one premium plan + one cashback plan per policy).
+- **Mark as Paid on a linked cashback plan** opens the Income form with the policy already chosen, so the payout counts as cashback received; the yearly plan moves on to its next date as usual. **🎁 Record cashback** uses that same path when a plan is linked (so the payout cannot be recorded twice) and still works with the estimate when none is.
+- **The "next payout" banner follows the linked plan**: date and amount of the plan, marked "planned"; if the plan's amount differs from the % estimate the banner also says what the % would give; once the plan's date has passed unpaid it turns amber ("planned payment is not marked as paid yet"). A paused plan is ignored (the estimate is shown). A plan alone is enough to show the banner, with no cashback % set.
+- A cashback plan saved before v511 has no policy link: open the policy -> Next cashback -> Link a planned payment once.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v511.
+
+## v513: Insurance - three readings, "Needs attention", slimmer policy cards
+- **Top of the Policies tab is now three cards** (swipe sideways on a phone, side by side on a wide screen), each with a one-line "what is in this number" and a *Breakdown* you can open:
+  - **Obligation · per year** - what the in-force policies ask for each year = cash premiums + premiums the insurer takes from the accumulated bonus (ACB). Breakdown: cash / via ACB / total / of which 🚫 not in Net Worth. (Before, ended policies leaked into "Yearly premium" under *All*; now only in-force policies count. Hidden under *Ended*.)
+  - **Cash out · so far** - premiums paid − premiums paid by a parent − cashback received. ACB-paid premiums are not cash and are not in it.
+  - **Value · surrender** - surrender value (after any policy loan) of the in-force policies that are NOT marked 🚫 not in Net Worth, with the oldest/newest statement date and a warning when the oldest is over a year old. Breakdown: counted / not counted / all, then the like-for-like check (premiums paid to each SV date, SV, Net, SV ÷ paid, SV + cashback, By person). This replaces the old separate "Savings / investment policies" panel (same figures, moved inside).
+- **New "Needs attention" strip** under the cards (not shown under *Ended*): overdue premium and surrender value older than a year (red), cashback payout due but not recorded, premium due within 30 days, a rider ending within 60 days, sum insured not set (amber). Tap a line to open that policy. Open by default when something is red.
+- **Policy cards slimmed to three layers**: (1) name, insurer / person, and one figure on the right (SV for a savings policy, premiums paid for a protection policy; the old "% of paid" chip stays on the Paid line); (2) up to two covers + small chips - 🧩 N riders, 💰 Premium via ACB, 🎁 next payout / received, 📎 attachments, 📝 note; (3) one footer line with the next premium (red edge on the card when overdue). Riders in full, agent, notes, attachments and history are in the policy sheet (tap the card).
+- Printable report, By person and Car · Home · Travel tabs are unchanged. No DB change. `APP_VERSION` / `CACHE_NAME` -> v513.
+
+## v514: Insurance - breakdown panel uses the full width, softer "not in Net Worth" marker
+- The **Breakdown** of the three summary cards no longer opens inside its narrow card (which left a tall empty gap beside it). Tapping Breakdown on a card opens ONE full-width panel under the row (tap again, or tap another card, to close / switch); the open card gets a highlighted border. The Value panel lays out in columns: What counts | Like for like | By person.
+- "Not in Net Worth" is now a small hollow dashed circle in the muted text colour instead of the red circle-slash 🚫 (policy cards, Obligation and Value breakdowns). Other pages' 🚫 are unchanged.
+- No DB change. `APP_VERSION` / `CACHE_NAME` -> v514.
+
+## v515: Insurance - phone fixes for the summary breakdown
+- **Tapping Breakdown no longer re-renders the page.** On a phone the three summary cards scroll sideways, and the re-render snapped the row back to the first card, so the panel opened under a different card than the one you tapped. The panel is now swapped in place, the row keeps its scroll position, and the tapped card is scrolled into view and highlighted.
+- **Breakdown sections are separate blocks with a coloured left edge** (What counts / Like for like / By person, same look as the overdue edge on a policy card) so the long panel reads in chunks.
+- **By person is a stacked list instead of a table** (name + policies, net and %, then "Paid -> SV"), so nothing is cut off on a narrow screen.
+- **Needs attention is Policies-tab only** (it was leaking onto By person and Car · Home · Travel).
+- `APP_VERSION` / `CACHE_NAME` -> v515.
+
+## v516: Insurance - policy year
+- Each in-force policy card now shows **Year N** (or **Year N / M** when an end / maturity date is set) after the insured person, so a low SV ÷ premiums paid in the early years reads as "early" rather than "bad". Hover / long-press shows the next anniversary. The policy sheet has a **Policy year** row (year, term, next anniversary) under Start.
+- Year 1 runs from the start date to the first anniversary; nothing is shown when there is no start date or it is still in the future. Ended policies show no year. No new field to fill in, no DB change.
+- `APP_VERSION` / `CACHE_NAME` -> v516.
+
+## v517: Insurance - policy card header no longer breaks mid-phrase on a phone
+- The line under the policy name (insurer, person, Year N / M) now wraps as whole items: "Year 24 / 63" and the person tag can no longer be cut in two.
+- "Not in Net Worth" moved from that line to the small tag row under the cover line (hollow dashed tag), so the header stays short.
+- `APP_VERSION` / `CACHE_NAME` -> v517.
+
+## v518: Insurance surrender value is information only - never counted in Net Worth
+- **The "Count surrender value in Net Worth" switch is gone** (Dashboard pill toggle and Setting > Net Worth Card > Insurance). A surrender value is only cash if the policy is surrendered (and the cover ends), so it no longer feeds any Net Worth figure. Net Worth now always excludes it; if the switch was on for you, the headline drops by the surrender value. An old backup that carries the setting still imports; the value is ignored.
+- **Dashboard**: a dashed *🛡️ Insurance SV  RM… · not counted* pill under the Portfolio Net Worth card (tap to reveal, hidden when no in-force policy has a surrender value).
+- **Net Worth Statement**: the "Insurance (surrender value)" row is no longer under Assets. A dashed memo card under MY NET WORTH shows it as information.
+- **"Not in Net Worth" -> "Not mine"** on the Insurance page (tag on the card, edit checkbox, Obligation / Value breakdowns). The stored field is unchanged (`excludeFromNetWorth`), so no data change: it now means "this policy is not mine, leave it out of the Value total". The Value card says "Information only - not part of Net Worth".
+- Net Worth by Member and the trend / by-currency reports needed no change (they read the same helper, which now returns zero). `APP_VERSION` / `CACHE_NAME` -> v518.
+
+## v519: Dashboard - Google Drive sync status line
+- A small line under the Dashboard header shows the sync state, so you can confirm an entry reached Google Drive without opening Setting: **☁ Waiting to upload…** (a change is waiting out the ~4 s delay) -> **☁ Syncing…** -> **☁ Synced 12:14 PM** (a date is added when it was not today).
+- Amber: **⚠ Not uploaded yet — retrying**, **⚠ Sync paused — resolve in Setting**, **☁ Auto-sync off · last 12:14 PM**.
+- Tap it: retries the upload now when something is waiting, otherwise shows the full "Last synced" date and time in a toast.
+- Hidden when Google Drive is not connected. It only reads the existing sync state (no change to how syncing works, no DB change).
+- `APP_VERSION` / `CACHE_NAME` -> v519.
+
+## v520: Insurance > By person redesign (+ rebuilt sw.js)
+- **One card per person**: colour avatar (first letter), name, "N policies in force", and the yearly cash premium on the right ("per year"). People with no insured person set get a grey "?" card.
+- **One row per cover type** (Life, Term Life, Health/Medical, Critical Illness, Personal Accident, Other) with an icon, the number of policies and the big total on the right. Rows are **collapsed by default**; tap a row to see the policies behind the total (name, insurer, amount, "rider" tag). **Expand all / Collapse all** sits above the list.
+- **Health/Medical**: annual limit and lifetime remaining are small chips at the top of the open row; the (i) button explains why medical limits overlap.
+- **Riders** is a row too: soonest-ending first, ended ones last and dimmed, subtitle "N active · M ended".
+- Display only: totals, ordering of policies, the Policies tab, Car / Home / Travel and the print report are unchanged. No DB change.
+- **`sw.js` was 0 bytes in the v519 package** (v517 - v519 copies were lost). Rebuilt from v516: only `CACHE_NAME` changed in v517 - v519, and nothing new needs precaching. Check that `sw.js` is not empty before you deploy.
+- `APP_VERSION` / `CACHE_NAME` -> v520.
+
+## v521: Insurance > Policies redesign
+- **Group** pills under Show: **Person** (default) / **Insurer** / **None**. Each group has a header (colour avatar or initial, "N policies", and the yearly obligation of its in-force policies). Only on the Policies tab.
+- **One labelled main figure** top-right of every card: *Surrender value* (savings / investment), *Premium · year* (protection; *Via ACB · year* when the bonus pays it) with "Paid … so far" underneath, or *Paid so far* when no premium is recorded.
+- **Sum insured** is a row of small tinted badges (max 3, then "+N more"), in the same colours as By person.
+- **Fewer, clearer chips**: *Not mine* moved under the name (the card gets a dashed border); cashback received + next payout are one chip; "📎 N files".
+- **Footer pill** for the next premium: grey (> 30 days), amber (within 30), red (overdue).
+- **Summary cards** are the same height with Breakdown at the bottom; the long explanation is behind the (i) button and opens in one shared strip under the cards; an old surrender statement shows a small amber "⚠ Oldest date" tag.
+- Display only: numbers, calculations, the print report and the other tabs are unchanged. No DB change.
+- `APP_VERSION` / `CACHE_NAME` -> v521.
+
+## v522: Insurance page, phone only
+- The page subtitle is hidden on phones (the title says it).
+- The floating print button is hidden on the Insurance page on phones; the 🖨️ in the page header (insurance print options: who / what to include) stays. They are not the same function: the floating one prints the current screen as it is.
+- The Group pills (Person / Insurer / None) become one small button at the end of the Show row; each tap goes Person -> Insurer -> None.
+- PC layout is unchanged. `APP_VERSION` / `CACHE_NAME` -> v522.
+
+## v523: Insurance page, PC filter row + tab focus
+- PC (>640px): Show and Group now sit on one row (thin divider between them); they wrap to two rows only when the window is narrow. Phone layout (v522 Group chip) is unchanged.
+- Tabs (Policies / By person / Car · Home · Travel): keyboard focus no longer draws a box over the underline; it uses a soft tint instead, so every tab looks the same. Mouse/touch click shows only the underline.
+- `APP_VERSION` / `CACHE_NAME` -> v523. No data, calculation or print changes.
+
+## v524: Insurance > Car · Home · Travel - category colour on the group header, urgency bar on each policy row
+- Each group card (Car / Home / Fire / Travel) now has a coloured icon badge and a small colour chip in its header: Car = blue, Home = purple, Travel = teal. The colours avoid red / amber / green, so they never read as a warning. They are CSS variables (`--ins-cat-car/home/travel`, rgb triplets) on `:root`.
+- Each policy row has a thin left bar that only means urgency: red = overdue or ends within 7 days, amber = 8-30 days, faint grey-blue = normal, fainter grey = ended (row also stays dimmed). The "Ends ... days left" text uses the same two levels (it used amber up to 60 days before).
+- Display layer only: no data, calculation, filter or print changes. `APP_VERSION` / `CACHE_NAME` -> v524.
+
+## v525: Unit Trust > Fund Holdings - one card per fund (easy to read on PC and phone)
+- The 11-column table (which needed sideways scrolling) is now one card per fund: name, code / category / owner, big Value with P/L and Return % on the top right; Units, NAV, Invested, Current Inv., Annualised and Holding in a grid below. PC: one row; phone: 3 per row.
+- Total is a card at the bottom (Value, P/L, Return, Invested, Current Inv.). Closed-fund summary line and "fund deleted" rows keep working. Tap a card to open the fund, as before.
+- Display layer only: no data, calculation or print changes. The Portfolio Fund Detail table is unchanged. `APP_VERSION` / `CACHE_NAME` -> v525.
+
+## v526: Portfolio Fund Detail - one card per fund (same look as the Unit Trust Fund Holdings cards)
+- The per-account table (min-width 680px, sideways scroll on phone) is now cards grouped under each account name: fund name, code / owner, Value with P/L and Return % on the right, Invested and Current Inv. below. Tap a card to open the fund. The closed-fund summary line still works.
+- Display layer only: no data, calculation or print changes. Reuses the v525 `.fh-*` CSS. `APP_VERSION` / `CACHE_NAME` -> v526.
+
+## v527: Fund cards polish
+- Cards get a left accent bar (green / red by P/L), Value in larger type, P/L + Return % as a coloured pill, category and owner as small chips, and the stats in a soft panel. Phone: Units / NAV / Invested then Current Inv. / Annualised / Holding (3 x 2, no lone wrapped item); wide card (>=560px, container query): all 6 on one row. Total card has a primary-tinted background; the closed-funds line is a dashed pill.
+- Display layer only (`.fh-*` CSS in index.html). `APP_VERSION` / `CACHE_NAME` -> v527.
+
+## v528: Unit Trust account page - balance hero, compact year switcher
+- Current Balance on a Unit Trust account is now a hero block: small grey label, 2.1rem figure, then a P/L + Return % pill with Invested and Current inv. beside it (this replaces the Total card at the bottom). Other account types keep the old banner.
+- The `< 2026 >` year switcher moves into the Fund Holdings header as one compact bordered control (same element and ids, re-parented by `renderLedger`; it returns to `#ledgerYearNavHome` on other pages). "+ Transaction" no longer wraps.
+- Card labels are sentence case (Units, NAV, Invested, Current inv.). The "Transaction Log History" hint under the page title is smaller and lighter (all account pages).
+- Display layer only. `APP_VERSION` / `CACHE_NAME` -> v528.
+
+## v529: hide "Current inv." when it equals Invested
+- On Fund Holdings cards, the Unit Trust balance hero, "fund deleted" cards and Portfolio Fund Detail cards, Current inv. is only shown when something has been taken out (sells / payouts, i.e. Recovered > 0). Otherwise it is identical to Invested and is left out. Display only. `APP_VERSION` / `CACHE_NAME` -> v529.
+
+## v530: balance hero - P/L as plain coloured text
+- In the Unit Trust balance hero the P/L + Return % no longer sits in a tinted pill; it is plain bold green / red text, 1rem. The pills on the fund cards are unchanged. Display only. `APP_VERSION` / `CACHE_NAME` -> v530.
+
+## v531: Unit Trust Portfolio fund cards — Units / NAV / Annualised / Holding; NAV shown to 4 decimals
+- Unit Trust Portfolio → Fund Detail cards now show the same six figures as the account page's Fund Holdings cards: Units · NAV · Invested · Current inv. · Annualised · Holding (3 per row on phone, 6 per row on wide screens). Both pages use one shared builder, `fundCardStatsHTML()`, so they can no longer drift apart.
+- "Current inv." is always shown now (it equals Invested when nothing has been taken out), so the grid keeps two even rows instead of a gap.
+- NAV / unit price now shows 4 decimals via new `formatNavPrice()` (e.g. RM0.8713 instead of RM0.87) on both card types and on the fund activity header line, so it matches what is typed on Daily NAV Update. Money amounts stay at 2 decimals. Display only, no data change. `APP_VERSION` / `CACHE_NAME` -> v531.
+
+## v532: fund cards — 4 stats, stacked Invested / Current inv., Holding moved to subtitle
+- Fund Holdings + Portfolio Fund Detail cards: stats are now Units · NAV · Invested · Annualised (2×2 on phone, 4 across once the card is ≥440px). Holding years moved into the subtitle ("028302078 · Held 14.0 yrs").
+- Invested and Current inv.: if nothing has been sold/paid out they are identical, so only Invested shows; otherwise both show stacked (Invested above, Current inv. below) in the same cell. Display only. `APP_VERSION` / `CACHE_NAME` -> v532.
+
+## v533: fund cards — Current inv. first, XIRR annualised
+- When money has been taken out, the fund card shows a left block (Current inv. bold on top, Invested below) beside Units · NAV · Annualised · Recovered. Fully redeemed principal shows "Fully recovered" (+amount above cost) instead of a negative number. When nothing was taken out: Units · NAV · Invested · Annualised, as in v532. Holding stays in the subtitle.
+- Annualised is now a money-weighted return (XIRR, reusing `insXirr`): each Buy is cash out on its date, each Sell / Dividend (Payout) cash in, today's value the final cash in. Reinvest / Contribution are not cash flows. Needs >= 1 year of history, otherwise "-". Applies to both the account Fund Holdings cards and the Portfolio Fund Detail cards (shared `fundCardStatsHTML`). Display only. `APP_VERSION` / `CACHE_NAME` -> v533.
+
+## v534: fund cards — one panel, Annualised under the P/L pill
+- Fund Holdings + Portfolio Fund Detail cards: the stats are now one panel. Left: Current inv. as the main figure with "Invested …" and "Recovered …" as small grey lines (when something has been taken out), or just Invested (nothing taken out). Right: "Units × NAV" (units 2–4 decimals, NAV 4 decimals). Fully recovered principal shows "Fully recovered" + a grey "+RM… above cost" line.
+- Annualised (XIRR, from v533) moved under the P/L pill as "Annualised 7.88%"; hidden when under 1 year of history. Holding stays in the subtitle. Display only. `APP_VERSION` / `CACHE_NAME` -> v534.
+
+## v535: 📤 CSV export on a Category / Income / Expense page now exports that page
+
+- On a Category page (e.g. EPF Contrib.(EE)) or an All Income / All Expense Log page, the 📤 button used to export every transaction of every account (`ledger_export_all-accounts_…csv`). It now exports only what the page lists: the category (or type) plus the year/month carried in from the report, e.g. `ledger_export_category-epf-contrib-ee_<date>.csv`. Account pages and the Portfolio General Log export exactly as before. `APP_VERSION` / `CACHE_NAME` -> v535.
+
+## v536: CSV export shows the member next to the account
+
+- The Account column of the Ledger CSV export (📤) now uses the same label as the on-screen list, e.g. `KWSP (VF)` and `KWSP (RS)`, instead of the bare account name, so same-named accounts of different members can be told apart (also covers transfers `A → B` and the Opening Balance row). `APP_VERSION` / `CACHE_NAME` -> v536.
+
+## v537: Timeline page (new sidebar item, DB v15)
+
+- New **Timeline** page (sidebar, under Insurance) for things worth remembering from before the ledger started, and after. Display-only: nothing touches balances, Net Worth or any report.
+- Entry fields: title, date at three precisions (exact date / month & year / year only), type (💼 Work / 🏠 Property / 🚗 Vehicle / 🛡️ Insurance / 🏦 Account·Loan / 🎓 Education / 👨‍👩‍👧 Family / 📌 Other), person, note, optional reference amount + currency (grey "ref.", never summed), optional link to an account or insurance policy (tap the chip to open it). No attachments yet.
+- List: vertical timeline grouped by year, newest first; tap a card to expand its note, ✏️ to edit. A **📍 Ledger starts here** marker sits at the earliest transaction date; entries dated before it show a dashed "before ledger" look. Filters: search, person, and type chips (only types in use).
+- New IndexedDB store `timeline` (DB_VERSION 14 -> 15), encrypted like the others, included in Backup & Restore (`bundle.timeline`; older backups without it restore fine) and Google Drive sync. Not merged by "merge from another backup" and not on the Dashboard. Deferred: print report, auto-milestones toggle, attachments. `APP_VERSION` / `CACHE_NAME` -> v537.
+
+## v538: Timeline page redesign (display only, no data/DB change)
+
+- Each entry type now has its own colour (dot, left accent, type label), so the list can be scanned by colour instead of reading every emoji. The card header shows the type name and, for month/day precision, the short date; the old repeated year is gone (the big year heading carries it, with an entry count).
+- The reference amount is now a pill (`ref. SGD 51,816.00`); ✏️ became a small pencil button; cards with a note show a chevron that flips when expanded; a one-line summary (`23 entries · 1983–2025`, or `Showing x of y` when filtered) sits above the list.
+- **Ledger starts here** is now a full-width divider: the rail above it is solid, the rail below it is dashed (replaces the per-card "· before ledger" text).
+- Colours come from per-type `--tc` plus the existing theme tokens (`color-mix`), so all background presets still work. `APP_VERSION` / `CACHE_NAME` -> v538.
+
+## v539: Timeline entry form — multiple reference amounts, nicer note box, multi-person
+- Reference amount: row 1 = amount + currency (unchanged). A round "+" next to the label adds rows of **Amount + Note** (max 10); their currency is row 1's, shown as a small prefix. Stored as `extraAmounts: [{amount, note}]`; card shows one chip per amount ("MYR 214,671.80 · Renov"). Display only, never summed.
+- Note box: rounded, focus ring, auto-grows (max 240px), live character counter (limit 1000).
+- Person -> Person(s): same owner-chip checkboxes as the account form. Stored as `memberIds[]` (`memberId` = first, kept for compatibility; older entries still read fine via `tlMemberIds()`). Person filter matches any selected person.
+- No DB_VERSION change. `APP_VERSION` / `CACHE_NAME` -> v539.
+
+## v540: Timeline amount chips — centred grey separator dot
+- The "·" between an extra amount and its note is now a small grey CSS dot (`.tl-ref-dot`), vertically centred. `APP_VERSION` / `CACHE_NAME` -> v540.
+
+## v541: Timeline card title — grey centred dot
+- In the card title, ". " (period + space) is displayed as a small grey centred dot (`tlTitleHTML()`, `.tl-title-dot`). Display only; the stored title and search are unchanged. `APP_VERSION` / `CACHE_NAME` -> v541.
+
+## v542: Timeline hierarchy — year heading muted, card title lighter
+- `.tl-year-n` now text-muted at weight 700 (was heavy black 800); `.tl-title` weight 700 (was 800) so the card title is the strongest text on the page. CSS only. `APP_VERSION` / `CACHE_NAME` -> v542.
+
+## v543: Dark-mode fix — Serial / Model unreadable in "Add this purchase to Inventory"
+- `#txInventoryWrap` had inline light-green colours; inputs inherit the theme's (light) text colour, so in dark themes the text was invisible. Moved to `.tx-inv-wrap` with the tint mixed from `--card-bg` / `--border-color`, input text forced to `--text-main`, hint text via `.tx-inv-hint`. CSS/markup only. `APP_VERSION` / `CACHE_NAME` -> v543.
+
+## v544: Quick View shows image attachments as large inline previews
+- Quick View (the transaction pop-up) listed images as a 32px thumbnail row. Images now render as a full-width preview (max 320px tall, `object-fit:contain`) with the file name underneath; tapping it opens the existing full viewer (zoom/Save/Delete) exactly as before. PDFs keep the compact row. The stored thumb is only 96px, so `hydrateQuickViewImages()` loads the full-resolution image from the attachments store after render (guarded against Quick View having moved on). The Quick View sheet now scrolls vertically (`overflow-y:auto`; it was `overflow:hidden`, which would clip tall content). `APP_VERSION` / `CACHE_NAME` -> v544.
+
+## v545: Inventory attachments as large inline previews
+- Inventory item Edit modal: image attachments now render as a full-width preview (max 240px, `object-fit:contain`) with name/size and the ✕ remove below; tapping the picture opens the full viewer (new `openInvFormAttachment`, works for saved and not-yet-saved files; no Delete in that viewer, removal stays on the ✕). The list's "📎 N attachments" picker shows the same large previews. PDFs keep the compact row. New shared `hydrateInlineAttImages()` swaps the 96px thumb for the full-resolution image from the attachments store. Transaction and Insurance forms untouched (still use `renderTxAttachmentRow`). `APP_VERSION` / `CACHE_NAME` -> v545.
+## v546: 📎 attachment badge on Spending by Tag (and other transaction lists)
+- Spending by Tag's transaction list now shows the same 📎 (or 📎×N) badge as the main ledger list on any record that has attachments; tapping it opens the file / picker without opening Quick View. New shared `txAttachBadgeHTML(t)` (same markup as the ledger row's `receiptBadge`). Same badge added to three other row lists that lacked it: the Recent Transactions-style list (`buildTagBadgesHTML` row near the top of ledger.js), the day-detail list, and the Transfer/other list at ~line 7264. Rows without attachments are unchanged. `APP_VERSION` / `CACHE_NAME` -> v546.
+
+## v547: FX rate lock — default for new entries, 🔒 badge, bulk lock for past records
+- **New entries lock by default.** A new Income/Expense whose currency differs from its (single-currency) account now opens with the lock ticked and the rate prefilled with today's table rate (editable; re-prefilled if the currency/account changes until the user touches the rate or the tick). Untick = follow the live rate. Editing an EXISTING record never auto-locks (`txManualFxTouched` is set on edit-load) so an old entry is never stamped with today's rate. Form label is now "🔒 Lock FX rate"; rate input is `step="any"` (the old `0.000001` step could reject precise small rates such as 0.00296505).
+- **🔒 replaces the orange "✏️ Manual FX" pill** on ledger rows (new `txFxLockBadgeHTML`), also shown on Spending by Tag rows; hover title shows the rate. Quick View gets a "Rate:" line (locked rate + fixed amount, or "live … not locked") via `fxRateLineHTML`.
+- **Currency Setting ▸ "🔒 Lock rate on past records"** (new card under Exchange Rates): entry currency, account currency, From/To dates, rate direction + the rate the user types (never auto-filled; today's table rate is shown only as a reference). **Preview** lists how many records, native total → amount at the typed rate vs today's table (difference), skipped counts (already locked / other account currency), and a warning when the typed rate is >20% from today's. **Confirm** writes `manualFxRate` only on records that were not locked (income/expense, normal accounts, no fund transactions). **Undo last bulk lock** (stored in SETTINGS key `fxLockUndo`) returns exactly those records to following the live rate; records edited since are left alone.
+- Scope: date range only for now (tag filter deferred on purpose). Quick Add, templates and planned payments that create foreign-currency records are unchanged (they stay unlocked until edited or bulk-locked). `APP_VERSION` / `CACHE_NAME` -> v547.
+
+## v548: FX rates quoted like the Currency Setting table
+- New `fxQuote(cur, acctCur, rate)`: the currency worth more sits on the left, 4 decimals (e.g. "1 MYR = 367.3145 KRW", "1 USD = 4.0964 MYR"), same rule as the table. Used in the bulk-lock Preview heading, its reference hint, the Undo line, the 🔒 hover title and the Quick View "Rate:" line — previously these showed the tiny inverse (1 KRW = 0.0027225 MYR). Stored values unchanged. The bulk card's direction dropdown already defaulted to the table's direction. `APP_VERSION` / `CACHE_NAME` -> v548.
+
+## v549: Spending by Tag redesign
+- **Hero total** (neutral colour, 1.9rem) replaces the Income/Expense/Net block; **Income and Net rows only appear when the tag has income** (zero income is no longer shown at all). Meta line: category (single-category tags), count, date range and — when every record is on one account — the account, so rows don't repeat it.
+- **FX trust note** under the total: lists the foreign amounts still converted at today's rates (native total, entry count, ≈ base value) with a "Lock rates" link to Currency Setting; or "🔒 N foreign entries are rate-locked" when none follow the live table (`txBaseIsFrozen`).
+- **Breakdown:** hidden when there is only one category; with 2+ categories only the donut + its legend is shown (the duplicate progress-bar list is removed). Pending Claim still hides it.
+- **Transactions:** grouped into one card per month with a subtotal; rows use icon circle + title, show **Notes** (italic), and drop the current tag's chip (kept on Pending Claim, where the chip opens the settle flow). Foreign rows show the base value underneath: "≈ RM…" (live) or "🔒 RM…" (locked); the 🔒 moved from the title to this line. Amounts use tabular numerals; minus sign and red colour kept on purpose.
+- Element ids unchanged; shared donut/list components untouched. `APP_VERSION` / `CACHE_NAME` -> v549.
+
+## v550: Spending by Tag — notes moved to the last line of each row
+- Row order is now title → date · category (· account) → notes (italic). `APP_VERSION` / `CACHE_NAME` -> v550.
+
+## v551: Inventory shows the base-currency value of foreign-currency items
+- A foreign-currency item now shows its base value under the price ("≈ RM272.25" live, or "🔒 RM…" when the item was created from a rate-locked expense and that account is in the base currency). The Total Value footer uses the same per-item value (`invBase`), so rows and footer agree. Items without a linked/locked expense follow the live FX table. `APP_VERSION` / `CACHE_NAME` -> v551.
+
+## v552: Inventory lock lookup fixed (items never stored linkedTxId)
+- v551 looked the source expense up through `linkedTxId`, but that field is always null (the new transaction's id is unknown when the item is created), so items always showed the live "≈" value. The source expense is now matched by content: same account + purchase date + currency + amount (`t.amount === it.purchasePrice`), preferring same vendor = description and name = notes; if only the loose match applies it is used only when exactly one rate-locked expense fits. `APP_VERSION` / `CACHE_NAME` -> v552.
+
+## v553: Spending by Tag — rows redesigned for readability
+
+- Each transaction row now leads with the **note** when the description only repeats the tag (or the same
+  word on most rows); otherwise description is the headline and the note sits underneath as normal text.
+- The per-row category icon circle is replaced by a **date stamp** (day + weekday, once per day). Category
+  is printed per row only when the tag mixes categories.
+- Amounts show the base currency (≈ when not rate-locked), neutral colour for expenses, green for income;
+  the original foreign amount (🔒 if locked) is the small line underneath.
+- Only `renderTagReportPage()` and the `.tagrep-*` CSS changed. Bumped `APP_VERSION`/`APP_VERSION_DATE`
+  (ledger.js) and `CACHE_NAME` (sw.js) to v553.
+
+## v554: Spending by Tag — month header
+
+- Each month is now one card: a tinted header strip (month, entry count, share of the tag's total, month
+  subtotal) with a thin share bar, followed by its rows. Bumped `APP_VERSION` and `CACHE_NAME` to v554.
+
+## v555: Spending by Tag — Export CSV
+
+- New 📤 button in the page header (visible once a tag is picked) → `exportTagReportCsv()`. One row per
+  tagged transaction, newest first: Date, Description, Note, Category, Account, Type, Original
+  Currency/Amount, FX Rate (Locked/Live), Expense and Income in base currency, Tags. `SUM(Expense)` equals
+  the page's total (refund credits are negative). Bumped `APP_VERSION` and `CACHE_NAME` to v555.
+
+## v556: fix Spending by Tag Export CSV button did nothing
+
+- `exportTagReportCsv` had been registered in `CHANGE_ACTIONS` instead of `CLICK_ACTIONS`, so the 📤 button
+  (`data-click`) found no handler. Moved to `CLICK_ACTIONS`. Bumped `APP_VERSION` and `CACHE_NAME` to v556.
+
+## v557: Currency Setting ▸ Lock Rate — all locked batches visible
+
+- The old "Last bulk lock / Undo last bulk lock" kept ONE slot that each new lock overwrote, so earlier
+  batches (e.g. KRW after a later CNY lock) disappeared from the UI although they stayed locked.
+- Now a "Currently locked" list is derived from the transactions (grouped entry currency → account currency
+  at one exact rate, ≥2 records) with a per-batch Unlock button; single individually-locked records are
+  summarised in one line. The `fxLockUndo` settings key is no longer used. Bumped to v557.
+
+## v558: Inventory — categories + grouped view
+
+- New optional `category` on inventory items (Electronics, Appliances, Furniture & Storage, Musical Instruments,
+  Luggage & Travel, Tools, Kitchen & Dining, Home Accessories, Other). Settable in the item modal and when
+  adding an item from an expense; included as a column in the Inventory CSV export.
+- Inventory page: "By date" (default) / "By category" toggle (remembered). Category view = one collapsible
+  card per category (count, share of total, subtotal), biggest first; uncategorised items last, each with an
+  inline "Set category…" picker.
+- Rows: account is shown only when it differs from the majority (one line above the list says it once); the
+  status badge/side bar only for Disposed/Lost. Bumped to v558.
+
+## v559: Inventory — category chips
+
+- The v558 "By date / By category" switch is replaced by a horizontally scrollable chip row: **All** (every
+  item, newest first) + one chip per category under the current status filter (icon, name, count; biggest
+  subtotal first, Uncategorised last). A chip shows just that category as one card (count, share, subtotal).
+- Rows: purchase date and attachments share one line; warranty bar is green >180d, amber 91–180d, red ≤90d.
+  Category subtotal is larger. Bumped to v559.
+
+## v560: Inventory — chip row polish, footer + export follow the category
+
+- Total Value footer now follows the list (status AND category, e.g. "Total Value (Active · Musical
+  Instruments)"); its amount uses the normal bold font (the handwriting font's 5 looked like S).
+- CSV export respects the selected category chip too (filename gets the category).
+- Chip row: no scrollbar — edge fade shows there is more, mouse wheel scrolls it sideways; first chip renamed
+  "All categories" (it was confusable with the status "All"); one neutral count-badge style; compact chips.
+- Selected-category card header is slimmer (count, % of total, subtotal; the name is already on the chip).
+  Bumped to v560.
+
+## v561: Inventory — category pills wrap, no duplicate total
+
+- The category chips no longer scroll sideways (could not reach the last ones on a mouse): they are small pills
+  that wrap onto as many rows as needed, with a "CATEGORY" label, like the Insurance page's SHOW row.
+  Removed the scroll/fade/wheel code from v560.
+- The selected-category card header no longer repeats the amount (count + % of total + share bar only);
+  the Total Value footer shows it once. Bumped to v561.
+
+## v562: Inventory — Total Value footer typography
+
+- Whole footer row in the normal app font (no handwriting font): amount 1.25rem/800, "Total Value" muted, and the
+  scope on its own small line ("All items", "Active items", "Luggage & Travel", "Active · Luggage & Travel").
+  Bumped to v562.
+
+## v563: Spending by Tag — row typography hierarchy
+
+- Row titles 600 -> 500: the system Chinese fallback font (Microsoft YaHei) only has Regular/Bold, so 600 rendered
+  Chinese as Bold while Latin text (Segoe UI) was Semibold. At 500 both scripts render as Regular and look the same.
+- Row amounts 700 -> 600 (Latin digits, real Semibold), so the month total (800) and the tag total stand out.
+- Month header: only the year is muted grey (`.tagrep-mh-yr`); the month name stays full strength.
+  Bumped to v563.
+
+## v564: Dashboard — Net Worth by Member hides zero rows
+
+- A member row (and a joint-owned group row) is hidden when its net worth displays as 0.00 (rounds to zero at 2
+  decimals, `isZeroAmount()`). The "Unassigned" row is unchanged (its hint is still useful), and the breakdown
+  still ties out to the grand total since hidden rows are zero. If every row is zero, a short "All members are
+  at 0.00." line shows instead of an empty box. Rows reappear automatically once their balance is non-zero.
+  Bumped to v564.
+
+## v565: Inventory — icon-only category pills on phone view
+
+- At widths <= 767px (the same breakpoint the Inventory page already uses for phone layout) the category pills show
+  icon + count only; the category name and the "CATEGORY" caption are hidden via CSS (`.inv-chip-nm`). The name stays
+  in each pill's `title`/`aria-label`. "All" keeps its text. Wider screens are unchanged.
+  Bumped to v565.
+
+## v566: Inventory — selected category pill shows its name (phone view)
+
+- In phone view (<= 767px) the active category pill expands to icon + name + count; the other pills stay icon + count.
+  CSS only (`.inv-chip.active .inv-chip-nm`). Bumped to v566.
+
+## v567: Monthly Trend — optional "Mirrored" chart style
+
+- New "⇅ Mirrored" toggle beside Auto-scale (Dashboard + Monthly Trend page, same section). Off (default) = the
+  original side-by-side bars. On = one column per month, income UP / expense DOWN from a centre line on one shared
+  scale, rounded outer ends, flat on the axis. Colours stay green (income) / red (expense).
+- Same tooltip/tap (data-* attributes), year selector, phone layout and table; Auto-scale works in both styles (a clipped
+  bar gets its notch at its outer end). Gridlines at 0, ±1/2, ±full scale, both halves labelled with the positive amount.
+- Persisted in SETTINGS as `monthlyTrendStyle` ("grouped" | "mirrored"); loaded at start and applied on settings restore.
+  New code: `buildMonthlyTrendMirroredSVG`, `bottomRoundedBarPath`, `toggleMonthlyTrendStyle`. Bumped to v567.
+
+## v568: Monthly Trend — icon-only toggle buttons on phones
+
+- At widths <= 480px the "Mirrored" and "Auto-scale" buttons show only their icon (⇅ / ⤢); the highlight shows on/off, tap again
+  to turn off. Text labels (incl. ": On") stay on wider screens. Words live in `.mt-btn-tx` (hidden by CSS on phones);
+  title/aria-label kept, plus aria-pressed. Both buttons now fit on one row with the year selector. Bumped to v568.
+
+## v569: Monthly Trend — phone buttons expand to a short name when ON (no ": On"), header wraps
+
+- At widths <= 480px the Mirror / Auto-scale buttons are icon-only when OFF; when ON they highlight AND show a short name
+  ("Mirror", "Auto-scale") — no ": On". Wider screens still show "Mirrored: On" / "Auto-scale: On". If both are on and the
+  row is too narrow, the button group wraps under the title (right-aligned, with the year selector) via `.mt-header`.
+  Name pieces: `.mt-btn-ed` ("ed"), `.mt-btn-on` (": On") are hidden on phones. Bumped to v569.
+
+## v570: Monthly Trend table — tap a Balance to open the Net Savings Statement for that month
+
+- In the Monthly Trend table (Dashboard + Monthly Trend page, phone + desktop) each month's Balance cell (when that month has
+  activity) and the Total row's Balance are tappable (dotted underline + ›): they call `navigateToSavingsPage(year, month)`
+  with the table's selected year — month index "0".."11", or "all" for the Total row. Back returns to the Dashboard (existing
+  scroll restore). Months with nothing logged stay plain. Handler: `monthlyTrendBalanceClick`; cell builder:
+  `monthlyTrendBalanceCell`.
+- The Savings Statement tally now parses `t.date` as a local date (`T00:00:00`), like `computeMonthlyTrendData`, so the month
+  net equals the table's Balance in every timezone. Bumped to v570.
+
+## v571: Accounts page — Cards view (swipe to choose an account)
+
+- New **List | Cards** toggle under the "All Accounts" title (Sidebar > Financial Accounts, also the type shortcuts). List is
+  unchanged. The choice is remembered **per device** (localStorage key `ledgerAccountsViewMode`, not in the synced settings or
+  Backup) so a phone can stay on Cards while the PC stays on List.
+- Cards view = group chips with counts (All · Bank/Cash · Credit Card · Multi-Currency · …, i.e. the existing account groups;
+  hidden when only one group is on screen, e.g. a sidebar type shortcut) + a group-total line when one group is selected +
+  a card per account + a detail panel for the selected card. Same account set, zero-balance hiding and sort as the list.
+- **Phone (<= 820px):** cards swipe sideways (CSS scroll-snap, neighbours peek in), counter "2 / 5" + dots (dots only up to 10
+  cards); tapping a side card centres it. **PC (> 820px):** cards wrap into a grid, click a card to select it (no carousel).
+- Card front: account name (2-line clamp), group/sub-group pill, balance in the account's own currency (+ base-currency
+  equivalent when different; Multi-Currency / Fixed Deposit / Unit Trust show the base total + "N currencies"), members, dashed
+  "Not in Net Worth" pill, credit cards show Amount due. Colour follows the account group (`ACCOUNT_CARD_GRADIENTS`).
+- **Flip:** the round **i** button (not a tap on the card, which selects) turns the card over to the low-frequency info:
+  account no., group/sub-group, currency, related account, members, plus the usual extra-info lines. **↩** flips back.
+- Detail panel (updates as you swipe, no re-render): money in / money out this month (base currency, transfers counted,
+  Opening Balance entries ignored), action buttons (+ Add entry pre-filled with the account, Pay for a credit card with an amount
+  due, Activity, Edit), currency / fund / FD-placement breakdown rows (same targets as the list), and the 5 most recent entries
+  (tap one to open it). "+ Add entry" is hidden for Fixed Deposit and Unit Trust accounts (they use their own flows).
+- Code: `buildAccountsCardsHTML`, `accountCardFaceHTML`, `accountCardDetailHTML`, `wireAccountsCardsTrack`, `selectAccountCard`,
+  `setAccountsViewMode`; branch at the top of `renderAccountsPage`. Bumped to v571 (APP_VERSION + sw.js CACHE_NAME).
+
+## v572: Cards view — sub-group chips, jump controls, flip-back fix
+
+- **Sub-group chips:** when one group is selected and it has 2+ sub-groups with accounts, a second chip row appears
+  (Bank/Cash: Current / Savings / Cash Account; Investment: Fixed Deposit, KWSP, CPF, ASNB, PTPTN, Unit Trust, Stocks/ETF, Gold)
+  with counts, in the app's own sub-group order; accounts with no sub-group get "(No sub-group)". The total line follows the
+  selection ("Sub-group total · KWSP"). Picking a group resets the sub-group to All. State: `accountsCardSubgroup`.
+- **Jumping around a long list (no auto-loop):** the "n / N" counter is now a button that opens a name list to jump to any card;
+  on the last card a "↺ First" button appears that scrolls back to card 1. Actions: `accountsCardCounterTap`,
+  `accountsCardJump`, `accountsCardGoFirst`.
+- **Flip back:** tapping anywhere on the back of a card flips it back (hint text at the bottom), the ↩ button is larger, and a
+  card is flipped back automatically when you move to another card. Fix for the ↩ button doing nothing: only the visible face now
+  takes taps (`pointer-events` on the front/back face), since the hidden front face's button sat in the same corner.
+- Bumped to v572 (APP_VERSION + sw.js CACHE_NAME).
+
+## v573: Cards view — chip rows keep their scroll position
+
+- Tapping a group / sub-group pill in the middle of a scrolled chip row made the row jump back to the first chip (the view is
+  re-rendered, which rebuilt the row at scroll 0). The row's sideways scroll is now saved before the re-render and restored after
+  it (`saveAccountsChipScroll` / `restoreAccountsChipScroll`), and the active pill is kept in view. Picking a different group
+  starts the new sub-group row at the left. Bumped to v573.
+
+## v574: Accounts header — icon-only List | Cards switch, wider cards, roomier card back
+
+- The List | Cards switch is now icon-only (list icon | card icon, active one highlighted) in the Accounts header, beside the
+  📤 export button; the full-width toggle row, the "ALL ACCOUNTS" row and the "Tap an account to view its activity" line are
+  gone. The page title ("All Accounts", or the sidebar type-shortcut name) is now the header's subtitle line
+  (`#accountsPageListTitle`). Same per-device choice (`ledgerAccountsViewMode`).
+- Cards are 84% of the screen wide (was 78%), side padding 8%, so neighbours still peek in.
+- Card back: Account no. and Related account get a full-width line (label above value); Currency / Members / Net Worth sit side
+  by side; the Group row was dropped (the chips show it); scrollbar hidden. Bumped to v574.
+
+## v575: Cards view on PC — one-row carousel instead of a grid
+
+- On PC (> 820px) the cards used to wrap into a grid, so with 50+ accounts the detail panel was far below the fold. PC now uses
+  the same one-row carousel as the phone (fixed 280px cards, first / last card can still centre), with **‹ ›** buttons beside the
+  counter and **←/→** keys (focus a card first); the counter list, ↺ First and the chips work the same way. Phone unchanged.
+  `isAccountsCarouselMode()` is now always true; step action `accountsCardStep`. Bumped to v575.
+
+## v576: Fix right Insights rail shaking when stepping through Accounts cards (PC)
+- Cause: each card's detail panel has a different height, so the page's vertical scrollbar appeared/disappeared while stepping ‹ ›, changing the viewport width by ~15px; the centred `#contentRow` layout then shifted the Insights rail sideways.
+- Fix: at 1400px+, `html { scrollbar-gutter: stable; overflow-y: scroll; }` keeps the scrollbar gutter permanently reserved. Bumped to v576.
+
+## v577: Settings > Background Theme > "App font" (Default / Kalam / Shadows Into Light Two)
+- New global font picker (works under every theme preset, and beats the 蠟筆小新 Kalam toggle when set to a non-default choice). Stored in `localStorage["ledgerAppFont"]` (`default` | `kalam` | `shadows`), applied as `html[data-app-font]` (CSS beside the crayon font rule in index.html; mirrored in `theme-init.js` for first paint; re-asserted in `applyBgTheme()`).
+- New self-hosted font `fonts/shadows-into-light-two-400.woff2` (OFL, latin subset), added to the service-worker precache. Cache bumped to v577.
+- Screen only (`@media screen`): printed reports/PDF exports keep their normal fonts. Elements with an ID-scoped or inline font (Description Summary modal, Ledger Calendar day card, Kalam amounts) are unchanged.
+
+## v578: Fix App font buttons not responding
+- `selectAppFont` had been registered in `CHANGE_ACTIONS` instead of `CLICK_ACTIONS`, so the `data-click` buttons did nothing. Moved to `CLICK_ACTIONS`.
+
+## v579: Google Drive sync — images as separate files, primary device, manual-upload guard
+- **Images no longer travel inside `ledger-backup.json`.** The Drive data file is now "slim" (`attachmentsExternal: true` + `attachmentIds`); each attachment is its own AES-GCM encrypted file `ledger-img-<attachmentId>.json` in the appDataFolder (own random IV per file; key = passcode + a per-device salt written into the file, cached so PBKDF2 runs once per salt per session). A sync lists the Drive images once and uploads only the ones Drive lacks — *before* the data file, so the data file never lists an image that isn't there. Restore keeps blobs the device already has, prunes ones the backup no longer lists (that's how a delete on the phone reaches the PC) and downloads only the missing ones.
+- While a pull is still fetching images, `driveImgPullIncomplete` (persisted) blocks Drive uploads and file exports, so half-downloaded images can't be dropped from a later backup. Retried by the next Restore Latest / auto-pull.
+- **Primary device** (`ledger-primary.json` in the appDataFolder; `mode: "primary" | "any"`): only the primary auto-uploads; others still auto-pull and can upload manually. No record yet → nothing is restricted (changed in v581; v579/v580 let the first auto-uploading device claim it). Settings → Google Drive has *Make This Device Primary* / *Allow All Devices*. Soft lock (Drive doesn't enforce it).
+- **Manual "Upload to Drive" guard:** warns before overwriting when Drive changed since this device last synced, or when another device is the primary.
+- Passcode change rotates the image salt and re-uploads every image on the next sync.
+- Old-format Drive backups (images embedded) still restore normally. **Update every device to v579 before the first sync from a v579 device** — v578 would read the slim file as "no images" and clear its local ones.
+- Not in this version: purging orphaned images from Drive (deleted images stay in Drive for now). Cache bumped to v579.
+
+## v580: Settings > Google Drive > "Clean Up Unused Images" (button only)
+- Deletes Drive image files that no backup lists any more **and** that have been unused for 30+ days. Drive doesn't record when an image became unused, so the first run that notices an unused image writes the date to `ledger-orphans.json` (appDataFolder); images used again are dropped from that record. A first run therefore deletes nothing — it starts the clock.
+- Preconditions (otherwise it explains and stops): primary device (or no primary), no unsynced local changes, no unfinished image pull, this device already on Drive's latest backup, Drive backup in the new slim format. It decides from Drive's own data file (decrypted), and treats an image as used if its id appears anywhere in that data. Safety stop if the backup lists no images but this device has some.
+- Preview + confirm before deleting (count and size, how many newer ones are kept); re-checks that Drive hasn't changed while the dialog was open. A mistaken purge heals itself if some device still has the image locally (the next upload re-sends it). Cache bumped to v580.
+
+## v581: Primary device is opt-in
+- With no `ledger-primary.json` record, every device auto-uploads exactly as before v579 — a device no longer claims "primary" by itself. The restriction only starts when someone taps *Make This Device Primary* (Settings → Google Drive). Reason: family members who weren't told about the feature, using their own devices/accounts, must see no behaviour change. Cache bumped to v581.
+
+## v582: new Drive image format is opt-in too
+- Until someone chooses a primary device (Settings → Google Drive → *Advanced: multi-device sync* → Make This Device Primary, or Allow All Devices), uploads use the **original single-file backup with images embedded**, exactly like v578 — no per-image files, no behaviour change for people who haven't opted in. The record in `ledger-primary.json` is the switch: once it exists, every device on that Google account uploads the slim format. Pulling always understands both formats.
+- The first opt-in shows a warning: every device on that account must already run this version (an older one would clear its local images when it pulls the slim format).
+- The new controls live in a collapsed *Advanced* section; Clean Up Unused Images is in there too (it needs the new format). Cache bumped to v582.
+
+## v583: ⭐ on the dashboard sync line when this device is the primary
+- The small Drive status line under the Dashboard header now starts with a ⭐ when this device is the primary device (e.g. "⭐ ☁ Synced 09:15 AM"). No extra text, no new icon; it appears in every state of that line (syncing, waiting, warnings). Nothing changes for devices that are not primary, when no primary is set, or when Drive isn't connected (the line is hidden then, as before).
+- The last known answer is remembered in `localStorage["ledgerDrivePrimaryMe"]` so the star shows straight after a relaunch or while offline, until the next Drive check updates it. Tapping the line now also re-checks who is primary (so a stale star clears if another device took over) and the "Last synced" toast adds "· ⭐ primary device".
+- Cache bumped to v583.
+
+## v584: Chinese font picker — Long Cang (龙藏体) for Chinese text only
+- New Settings → Background Theme → **🈶 中文字体 Chinese font**, under the App font picker: **Default** or **Long Cang 龙藏体**. Independent of the English App font (Default / Kalam / Shadows Into Light Two) — any combination works. Stored in `localStorage["ledgerZhFont"]` (`default` | `longcang`), applied as `html[data-zh-font]`; mirrored in `theme-init.js` for first paint; re-asserted in `applyBgTheme()`. Handler `selectZhFont` is in `CLICK_ACTIONS`.
+- How it stays Chinese-only: Long Cang's `@font-face` slices (88 files in `fonts/long-cang/`, ~3.3 MB, OFL) have `unicode-range` clipped to U+2E80 and above (CJK ideographs, CJK / fullwidth punctuation, kana). So Latin letters, digits and ASCII punctuation never use it and fall through to the App font. The font-face block is inline in index.html (right above the base `*` rule).
+- Every all-element `font-family` rule (base `*`, `#noteSummaryModal`, `#ledgerCalendarDayCard`, crayon Kalam, App font Kalam / Shadows) now starts with `var(--zh-ff,)`. `--zh-ff` is empty by default (nothing changes) and is `"Long Cang",` under `html[data-zh-font="longcang"]` inside `@media screen` — so printed reports / PDF exports keep their fonts.
+- Slices are NOT precached (too big); the service worker's runtime cache stores the ones a screen uses (first use needs a connection; after that offline works for the characters already seen). Cache bumped to v584.
+- Not affected: elements with an inline `font-family` (e.g. the Kalam warranty strip / net-for-the-day amount). Chinese quotation marks and the ellipsis (U+2000 range) are shared with English, so they stay on the App font.
+
+## v585: Long Cang fallback for traditional characters + roomier font pickers
+- Reported: some characters in Chinese text (宮 創 腸 煙 獅 槍, mostly traditional forms) stayed in the plain system font while the rest was Long Cang. Cause: Long Cang contains **simplified characters only** (6,978 glyphs; 33 of the 6,763 GB2312 hanzi and ~2,170 common Big5 hanzi are missing), so the browser fell back to the system font for the rest.
+- Fix: `fonts/klee-one-zh-fallback-400.woff2` — a subset of Klee One (OFL, textbook-handwriting style) holding only the 5,125 CJK characters Long Cang lacks (one ~1.4 MB file, license in `fonts/KLEE-ONE-LICENSE.txt`). `@font-face "Klee One ZH"` (exact unicode-range) sits right after Long Cang in `--zh-ff`: `"Long Cang", "Klee One ZH",`. Long Cang still wins for every character it has; Klee One is only downloaded when a missing character is shown (runtime-cached, not precached). Only active when the Chinese font is set to Long Cang.
+- Font pickers (App font / Chinese font): the name now sits on top and the sample uses the full row width, so long samples no longer wrap into 3-4 lines. Cache bumped to v585.
+
+## v586: Spending by Tag — row titles use weight 600 when the Chinese font is Long Cang
+
+- v563 set `.tagrep-title` to 500 so Chinese would not look bolder than English with the system Chinese font (YaHei has only 400 / 700). Long Cang has a single weight (400), so 500 left the Chinese thin and small next to Inventory item names (600, browser-thickened). New rule `html[data-zh-font="longcang"] .tagrep-title { font-weight: 600 }` (screen only) matches Inventory; with the default Chinese font the title stays 500. Bumped to v586.
+
+## v587: Spending by Tag — day stamp on its own line (phone view)
+
+- At widths <= 767px the day stamp ("30 Thu") sits on a slim line above that day's first entry instead of in a left column, so titles, 📎 badges and amounts use the full card width (fewer wrapped Chinese titles). Continuation rows (same day) hide their empty date cell and their dashed divider starts at the card padding. CSS only (`.tagrep-date`, `.tagrep-row.cont::before` inside `@media (max-width: 767px)`); wider screens unchanged. Bumped to v587.
+
+## v588: Chinese size (Normal / Large / Larger) for the Long Cang font
+
+- Settings > Background Theme > Chinese font: when Long Cang is selected a "Chinese size" row appears (Normal / Large +10% / Larger +20%, with a live sample). Saved in `localStorage` key `ledgerZhFontSize` — this device only, not in the backup, no Drive sync. Applied early in `theme-init.js` (`data-zh-size` on `<html>`).
+- Implementation: `size-adjust` on copies of the Long Cang / Klee One ZH `@font-face` slices (families "... L" = 110%, "... XL" = 120%), generated once per size by `ensureZhSizeFonts()` from the existing rules (same woff2 files, nothing new to download or precache); `--zh-ff` for `data-zh-size="large|larger"` lists the copies first and the originals as fallback. Only Chinese glyphs scale; English / digits keep the App font size. Needs `size-adjust` support (Chrome / Edge / Firefox 92+, Safari 17+); on older browsers it simply stays Normal. Bumped to v588.
+
+## v589: Spending by Tag — day stamp is a pill on phones
+
+- The day stamp (`.tagrep-date`) now wraps its day number and weekday in `.tagrep-dpill`. Wider screens: `display: contents`, so the left column looks exactly as before. Phone view (<= 767px): a small pill with the month-header tint (`--active-bg`), day number in `--primary`, weekday muted, so it stands out from the entry titles. Bumped to v589.
+
+## v590: Chinese font picker — Ma Shan Zheng (马善政) added
+
+- Settings > Background Theme > Chinese font now has a third choice: **Ma Shan Zheng 马善政** (a brush-style handwriting font, OFL, google/mashanzheng) next to Default and Long Cang. Stored in the same device-only `localStorage["ledgerZhFont"]` (`default` | `longcang` | `mashanzheng`); `theme-init.js` accepts it for first paint, `ZH_FONT_CHOICES` in `ledger.js` lists it, and `html[data-zh-font="mashanzheng"]` sets `--zh-ff: "Ma Shan Zheng", "Klee One ZH",`.
+- Built exactly like Long Cang: inline `@font-face` slices (88 files in `fonts/ma-shan-zheng/`, ~3.6 MB in total) with `unicode-range` clipped to U+2E80 and above, so English / digits keep the App font; screen only; not precached — the service worker runtime-caches the slices a screen uses (first use of a character needs a connection). Only the slices for characters actually shown are downloaded.
+- **The slice files are NOT in this deploy zip** — upload `fonts/ma-shan-zheng/` once to the repo from `ledger-pwa-deploy_v590_part2-mashanzheng-fonts.zip`, same as Long Cang (v584). `fonts/MA-SHAN-ZHENG-LICENSE.txt` is in this zip.
+- Traditional characters: Ma Shan Zheng has the same simplified-only glyph set as Long Cang (6,730 CJK ideographs, checked from the font cmaps), so the existing Klee One ZH fallback covers its missing characters too — no new fallback file.
+- The Chinese size row (Normal / Large / Larger) and the Spending by Tag title weight (600) now apply to both fonts; `ensureZhSizeFonts()` also copies the Ma Shan Zheng slices (families "Ma Shan Zheng L" / "XL").
+- Cache bumped to v590.
+
+
+## v591: Local Snapshots — slim snapshots, a real list, restore that syncs
+
+- **Why:** each Local Snapshot was a full backup including every image, encrypted twice (passcode layer + app-lock layer) — about 45 MB each with ~25 MB of images. Five of them were ~230 MB of the PC's 231 MB "Used". Opening the list also decrypted all five.
+- **Slim snapshots.** A snapshot now holds all the data plus **only the local images the overwrite would destroy** (the ones the incoming Drive data doesn't list); every other image is just an id in `attachmentIds`. New helpers `buildSnapshotBundle()` / `bundleAttachmentIds()`. Marked `attachmentsExtraOnly`. Old full snapshots (no flag) still restore exactly as before.
+- **Snapshot restore never deletes images** (`restoreFromBundle` skips the attachments clear/prune for `attachmentsExtraOnly` bundles and just writes the extras back). Images the snapshot lists but this device no longer has are **fetched from Drive before anything is changed**; if that download fails the restore stops with nothing touched. Images Drive no longer has are skipped and counted in the toast ("⚠ N images unavailable"). A restore can only recover what still exists on this device, in the snapshot, or in Drive.
+- **Restore now counts as a local change.** After a snapshot restore every restored store is marked dirty and auto-sync is scheduled, the same as an edit: the primary device uploads it, a Drive change in the meantime gives the normal conflict pause, and a later Restore Latest takes its own safety snapshot first. Before: the device looked "clean", so Drive and this device silently disagreed and no safety snapshot was taken.
+- **"Before restore" snapshot** is saved first (data only, no images needed — a snapshot restore never deletes images; for an old full snapshot, the images it would delete are included). If it can't be saved, nothing is restored. If the restore itself fails midway, the message points to that copy and nothing is uploaded.
+- **Limits:** newest 5 snapshots AND at most ~60 MB in total (oldest dropped first, the newest is never dropped, checked only when a snapshot is saved, on stored sizes — nothing is decrypted). When the size cap (not the count) removes something, the list shows "Auto-cleaned N older snapshots…" (device-local `driveSnapshotCleanupNote`). The old ~45 MB snapshots on the PC are cleared this way on the next snapshot, or sooner with Delete.
+- **Local Snapshots list** (Settings → Backup & Restore): new modal with date, size, label, **Restore** and **Delete** per row, replacing the `prompt()`. The confirm now says all data stores and settings are replaced. No separate snapshot index — added only if the list turns out slow now that snapshots are small.
+- **Storage page** gets a "Local Snapshots: N (~X MB)" line (the footprint figure above it is an estimate and never included snapshots).
+- Conflict-log "remote changed stores" now compares image id sets instead of raw attachment fields, so "attachments" no longer always shows as changed.
+- Not in this version: atomic (single-transaction) restore — planned for v592, since `restoreFromBundle` is shared with file import and the Drive pull.
+- Cache bumped to v591.
+
+## v592: Atomic restore — a restore is all-or-nothing
+
+- **Problem:** `restoreFromBundle()` cleared one store at a time and wrote every record back in its own tiny IndexedDB transaction. An error, a closed tab, a crash or a dead battery half-way left a half-old / half-new ledger, with no error to catch.
+- **Now:** every record is encrypted in memory first, then **one** IndexedDB transaction across all the stores clears and rewrites them. IndexedDB commits a transaction all-or-nothing, so if anything fails (a bad record, quota, the browser or OS killing the app) the previous data is exactly as it was. Nothing is awaited while the transaction is open.
+- **Covers all three callers** (they share this one function): Restore Latest / Use Remote (Drive pull), Import Backup (file), and Local Snapshot restore.
+- **Unchanged behaviour:** the same 15 data stores are cleared and rewritten; SETTINGS is never cleared (rows overwritten, this device's own `drive*` sync rows skipped); transactions and images keep their original ids; slim Drive bundles still prune local images they don't list (now inside the same transaction); Local Snapshots (`attachmentsExtraOnly`) still only add images; in-memory variables, Companion and the screen refresh are applied after the commit.
+- **Errors:** a failure before the commit throws with `restoreCommitted = false` and nothing has changed. A failure in the screen refresh AFTER the commit throws with `restoreCommitted = true`; the Local Snapshot restore then carries on as a normal restore (marks the stores unsynced, syncs) and the toast says to reload the app. The Local Snapshot restore's failure alert now says "nothing was changed" instead of pointing to the "Before restore" snapshot (which is still saved first).
+- **Cost:** the whole restored bundle (data plus any image records) is held in memory encrypted before the transaction opens — fine at current sizes (~25 MB of images), and a failure there simply changes nothing.
+- Not changed: Import Backup (file) still doesn't mark the restored data as unsynced the way a Local Snapshot restore does (v591) — a separate decision.
+- Cache bumped to v592.
+
+## v593: Insurance — surrender value list no longer needs a long scroll
+
+- **Problem:** in Edit Policy the surrender-value entries were an unbounded list, oldest first, with "＋ Add surrender value" below the last one. With a long history the new entry landed at the very bottom of an already long form, so adding one meant scrolling past every earlier entry (the payment and cashback lists were already bounded; this one wasn't).
+- **Now:** the list sits in a bounded, scrolling box (`.ins-sv-scroll`, max 380px — a bit taller than the payment list's 300px, since each entry has several inputs), shown **newest first**. A new entry is inserted at the **top** of the box, scrolled into view, and takes focus (Guaranteed; for an investment-linked policy, the fund name). The Add button stays right under the box.
+- Saving still sorts entries by date (`collectInsSvRows()`), so the on-screen order changes nothing in the data. The policy page itself is unchanged (latest entry = the value shown on the policy).
+- Cache bumped to v593.
+
+## v594: Chinese fonts — "Save for offline" (resumable) + a font cache that survives app version bumps
+
+- **What the person sees:** Setting → Background Theme → Chinese font: under the font buttons there is now a status line for the selected handwriting font — "Saving for offline… 40/89", "Saved for offline", "Saved for offline (older font files) — will update when online", or "Not saved yet (54/89) — will retry when online" — and a subtle **⋯** button. Its menu offers "Save for offline now / Resume saving / Update offline copy" (≈4.6 MB Long Cang, ≈5.0 MB Ma Shan Zheng, each including the shared Klee One fallback) and "Remove offline copy" per font. Choosing Long Cang or Ma Shan Zheng starts the download by itself; nothing is downloaded for Default.
+- **All slices, resumable:** the whole font is downloaded — all 88 slices plus the Klee One fallback (89 files), nothing is predicted. What is already in the font cache is never fetched again, so an interrupted download only fetches what is missing. At most **3 requests at a time**, and only one font downloads at a time. A file counts only after `cache.put` succeeded, and the status is "Saved for offline" **only when all 89 are really there**. A file the server answers 404 for (for example the slices were never uploaded to the repo) is reported as "Font files not found on the server" and is not counted.
+- **Saved state is stored locally, then checked against the cache:** the status is kept in `localStorage["ledgerZhFontPack"]` (per font: saved / partial / none, the font-file version it was saved at, counts, time of the last attempt, a "removed" flag). The picker reads it the moment it opens, so the line is right immediately; then a background check compares it with what is really in the cache and **downgrades "Saved" to "Not saved yet (88/89)"** if slices are gone (the browser may evict the cache under storage pressure). Device-only: not in the backup, does not sync.
+- **Separate font cache — survives app version bumps from this release onward:** the Chinese font files (`fonts/long-cang/`, `fonts/ma-shan-zheng/`, `fonts/klee-one-zh-fallback-400.woff2`) now live in their own Cache Storage bucket, `ledger-fonts-v1`. `sw.js`'s activate step deletes every cache except the current app cache **and** this one, so bumping `CACHE_NAME` (v595, v596, …) no longer throws the saved fonts away. (Before v594 the slices sat in the versioned app cache and were cleared on every bump.) The service worker answers font requests cache-first from this bucket; a request made with `cache: "reload"` (the app's own save/refresh download) always goes to the network and errors if it cannot, so a refresh can never look successful while offline.
+- **fontVersion — bump it ONLY when the font files change:** new file **`font-version.js`** holds `LEDGER_FONT_CACHE` (the bucket name) and `LEDGER_FONT_VERSION` (currently `"f1"`). `index.html` loads it before `ledger.js`; `sw.js` `importScripts()` it, so the page and the service worker always read the same values. Bump `LEDGER_FONT_VERSION` only when the font **files** are replaced, re-cut or rebuilt (a new font, new slices, a rebuilt Klee One file) — not for app releases. When the app sees a saved copy recorded at an older version it marks it **stale**: still used offline (a stale font is far better than a missing one), and refreshed **quietly, only** when the picker is opened or the font is used while online. The refresh re-fetches every file with `cache: "reload"`, is resumable (progress is remembered), and afterwards deletes cached font files that no `@font-face` uses any more. Keep `ledger-pwa-deploy`'s usual habit of bumping `CACHE_NAME` in the same release: `sw.js` is re-installed then and re-caches `font-version.js` fresh (an edit to `font-version.js` alone can take up to the host's cache time, e.g. 10 minutes on GitHub Pages, to be noticed).
+- **Quiet retries are deliberately gentle:** only for the font in use, only for a copy that is missing / incomplete / older, only while online, **not in data-saver mode or on a 2G connection**, not if the person removed the copy, and at most once every 10 minutes (a tap on the menu always goes ahead). It runs when the picker opens and about 4 seconds after the app starts. Someone who already had Long Cang or Ma Shan Zheng selected before v594 therefore gets the full copy saved quietly after updating (their old slices were in the app cache that this update clears).
+- **Remove offline copy:** deletes a font's files and remembers the removal (so it is not downloaded again by itself). Long Cang and Ma Shan Zheng share the Klee One file: removing one keeps it while the other font still has a copy; removing the last copy empties the font cache. The font still works online afterwards, and slices seen on screen are kept again as before.
+- **Deploy:** upload the new file `font-version.js` with the usual files (it is in this zip). The slice folders stay in the repo as before — nothing in `fonts/long-cang/` or `fonts/ma-shan-zheng/` changed.
+- **Tested** in headless Chromium against a local server that could slow down, fail, 404 and count requests (42 checks): first download (89 files, never more than 3 concurrent, "saving" progress shown, "saved" only when complete); interrupted download resumes and fetches only the missing files; cache eviction — the picker first says "Saved" from the stored state, then the check downgrades it to "Not saved yet (88/89)", and the quiet retry later fetches only the missing slice; font-version bump → stale, still served offline, refreshed quietly, interrupted refresh resumes; remove keeps the shared Klee One while the other font is saved and empties the cache after the last removal, and a removed copy is not downloaded again; the font cache survives an app cache bump; offline reload; a 404 slice is not counted; data-saver skips the quiet download. **Not tested:** a real phone, Safari / Firefox, a genuinely full disk (the `QuotaExceededError` path — shows "Not enough storage space" — has not been triggered), and the look of the status line in every theme (checked on the default light theme at phone width only).
+- Cache bumped to v594.
+
+## v595: Insurance — Edit Policy form split into separate section cards
+
+- **Problem:** the Add / Edit Policy form was one long run of fields. Basic details, premium, coverages, riders, earlier payments, cashback, surrender values, attachments and notes all looked alike, so it was hard to tell where one topic ended and the next began, especially with a long payment list and many surrender-value entries.
+- **Now:** the form is split into **nine section cards** on a light-grey backdrop, each with an icon header and a one-line description: Policy · Type & dates · Premium · Coverage(s) · Riders · Premiums paid before this ledger · Cashback / payouts · Surrender value history · Attachments & notes (`.ins-sec`, `#insSec1`…`#insSec9`). Nothing inside changed — same fields, same ids, same save / validation logic; only the grouping and styling are new.
+- **Jump bar:** a sticky row of chips at the top of the form (`#insJump`) jumps straight to a section and highlights the section being read (the last chip lights up at the bottom of the form). It scrolls sideways on a narrow phone. Opening the form always starts at the top. Click action `insJumpTo` is registered in `CLICK_ACTIONS`.
+- Styling uses the theme variables (`--card-bg`, `--chip-bg`, `--border-color`, `--primary`), so dark themes follow; the grey backdrop uses `color-mix()`, with a plain `--chip-bg` fallback.
+- **Tested** in headless Chromium at phone width (all nine sections present, every original control still inside a section, chip jump lands the section at the top, active chip follows scrolling, reopening resets to the top, no script errors; screenshots checked in the default light theme and the dark "暗夜描边" theme). **Not tested:** a real phone, saving a policy through the new layout end to end, and the other themes.
+- Cache bumped to v595.
+
+
+
+## v596: Insurance — Edit Policy on a phone
+- The long explanations under "Premiums paid before this ledger", "Cashback / payouts" and "Surrender value history" are hidden on phones (≤640px) behind a **!** button in the section header; tap to show / hide. Desktop is unchanged.
+- Earlier-payment and cashback rows wrap onto two lines on a phone (Date + Amount, then Note + P / ↩ / ×) so Amount and Note are no longer squeezed; column headers are hidden there (placeholders say what each box is).
+- The inner scroll boxes (payment / cashback / surrender lists) are removed on a phone, so a swipe anywhere scrolls the whole form and "+ Add surrender value" is easy to reach; a newly added entry scrolls into view.
+- Cache bumped to v596.
+
+## v597: Insurance
+- Edit Policy: **+ Add surrender value** now sits above the list (new entries are inserted at the top, so no scrolling to the bottom).
+- Policy detail: "Premium payments" and "Surrender value history" headings are highlighted badges with a count chip.
+- Cache bumped to v597.
+
+## v598: Insurance
+- Policy detail: "Cashback received" heading is now a highlighted badge too (same as Premium payments / Surrender value history).
+- Cache bumped to v598.
+
+## v599: Insurance — 📈 Record SV
+- Policy detail has a **📈 Record SV** button (shown for policies that have surrender-value history, or are Life / Savings / Investment-linked). It opens Edit Policy at "Surrender value history" with a new entry (today) on top, cursor ready; Save stores it.
+- Button bar wraps to fit four buttons on a phone.
+- Cache bumped to v599.
+
+## v600: Insurance detail — button bar fix
+- Four buttons (Record premium / cashback / SV / Edit) wrap two per row on a phone so no label is clipped; one row on wide screens.
+- Cache bumped to v600.
+
+## v601: Insurance detail (phone)
+- Button bar now really wraps two per row (inline flex:1 was overriding the CSS).
+- Premiums paid / Surrender value card stacks vertically on a phone, so the surrender figure no longer overflows.
+- Cache bumped to v601.
+
+## v602: Dashboard — to-do items moved to the top
+- **Planned Payments** and **Tag Reminders** (e.g. Pending Claim) moved from below Monthly Trend to sit directly under the FD / Credit Card due reminders, before Budget.
+- Order: overdue / due cards → Planned Payments → Tag Reminders → Budget.
+- Layout only (HTML blocks moved, same element ids); no logic or data changes. Each widget still hides itself when it has nothing to show.
+- Cache bumped to v602.
+
+## v603: Dashboard — Reminders moved up too
+- **Reminders** (renewal-type dates, e.g. overdue renewals) moved up beside the other to-do items.
+- Order: overdue / due cards → Planned Payments → Reminders → Tag Reminders → Budget.
+- Layout only; same element ids, no logic or data changes.
+- Cache bumped to v603.
+
+## v604: Dashboard — Warranty Reminders moved up (last)
+- **Warranty Reminders** moved from below Monthly Trend to the end of the to-do group (least urgent).
+- Order: overdue / due cards → Planned Payments → Reminders → Tag Reminders → Warranty Reminders → Budget.
+- Layout only; same element ids, no logic or data changes.
+- Cache bumped to v604.
+
+## v605: Dashboard — count badges + divider on the to-do group
+- Planned Payments, Reminders, Tag Reminders and Warranty Reminders now show a small **count badge** next to their section title.
+- Badge colour = urgency: **red** = something overdue/expired, **orange** = due soon, **purple** = Tag Reminders (info only; counts items, e.g. "2" for 2 pending-claim items).
+- A thin **divider** now separates the to-do group from Budget. It only appears while at least one of the four widgets is visible.
+- Purely visual (new CSS + two small helpers `setTodoBadge()` / `refreshTodoGroupDivider()`); no data or logic changes. Per-row styling untouched.
+- Cache bumped to v605.
+
+## v606: Biometric unlock — toggle no longer stays on when enrollment fails
+- **Bug:** `enableBiometricUnlock()` reports failure by returning `false` (it never throws), but the Backup & Restore "Biometric quick unlock" toggle only reset itself on a thrown error. On devices without WebAuthn PRF support the PRF alert appeared, yet the toggle stayed switched on with no biometric record saved.
+- **Fix:** `handleBiometricToggleChange()` now switches the toggle back off when `enableBiometricUnlock()` returns `false`.
+- If credential registration fails for a reason other than the user dismissing the prompt (`NotAllowedError`), a short "couldn't be set up on this device or browser" alert now shows instead of failing silently.
+- Security model unchanged: biometric unlock stays PRF-only (no gate-only fallback); the passcode remains the unlock method on devices without PRF.
+- Cache bumped to v606.
+
+## v607: Description Summary modal — readable in dark themes
+- **Bug:** the Description Summary modal (📝 on a category page) keeps its warm cream "paper" background in every theme, but its text took colour from the theme variables. Dark themes make those light, so the title, ×, merchant names, "Dates:" lines and Close button were pale text on pale paper (unreadable).
+- **Fix:** `--text-main`, `--text-muted`, `--border-color` and `--chip-bg` are pinned to light-theme values on `#noteSummaryModal .modal-sheet` only, so the ink stays dark on the paper in every theme. Income/expense accent colours are unchanged.
+- CSS only; no logic or data changes. Cache bumped to v607.
+
+## v608: Quick Add — same description paid from different accounts now gives one chip per account
+- **Bug:** typing "Fla" after "Kedai Kopi Tenom's Flavor" had been paid once by Wallet Cash and once by Wallet TNG showed only the TNG chip. `loadDescSuggestionsCache()` kept just the newest occurrence of each description, so the other account never reached `findHistoryCandidates()`. The v353 multi-chip case only worked when the two records had different description text (e.g. "PETRONAS Nosob" vs "PETRONAS Nosob (R)").
+- **Fix:** history entries are now kept per description + category + account. `findHistoryCandidates()` is unchanged (de-dupes by category + account, newest first, max 3). The v252 description dropdown (`dynamicDescSuggestions`) is unchanged.
+- Chips for records on the same date are in stored order, since transactions only carry a date, not a time.
+- Cache bumped to v608.
+
+## v609: Quick Add — a merchant name that contains a number ("99 Speed Mart") no longer loses to the amount
+
+With two bare numbers and no `RM` / `块` marker, Quick Add used to take the *largest* as the amount, so
+`99 9.5` and `9.5 99` both gave Amount 99 and Description 9.5 (no chip). Now each bare number is tried as the
+amount in turn, and the one whose leftover text matches a saved description in your history wins (exact match
+first, then loose match). Both orders now give Amount 9.5 + "99 Speed Mart" + its category/account chip.
+If nothing in history matches, behaviour is unchanged (largest number = amount). Currency-marked amounts
+(`RM25`, `25块`) are unaffected.
+
+## v610: dark-theme legibility (Linked Placement, account-card info lines) + Reminder notes on the list
+
+- **FD interest entry → "Linked Placement"**: the panel had a fixed pale-blue background, so on the three dark
+  themes (暗夜描边 / Slate / 尊爵黑金) the placement picker's light text was almost invisible. Dark themes now use a
+  low-alpha blue tint with a lighter-blue label; light themes are unchanged.
+- **Accounts page**: credit-card lines (Limit · Statement day · Due day · Available · Amount due), the Bank Loan
+  "Redraw Available" line and "Excluded from Net Worth" used fixed dark pink/blue/red text. They are now classes
+  (`acct-cc-line`, `acct-redraw-line`, `acct-excl-line`): original colours on light themes, lighter tints on dark
+  themes. Applies to both the list and the Cards-view detail.
+- **Reminders**: the Notes field (e.g. a document number) was saved but never shown. It now appears as a "📝 …"
+  line (max 2 lines) under the reminder name, on both the Reminders page and the Dashboard widget.
+- `APP_VERSION` / `CACHE_NAME` bumped to v610. No data or schema change.
+
+## v611: Quick Add — pick the merchant first, then its Category · Account
+
+Quick Add chips used to be Category · Account combinations. Which merchant name you ended up with depended on
+which combination you tapped (e.g. `ten` → TNG gave "Kedai Kopi Tenom", Cash gave "Kedai Kopi Tenom's Flavor",
+PBB gave "Towering Tenom Mee"), and one merchant used with several accounts looked like unrelated chips.
+
+- **Step 1 — merchant chips.** Matching is by merchant (saved description), de-duplicated, with `'` / `’`, case
+  and extra spaces ignored. Rank: exact, prefix, word-start, contains; ties by most recent. Max 5. A small `×N`
+  shows how many Category · Account combinations that merchant has.
+- **Step 2 — tap a merchant.** Description is filled with that merchant's saved name. One combination: Category
+  and Account are applied right away. Several: that merchant's own combinations appear (most used first, then
+  most recent); tap one to apply. A "‹ merchant" chip goes back to the merchant list.
+- Description now only mirrors what you typed until you tap a merchant (no more silent replacement, even with a
+  single match).
+- If no merchant matches, the old keyword guess (category only, e.g. `grab` → Commute) is still offered.
+- `loadDescSuggestionsCache()` now also stores `count` and `lastDate` per description + category + account.
+  `findHistoryCandidates()` stays (used by the v609 amount tie-break); chips use the new
+  `findMerchantCandidates()`. No data or schema change; `index.html` unchanged.
+- `APP_VERSION` / `CACHE_NAME` bumped to v611.
+
+## v612: dark-theme legibility — Opening Balance Setup / Balance B/F / Balance C/F rows
+
+On an account's Activity page these three rows had a fixed near-white inline background (`#fafbfd`) while their
+text follows the theme, so on the three dark themes (暗夜描边 / Slate / 尊爵黑金) they showed light text on a
+white row. They now use the class `ledger-item-carry`: original near-white on light themes (and Liquid Glass),
+a low-alpha indigo tint (`rgba(99,102,241,0.16)`) on the dark themes. `ledger.js` (three templates) and
+`index.html` (one CSS block) changed; no data change. `APP_VERSION` / `CACHE_NAME` bumped to v612.
+
+## v613: inventory — detail page, Toys category, bigger phone pills, tidy camera file names
+- Tapping an inventory row now opens a read-only detail page (photos large, price, category, vendor, date, paid-from, model/SN, note, warranties, files); the ✏️ Edit button inside opens the existing form. The blue "N attachment(s)" link on a row still jumps straight to the photo.
+- New inventory category 🧸 Toys (fixed list, before "Other"). Existing items are unchanged.
+- Phone view: category pills have larger icons (44px tap targets); the count is a small corner badge.
+- Photos taken with the Take Photo / Camera buttons (transaction, inventory, insurance forms) are named `IMG_YYYYMMDD_HHMMSS.jpg` in local time instead of the long internal number. Gallery/file picks keep their own name.
+`index.html` + `ledger.js` + `sw.js` changed; no data/DB change. `APP_VERSION` / `CACHE_NAME` bumped to v613.
+
+## v614: dormant bank accounts
+
+An account can now be flagged **Dormant** by hand: Edit Account → **Account status** → 💤 Dormant, with an optional "Dormant since" date and a short note (e.g. "visit branch with IC to reactivate"). It is a manual flag on purpose — Ledger can't know a bank's own dormancy rule, and interest credits don't count as activity.
+
+- **Card / list:** a 💤 line under the account name (since-date + note), the row slightly dimmed; on the Cards view an amber 💤 Dormant pill and a desaturated card; the card back and the account's Activity banner show the same line.
+- **Net Worth:** unchanged — a dormant account still counts (the money is still yours).
+- **Accounts page:** a **💤 Dormant (N)** chip appears above the list/cards while any account is flagged; tap to show only those, tap again to clear. Starts unfiltered on every normal entry.
+- **Dashboard:** a "💤 Dormant accounts" block under Reminders, shown only while a dormant account still holds a balance (zero-balance dormant accounts keep just the card marker). One row per account with its note and balance, plus a total when there are several; tapping opens the Accounts page filtered to Dormant. Reactivating the account (status back to Active) removes it; Since/Note are cleared at the same time.
+- New account record fields: `status` ("active" | "dormant"), `dormantSince`, `dormantNote`. Older records without them read as Active, so no migration; they travel with Backup & Restore and Drive sync like any other account field.
+
+`index.html` + `ledger.js` + `sw.js` changed. `APP_VERSION` / `CACHE_NAME` bumped to v614.
+
+## v615: card numbers are masked until tapped
+
+Account No. / Ref now shows a card number as `•••• 1234 👁`; tap it to show the full number for 5 seconds (tap again, or wait, to hide it). Applies to the Accounts list, a member's account list, the Cards-view back face and the account's Activity banner.
+
+- **Which accounts:** a Credit Card account masks any number with 8+ digits. Any other account masks its number only when it looks like a card number (13–19 digits that pass the Luhn check), so ordinary bank account numbers (e.g. `038-68-02838-0`) still show in full. A 13–19 digit number that fails the Luhn check also shows in full.
+- While masked, the full number is not placed in the page at all (it is read back from the database on tap), so a screenshot or "save page" of the list never contains it. The Edit Account form still shows the full number so it can be corrected.
+- No data change. The app passcode was already mandatory (setup screen has no skip; the app does not start until a passcode exists), so nothing changed there.
+
+`index.html` + `ledger.js` + `sw.js` changed. `APP_VERSION` / `CACHE_NAME` bumped to v615.
+
+## v616: Budget page — "!" help button, yearly "Where the money went" breakdown
+
+- **"!" button:** the long pace explanation (and the "Automatically accounts for prior months' spend…" note) is hidden behind a "!" button beside the three pace rows (44px tap target). A one-line live status now stays visible: "On track", "Pace is above budget — on track to run out before the month/year ends", or "Over budget". Open/closed is remembered on this device only (localStorage `budgetPaceHelpOpen`, not part of the backup).
+- **Yearly tab — "Where the money went":** replaces the plain Yearly Category Budgets list. Every category with spending that year (largest first) plus any category that has a yearly budget but no spending yet. Each row: bar, spent / budget, share of total spending, "left" or "Over by" (red). Categories with no budget show a grey bar and "No budget". A header line shows total spent vs yearly budget and the amount over/left.
+- **Tap a row** → that category's transactions for that year (existing category history page; Back and hardware back return to the same Budget year and scroll position). The ✏️ on a row edits its budget; ＋ on a row with no budget opens Add Category Budget with that category pre-selected.
+- Same numbers as the Spent total above (refunds net against their category, "Exclude from Net Savings" categories left out, base currency). A transaction with no category counts as "Other Expenses", as before.
+- **Monthly tab:** category rows unchanged (tap still edits the budget).
+- **Negative budget fix:** when an auto-calculated month goes negative (yearly budget already overspent), Budget now shows RM0.00 with "Over by RM…" under it, and "Budgeted per day/month" shows RM0.00 instead of a negative number. Remaining Budget still shows the true overspend.
+- No data change.
+
+`ledger.js` + `sw.js` + `README.md` changed. `APP_VERSION` / `CACHE_NAME` bumped to v616.
+
+## v617: Budget page polish
+
+- **Yearly "Spending pace" fixed:** it divided by whole months elapsed (November counted as a full month on the 2nd), so it understated the pace. It now uses fractional months (10 full months + the part of this month gone). Present since the Yearly pace rows were added.
+- **"Used" shows the real percentage:** 105.4% instead of a capped 100%, in the Used cell and in the This Month / This Year strip ("Over budget" when there is no positive budget). Bars stay capped at full.
+- **Over budget wording:** the summary card reads "Over budget by RM…" (positive red number) instead of a bracketed negative Remaining Budget; the breakdown header no longer repeats the over-by amount. Bracket negatives elsewhere in the app are unchanged.
+- **Breakdown:** "No budget" only shows once at least one category has a budget; no-budget bars are scaled to the biggest category; ＋ is larger and uses the primary colour; shows the top 8 categories (plus any with a budget) with a "Show all" button.
+
+`ledger.js` + `sw.js` + `README.md` changed. `APP_VERSION` / `CACHE_NAME` bumped to v617.
+
+## v618: Budget page — compact yearly breakdown
+
+- **Yearly "Where the money went" redesigned** to match the Insights panel: a donut (top 6 categories + grey "Others", total spent in the centre) over a one-line-per-category list — colour dot, icon, name, amount, share of spending. Tapping a row still opens that category's transactions for the year.
+- A category with a yearly budget gets a thin second line: bar, "RM x left of RM y" or "Over by RM x" (red), and ✏️ to edit. Categories without a budget stay on one line (no "No budget" text, no grey bars).
+- Shows the top 10 (plus any budgeted category) with a "Show all" button.
+- The per-row ＋ is gone; add a category budget with the page's + button.
+- No data change. The Monthly tab and summary card are unchanged.
+
+`ledger.js` + `sw.js` + `README.md` changed. `APP_VERSION` / `CACHE_NAME` bumped to v618.
+
+## v619: Monthly tab + Dashboard budget card, over-budget handling
+
+- **Auto-calculated month never negative:** once the yearly budget is already overspent, the derived monthly budget is RM0 (it was minus RM5,283.75, which inflated the month's "over by" figure with the year's overspend). The month now reads "Over budget by" what was actually spent this month, and a note explains that the yearly budget is already over by RM x. "Lock in this month's budget" can no longer save a negative amount.
+- **Dashboard budget card:** same wording as the Budget page — "Over budget by RM…" for the month, and "over by RM…" instead of "(RM…) left" for the year.
+- **Monthly tab:** a month with no category budgets now lists where the month's money went (spending only, top 10 + Show all, tap a row → that category's transactions for the month) instead of an empty box.
+- No data change.
+
+`ledger.js` + `sw.js` + `README.md` changed. `APP_VERSION` / `CACHE_NAME` bumped to v619.
+
+## v620: privacy-policy page
+
+- **New `privacy.html`:** a plain static page (English text + a short Chinese summary) saying what is stored, what the optional Google Drive sync uploads (`drive.appdata` only; the data and image files are encrypted, `ledger-primary.json` is small and not encrypted), the one exchange-rate request, no analytics, and how to delete data. It is needed for the Google consent screen when the app is published (Testing → In production).
+- **`sw.js`:** requests whose path ends in `/privacy.html` are no longer answered with the app shell (every navigation used to be), so a browser with the app installed can still open the page. `CACHE_NAME` bumped to v620.
+- No data change.
+
+`privacy.html` (new) + `sw.js` + `ledger.js` (version only) + `README.md` changed. `APP_VERSION` / `CACHE_NAME` bumped to v620.
+
+## v621: Timeline "Ribbon" style (optional)
+
+- **Timeline page:** a **Classic / Ribbon** switch sits at the top right of the page header. *Classic* is the existing rail + cards. *Ribbon* draws a centre spine of coloured arrow segments (each tip fits the notch of the next), a node per entry, a dashed connector to a year ring, a colour-matched title pill and the details underneath, alternating right/left. Colours cycle through five tones; entries from before the ledger start get dashed rings and a faded spine. Tap an entry to expand its note; ✏️ edits it.
+- The choice is remembered per device in `localStorage` (`ledgerTimelineStyle`). No data-model change — nothing is stored in IndexedDB, backups or Drive sync.
+- Files: `index.html` (toggle + `.tlr-*` CSS), `ledger.js` (`timelineStyle`, `timelineSetStyle`, ribbon branch in `renderTimelinePage`), `sw.js`. `APP_VERSION` / `CACHE_NAME` bumped to v621.
