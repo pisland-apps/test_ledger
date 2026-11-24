@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v632";
+        const APP_VERSION = "v634";
         const APP_VERSION_DATE = "2026-11-24";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -25451,13 +25451,39 @@
         function fmtFundUnits(u) {
             return (u || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 });
         }
+        // v634: Average buy price = MOVING AVERAGE COST of the units still held, replayed oldest-first:
+        //   Buy: cost += amount, units += units.   Sell: cost -= cost * soldUnits / unitsBefore (average price unchanged).
+        //   Dividend (Reinvest) / Contribution: units += units at zero cost (they are profit, same as Invested excludes them).
+        // Hidden when nothing is held, or the log can't be replayed honestly (sold more than the entries ever bought).
+        function fundAvgBuyPrice(fundTxs) {
+            const rows = (fundTxs || []).filter(t => t.date).slice()
+                .sort((a, b) => String(a.date).localeCompare(String(b.date)) || (Number(a.id) || 0) - (Number(b.id) || 0));
+            let cost = 0, units = 0, sawBuy = false;
+            for (const t of rows) {
+                const u = Number(t.units) || 0;
+                if (t.fundTxType === "buy" && u > 0 && t.amount > 0) { cost += t.amount; units += u; sawBuy = true; }
+                else if ((t.fundTxType === "dividend_reinvest" || t.fundTxType === "contribution") && u > 0) { units += u; }
+                else if (t.fundTxType === "sell" && u > 0) {
+                    if (u > units + 1e-6) return null;
+                    cost -= units > 0 ? cost * (u / units) : 0;
+                    units -= u;
+                }
+            }
+            return (sawBuy && units > 1e-6 && cost > 0) ? cost / units : null;
+        }
+        function fundAvgBuyHTML(f, fundTxs) {
+            const p = fundAvgBuyPrice(fundTxs);
+            if (p === null) return "";
+            const s = p.toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) + (isGoldFund(f) ? "/g" : "");
+            return `<div class="fh-grey fh-grey-gap" title="Moving average cost of the units you still hold. Sells keep the average; later buys re-average it; reinvested/contributed units count at zero cost.">Avg buy ${s}</div>`;
+        }
         // v534: one panel for both card types. Left = the main money figure: Current inv. (with Invested /
         // Recovered as small grey text) once something has been taken out, or just Invested when nothing has.
         // Right = Units x NAV, which is how the card's Value is made. Fully recovered principal reads
         // "Fully recovered" with the amount above cost instead of a negative number.
         function fundCardStatsHTML(f, invested, recovered, fundTxs) {
             const gold = isGoldFund(f);
-            const uxn = `<div class="fh-uxn"><div class="fh-stat-l">Units × NAV</div><div class="fh-stat-v">${fmtFundUnits(f.units)}${gold ? " g" : ""} × ${(Number(f.currentNav) || 0).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}${gold ? "/g" : ""}${goldStalenessBadgeHTML(f)}</div></div>`;
+            const uxn = `<div class="fh-uxn"><div class="fh-stat-l">Units × NAV</div><div class="fh-stat-v">${fmtFundUnits(f.units)}${gold ? " g" : ""} × ${(Number(f.currentNav) || 0).toLocaleString(undefined, { minimumFractionDigits: 4, maximumFractionDigits: 4 })}${gold ? "/g" : ""}${goldStalenessBadgeHTML(f)}</div>${fundAvgBuyHTML(f, fundTxs)}</div>`;
             if (Math.abs(recovered) < 0.005) {
                 return `<div class="fh-panel"><div><div class="fh-stat-l">Invested</div><div class="fh-stat-v strong">${formatCurrency(invested, f.currency)}</div></div>${uxn}</div>`;
             }

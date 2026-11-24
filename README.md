@@ -4728,3 +4728,14 @@ Account No. / Ref now shows a card number as `•••• 1234 👁`; tap it to
 - Scope: Multi → Multi only (single-currency accounts keep their existing FX transfer panel).
 
 Bumped `APP_VERSION` (ledger.js) and `CACHE_NAME` (sw.js) to v632.
+
+## v633: "Avg buy" on fund/stock holding cards
+
+- Under **Units × NAV** each holding card now shows **Avg buy** (v633, changed in v634 to moving average cost of units still held: sells keep the average, later buys re-average, reinvest/contribution units at zero cost). Hidden when nothing is held or the log can't be replayed.
+- Shown on both the account page's Fund Holdings cards and the Unit Trust Portfolio's Fund Detail cards.
+
+Bumped `APP_VERSION` (ledger.js) and `CACHE_NAME` (sw.js) to v633.
+
+## v634: Avg buy now uses moving average cost
+
+See v633 note; bumped `APP_VERSION` / `CACHE_NAME` to v634.
