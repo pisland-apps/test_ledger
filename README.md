@@ -4739,3 +4739,7 @@ Bumped `APP_VERSION` (ledger.js) and `CACHE_NAME` (sw.js) to v633.
 ## v634: Avg buy now uses moving average cost
 
 See v633 note; bumped `APP_VERSION` / `CACHE_NAME` to v634.
+
+## v635: USD now displays as "US$"
+
+- `currencySymbols.USD` changed from "$" to "US$" so USD amounts (e.g. NVIDIA "US$662.00") are clearly distinguishable from RM / S$. Display only; stored data unchanged. Bumped `APP_VERSION` / `CACHE_NAME` to v635.
