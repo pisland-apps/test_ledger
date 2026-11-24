@@ -10,8 +10,8 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v621";
-        const APP_VERSION_DATE = "2026-11-05";
+        const APP_VERSION = "v632";
+        const APP_VERSION_DATE = "2026-11-24";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
         // inconsistently across platforms/fonts). Used by the static Amount field button
@@ -7338,6 +7338,10 @@
                 const ccPayBtnHTML = ccAmountDue > 0.005
                     ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">💳 Pay</button>`
                     : "";
+                // v630: 🧾 Reconcile — whenever the card has a Statement Day (even with nothing owed).
+                const ccReconBtnHTML = (a.type === "creditcard" && a.statementDay)
+                    ? `<button type="button" data-click="ccReconOpen" data-id="${escapeHtml(a.id)}" title="Reconcile with the bank statement" style="font-size:0.66rem; font-weight:700; color:#9d174d; background:#fdf2f8; border:1px solid #fbcfe8; border-radius:6px; padding:4px 7px; white-space:nowrap; cursor:pointer;">🧾 Reconcile</button>`
+                    : "";
 
                 // v62: subrows collapsed by default (see expandedAccountSubrows) — built into
                 // subrowsHtml first (before the main row, so the row can show a collapse/expand
@@ -7464,7 +7468,7 @@
                             })()}
                         </div>
                         <span style="display:flex; align-items:center; gap:6px;">
-                            ${ccPayBtnHTML}
+                            ${ccPayBtnHTML}${ccReconBtnHTML}
                             ${subrowToggleHTML}
                             <span style="color:var(--text-muted);">›</span>
                         </span>
@@ -7710,6 +7714,7 @@
                     <div class="acct-actions">
                         ${canAdd ? `<button type="button" class="acct-act-btn primary" data-click="accountsCardAddEntry" data-id="${escapeHtml(id)}">+ Add entry</button>` : ""}
                         ${due > 0.005 ? `<button type="button" class="acct-act-btn pay" data-click="openCreditCardPayment" data-id="${escapeHtml(id)}">\uD83D\uDCB3 Pay</button>` : ""}
+                        ${(a.type === "creditcard" && a.statementDay) ? `<button type="button" class="acct-act-btn" data-click="ccReconOpen" data-id="${escapeHtml(id)}">\uD83E\uDDFE Reconcile</button>` : ""}
                         <button type="button" class="acct-act-btn" data-click="navigateToLedgerPage" data-id="${escapeHtml(id)}" data-back="accounts">Activity</button>
                         <button type="button" class="acct-act-btn" data-click="editAccount" data-id="${escapeHtml(id)}">Edit</button>
                     </div>
@@ -7982,7 +7987,20 @@
             document.getElementById("destAccount").value = accountId;
             document.getElementById("txCurrency").value = acc.currency;
             const amountDue = Math.max(0, -(nativeBalances[acc.id] || 0));
-            if (amountDue > 0.005) document.getElementById("txAmount").value = amountDue.toFixed(2);
+            // v629: with a statement day set, pre-fill what the bank has actually BILLED and is still
+            // unpaid (matches the statement) instead of the whole running balance, which also
+            // includes spending that belongs to the next statement. Falls back to the running
+            // balance when nothing is billed (e.g. paying the card off early).
+            let prefill = amountDue;
+            let billedNote = "";
+            if (acc.statementDay) {
+                const billedUnpaid = ccBilledOutstanding(acc, await readAllDB(STORES.TRANSACTIONS), todayLocalStr());
+                if (billedUnpaid !== null && billedUnpaid > 0.005) {
+                    prefill = Math.min(billedUnpaid, amountDue > 0.005 ? amountDue : billedUnpaid);
+                    if (Math.abs(prefill - amountDue) > 0.005) billedNote = `Pre-filled with the billed statement amount ${formatCurrency(prefill, acc.currency)} (total owed ${formatCurrency(amountDue, acc.currency)}).`;
+                }
+            }
+            if (prefill > 0.005) document.getElementById("txAmount").value = prefill.toFixed(2);
             document.getElementById("txDesc").value = "Credit Card Payment";
             // v127 fix: openTransactionForm() already ran syncAccountPickerButtonText("destAccount")
             // as its very last step (see the comment there), snapshotting the "To Account" button's
@@ -7993,6 +8011,485 @@
             // its earlier (wrong) label. Re-syncing it here, now that the value is actually set,
             // makes the visible "To Account" button match the card just clicked.
             syncAccountPickerButtonText("destAccount");
+            if (billedNote) showToast(billedNote);
+        }
+
+
+        // ================= CREDIT CARD STATEMENT CYCLES (v629) =================
+        // Every card transaction normally belongs to the statement that closes on the first
+        // statementDay on/after its own date. A bank can leave a charge off that statement
+        // (posted after the cut-off even though it is dated on/before it) and bill it on the
+        // NEXT one — that is what the optional `stmtShift` field on a transaction records:
+        // 0/absent = normal, +1 = billed one statement later, -1 = counted one statement
+        // earlier. Only the "billed vs not-yet-billed" maths below reads it (the due-date
+        // reminder, the 💳 Pay pre-fill and the v630 Reconcile screen); balances, reports and
+        // the Ledger list still use the real transaction date.
+        function ccCloseDateObj(year, month, day) {
+            // Clamps to the last real day of the month (day 31 in a 30-day month).
+            const lastDayOfMonth = new Date(year, month + 1, 0).getDate();
+            return new Date(year, month, Math.min(day, lastDayOfMonth));
+        }
+        // Close date (ISO) of the statement that normally covers dateStr.
+        function ccNaturalCloseStr(statementDay, dateStr) {
+            const parts = String(dateStr).split("-").map(Number);
+            let c = ccCloseDateObj(parts[0], parts[1] - 1, statementDay);
+            if (localDateStr(c) < dateStr) c = ccCloseDateObj(parts[0], parts[1], statementDay);
+            return localDateStr(c);
+        }
+        // Moves a close date n statements forward (negative = back).
+        function ccAddCycles(statementDay, closeStr, n) {
+            if (!n) return closeStr;
+            const parts = closeStr.split("-").map(Number);
+            return localDateStr(ccCloseDateObj(parts[0], parts[1] - 1 + n, statementDay));
+        }
+        // Whole statements between two close dates (closeB - closeA).
+        function ccCyclesBetween(closeA, closeB) {
+            const a = closeA.split("-").map(Number), b = closeB.split("-").map(Number);
+            return (b[0] - a[0]) * 12 + (b[1] - a[1]);
+        }
+        // Close date of the statement a transaction is actually billed on (stmtShift applied).
+        function ccEffCloseStr(a, t) {
+            return ccAddCycles(a.statementDay, ccNaturalCloseStr(a.statementDay, t.date), (t.stmtShift | 0));
+        }
+        // Signed effect of one transaction on this card's balance (negative = more owed) —
+        // same maths as applyToAccountBalance() in computeAccountBalances(); 0 if it doesn't touch the card.
+        function ccTxCardDelta(a, t) {
+            let d = 0;
+            if (t.type === "expense" && t.src === a.id) {
+                d -= (t.manualFxRate && t.currency !== a.currency) ? t.amount * t.manualFxRate : convertCurrency(t.amount, t.currency, a.currency);
+            } else if (t.type === "income" && t.src === a.id) {
+                d += (t.manualFxRate && t.currency !== a.currency) ? t.amount * t.manualFxRate : convertCurrency(t.amount, t.currency, a.currency);
+            } else if (t.type === "transfer") {
+                if (t.src === a.id) d -= convertCurrency(t.amount, t.currency, a.currency);
+                if (t.dest === a.id) d += (t.destAmount != null) ? t.destAmount : convertCurrency(t.amount, t.currency, a.currency);
+            }
+            return d;
+        }
+        // Card balance counting only what the bank had billed by the statement closing on closeStr.
+        function ccBalanceAtClose(a, closeStr, txsList) {
+            let bal = a.initialBalance || 0;
+            (txsList || []).forEach(t => {
+                if (!t.date) return;
+                if (a.statementDay ? ccEffCloseStr(a, t) > closeStr : t.date > closeStr) return;
+                bal += ccTxCardDelta(a, t);
+            });
+            return bal;
+        }
+        // Payments / refunds credited to the card that belong AFTER the statement closing on
+        // closeStr (no upper bound at today — a pre-recorded future payment still counts).
+        function ccPaymentsAfterClose(a, closeStr, txsList) {
+            let paid = 0;
+            (txsList || []).forEach(t => {
+                if (!t.date) return;
+                if (a.statementDay ? ccEffCloseStr(a, t) <= closeStr : t.date <= closeStr) return;
+                if ((t.type === "income" && t.src === a.id) || (t.type === "transfer" && t.dest === a.id)) {
+                    paid += ccTxCardDelta(a, t);
+                }
+            });
+            return paid;
+        }
+        // Most recent statement close on or before todayStr.
+        function ccLastCloseOnOrBefore(statementDay, todayStr) {
+            const nat = ccNaturalCloseStr(statementDay, todayStr);
+            return nat <= todayStr ? nat : ccAddCycles(statementDay, nat, -1);
+        }
+        // What the bank has actually billed and is still unpaid (all statements closed so far).
+        function ccBilledOutstanding(a, txsList, todayStr) {
+            if (!a.statementDay) return null;
+            const closeStr = ccLastCloseOnOrBefore(a.statementDay, todayStr);
+            const billed = Math.max(0, -ccBalanceAtClose(a, closeStr, txsList));
+            return Math.max(0, billed - ccPaymentsAfterClose(a, closeStr, txsList));
+        }
+        function ccFmtCloseDate(str) {
+            try { return new Date(str + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" }); } catch (e) { return str; }
+        }
+
+        // v629: the stmtShift value a transaction should be saved with. The Add/Edit form only
+        // offers a "Billed in next statement" switch (shift 0 <-> +1); any other value an entry
+        // already carries (-1, +2 — set from the v630 Reconcile screen) is kept unless the switch
+        // is actually flipped, and an entry whose row is hidden keeps whatever it had.
+        function readTxStmtShiftForSave(existingTx) {
+            const orig = existingTx && existingTx.stmtShift ? (existingTx.stmtShift | 0) : 0;
+            const row = document.getElementById("txStmtRow");
+            if (!row || row.style.display === "none") return orig || undefined;
+            const checked = document.getElementById("txStmtShift").checked;
+            if (checked === (orig > 0)) return orig || undefined;
+            return checked ? 1 : undefined;
+        }
+
+        // Shows/hides the "🧾 Billed in next statement" row: only for a card that has a statement
+        // day, on whichever side of the entry is the card (Expense/Income account, or a Transfer
+        // from/to it). The hint spells out which statement the entry will land on.
+        async function refreshTxStmtRow(accountsArg) {
+            const row = document.getElementById("txStmtRow");
+            if (!row) return;
+            const accounts = Array.isArray(accountsArg) ? accountsArg : await readAllDB(STORES.ACCOUNTS);
+            const type = document.getElementById("txType").value;
+            const srcId = document.getElementById("srcAccount").value;
+            const destId = document.getElementById("destAccount").value;
+            let card = accounts.find(a => a.id === srcId && a.type === "creditcard");
+            if (!card && type === "transfer") card = accounts.find(a => a.id === destId && a.type === "creditcard");
+            if (!card || !card.statementDay) { row.style.display = "none"; return; }
+            row.style.display = "block";
+            const dateVal = document.getElementById("txDate").value;
+            const hint = document.getElementById("txStmtHint");
+            if (!dateVal) { hint.textContent = ""; return; }
+            const editId = document.getElementById("txId").value;
+            let orig = 0;
+            if (editId !== "") {
+                const existing = (await readAllDB(STORES.TRANSACTIONS)).find(t => String(t.id) === String(editId));
+                orig = existing && existing.stmtShift ? (existing.stmtShift | 0) : 0;
+            }
+            const checked = document.getElementById("txStmtShift").checked;
+            const shift = checked ? (orig > 0 ? orig : 1) : (orig > 0 ? 0 : orig);
+            const natural = ccNaturalCloseStr(card.statementDay, dateVal);
+            const eff = ccAddCycles(card.statementDay, natural, shift);
+            hint.textContent = shift === 0
+                ? `Normally billed on the statement closing ${ccFmtCloseDate(natural)}. Switch on if the bank left it off that one.`
+                : `Will be billed on the statement closing ${ccFmtCloseDate(eff)} (instead of ${ccFmtCloseDate(natural)}).`;
+        }
+
+
+        // ================= CREDIT CARD RECONCILE (v630) =================
+        // Tick the card's transactions against the bank statement for ONE statement period, type the
+        // bank's statement balance, and see whether the two tally. Unticking a line is exactly the v629
+        // "billed in next statement" switch (it writes the same `stmtShift` on the transaction), so the
+        // two ways of fixing a mismatch can never disagree: the reminder, the 💳 Pay pre-fill and this
+        // screen all read that one field.
+        //
+        // Per-statement records (the bank figure you typed, reconciled yes/no, a fingerprint of what was
+        // reconciled) live in ONE SETTINGS row, key "ccRecon": { [cardId]: { [closeDate]: {bank, done,
+        // doneAt, diff, fp} } } — so no new store/DB_VERSION bump, and backup/restore/Drive sync carry it
+        // as part of the settings dump. A reconciled cycle goes back to "changed — re-check" on its own
+        // when the fingerprint no longer matches (an entry in the period was added/edited/deleted/moved).
+        const CC_RECON_KEY = "ccRecon";
+        let ccReconAccountId = null;
+        let ccReconCloseStr = null;
+        let ccReconKnownIds = null;   // ids seen at the last render, so rows added since flash briefly
+        let ccReconBankTimer = null;
+
+        function ccAddDaysStr(str, n) {
+            const p = str.split("-").map(Number);
+            return localDateStr(new Date(p[0], p[1] - 1, p[2] + n));
+        }
+        function ccFmtShortDate(str) {
+            try { return new Date(str + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch (e) { return str; }
+        }
+        function ccTxTouchesCard(a, t) {
+            if ((t.type === "expense" || t.type === "income") && t.src === a.id) return true;
+            return t.type === "transfer" && (t.src === a.id || t.dest === a.id);
+        }
+        function ccHash(str) {
+            let h = 5381;
+            for (let i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+            return (h >>> 0).toString(36);
+        }
+        // Due date (ISO) of the statement closing on closeStr, or null when the card has no due day.
+        function ccDueDateStrForClose(a, closeStr) {
+            if (!a.paymentDueDay) return null;
+            const p = closeStr.split("-").map(Number);
+            let d = ccCloseDateObj(p[0], p[1] - 1, a.paymentDueDay);
+            if (localDateStr(d) < closeStr) d = ccCloseDateObj(p[0], p[1], a.paymentDueDay);
+            return localDateStr(d);
+        }
+        // Everything the Reconcile screen (and the reminder's status tag) needs for one statement period.
+        function ccReconPeriodData(a, closeStr, txsList) {
+            const S = a.statementDay;
+            const prevClose = ccAddCycles(S, closeStr, -1);
+            const nextClose = ccAddCycles(S, closeStr, 1);
+            const cardTxs = (txsList || []).filter(t => t.date && ccTxTouchesCard(a, t));
+            const sortFn = (p, q) => (p.date < q.date ? -1 : p.date > q.date ? 1 : (p.id < q.id ? -1 : 1));
+            const info = cardTxs.map(t => ({ t, nat: ccNaturalCloseStr(S, t.date), eff: ccEffCloseStr(a, t), delta: ccTxCardDelta(a, t) }));
+            const inPeriod = info.filter(i => i.eff === closeStr).sort((p, q) => sortFn(p.t, q.t));
+            // dated in this period but the bank bills them later (the v629 shift, or untick here)
+            const movedOut = info.filter(i => i.nat === closeStr && i.eff !== closeStr).sort((p, q) => sortFn(p.t, q.t));
+            // dated just after the cut-off — in case the bank counted one of them on THIS statement
+            const lastDay = ccAddDaysStr(closeStr, 10);
+            const justAfter = info.filter(i => i.nat === nextClose && i.eff === nextClose && i.t.date <= lastDay).sort((p, q) => sortFn(p.t, q.t));
+            let charges = 0, credits = 0;
+            inPeriod.forEach(i => { if (i.delta < 0) charges -= i.delta; else credits += i.delta; });
+            const prevOwed = -ccBalanceAtClose(a, prevClose, txsList);
+            const appOwed = -ccBalanceAtClose(a, closeStr, txsList);
+            const fpSrc = inPeriod.map(i => i.t.id + "|" + i.t.date + "|" + i.delta.toFixed(2) + "|" + (i.t.stmtShift | 0)).join(";") + "#" + prevOwed.toFixed(2);
+            return {
+                closeStr, prevClose, nextClose, inPeriod, movedOut, justAfter, charges, credits, prevOwed, appOwed,
+                fp: ccHash(fpSrc),
+                hasEarlier: info.some(i => i.eff < closeStr),
+                periodStart: ccAddDaysStr(prevClose, 1)
+            };
+        }
+        async function loadCcRecon() {
+            try {
+                const row = (await readAllDB(STORES.SETTINGS)).find(r => r && r.key === CC_RECON_KEY);
+                return (row && row.value && typeof row.value === "object") ? row.value : {};
+            } catch (e) { return {}; }
+        }
+        async function saveCcRecon(all) {
+            await writeDB(STORES.SETTINGS, { key: CC_RECON_KEY, value: all });
+        }
+        // "done" = reconciled and nothing in that period has changed since; "changed" = was reconciled but
+        // the period's entries no longer match; "none" = not reconciled.
+        function ccReconStatusFor(a, closeStr, txsList, reconAll) {
+            const rec = reconAll && reconAll[a.id] && reconAll[a.id][closeStr];
+            if (!rec || !rec.done) return "none";
+            return rec.fp === ccReconPeriodData(a, closeStr, txsList).fp ? "done" : "changed";
+        }
+        // Statement close date for a due date (same rule billedDebtFor() uses in the reminder).
+        function ccCloseForDue(a, dueDateObj) {
+            let c = ccCloseDateObj(dueDateObj.getFullYear(), dueDateObj.getMonth(), a.statementDay);
+            if (c > dueDateObj) c = ccCloseDateObj(dueDateObj.getFullYear(), dueDateObj.getMonth() - 1, a.statementDay);
+            return localDateStr(c);
+        }
+
+        async function ccReconContext() {
+            const [accounts, txs, reconAll] = await Promise.all([readAllDB(STORES.ACCOUNTS), readAllDB(STORES.TRANSACTIONS), loadCcRecon()]);
+            const a = accounts.find(x => x.id === ccReconAccountId);
+            if (!a || a.type !== "creditcard" || !a.statementDay) return { accounts, txs, reconAll, a: null };
+            const lastClose = ccLastCloseOnOrBefore(a.statementDay, todayLocalStr());
+            if (!ccReconCloseStr || ccReconCloseStr > lastClose) ccReconCloseStr = lastClose;
+            return { accounts, txs, reconAll, a, lastClose, closeStr: ccReconCloseStr, pd: ccReconPeriodData(a, ccReconCloseStr, txs) };
+        }
+
+        function ccReconParseBank(raw) {
+            const v = parseFloat(String(raw == null ? "" : raw).replace(/,/g, "").trim());
+            return isNaN(v) ? null : v;
+        }
+
+        // closeStrOpt (optional, ISO) opens that statement; otherwise the most recent closed one. The
+        // dashboard reminder passes the statement its due date belongs to.
+        function openCcRecon(accountIdOrEl, closeStrOpt) {
+            ccReconAccountId = typeof accountIdOrEl === "string" ? accountIdOrEl : (accountIdOrEl && accountIdOrEl.dataset ? accountIdOrEl.dataset.id : null);
+            if (!ccReconAccountId) return;
+            ccReconCloseStr = closeStrOpt || null;
+            ccReconKnownIds = null;
+            const modal = document.getElementById("ccReconModal");
+            if (!modal.classList.contains("active")) openModal("ccReconModal");
+            renderCcRecon();
+        }
+        function openCcReconFromLedgerHeader() {
+            if (activeLedgerAccountView !== "all") openCcRecon(activeLedgerAccountView);
+        }
+
+        function ccReconRowHTML(a, i, ticked, opts) {
+            const t = i.t;
+            const credit = i.delta > 0;
+            const kind = t.type === "transfer" ? (credit ? "Payment" : "Transfer out") : (credit ? "Refund / credit" : (t.cat || "Expense"));
+            const flags = [];
+            if (opts.isNew) flags.push('<span style="color:#a16207;">new</span>');
+            if (opts.matchesDiff) flags.push('<span style="color:#b91c1c;">≈ the difference</span>');
+            if (opts.note) flags.push(opts.note);
+            const flagHTML = flags.length ? ` · ${flags.join(" · ")}` : "";
+            return `<div class="ccr-row${ticked ? "" : " ccr-off"}${opts.isNew ? " ccr-new" : ""}">
+                <label class="ccr-tick"><input type="checkbox" data-change="ccReconToggleTx" data-id="${escapeHtml(t.id)}" ${ticked ? "checked" : ""} aria-label="Counted on the bank statement"></label>
+                <div class="ccr-main" data-click="ccReconEditTx" data-id="${escapeHtml(t.id)}">
+                    <div class="ccr-desc">${escapeHtml(t.desc || "(no description)")}</div>
+                    <div class="ccr-sub">${escapeHtml(ccFmtShortDate(t.date))} · ${escapeHtml(kind)}${flagHTML}</div>
+                </div>
+                <div class="ccr-amt${credit ? " cr" : ""}">${credit ? "−" : ""}${formatCurrency(Math.abs(i.delta), a.currency)}</div>
+            </div>`;
+        }
+
+        async function renderCcRecon() {
+            const body = document.getElementById("ccReconBody");
+            if (!body || !ccReconAccountId) return;
+            const ctx = await ccReconContext();
+            const a = ctx.a;
+            if (!a) {
+                body.innerHTML = `<p style="font-size:0.85rem; color:var(--text-muted); line-height:1.5;">Set a <b>Statement Day</b> on this card (Accounts → Edit) to reconcile its statements.</p>`;
+                return;
+            }
+            const scrollTop = body.scrollTop;
+            const { pd, closeStr, reconAll } = ctx;
+            const rec = (reconAll[a.id] && reconAll[a.id][closeStr]) || null;
+            const bank = rec && typeof rec.bank === "number" ? rec.bank : null;
+            const diff = bank === null ? null : Math.round((pd.appOwed - bank) * 100) / 100;
+            const status = ccReconStatusFor(a, closeStr, ctx.txs, reconAll);
+            document.getElementById("ccReconTitle").textContent = "🧾 Reconcile · " + accountOptionLabel(a, ctx.accounts);
+
+            const matchAbs = (diff !== null && Math.abs(diff) > 0.005) ? Math.abs(diff) : null;
+            const hits = (i) => matchAbs !== null && Math.abs(Math.abs(i.delta) - matchAbs) < 0.005;
+            const seen = ccReconKnownIds;
+            const isNew = (i) => seen !== null && !seen.has(String(i.t.id));
+            const rowsIn = pd.inPeriod.map(i => ccReconRowHTML(a, i, true, {
+                isNew: isNew(i), matchesDiff: hits(i),
+                note: (i.t.stmtShift | 0) !== 0 ? `<span style="color:#9d174d;">${(i.t.stmtShift | 0) > 0 && i.nat !== closeStr ? "carried from an earlier statement" : "moved to this statement"}</span>` : ""
+            })).join("");
+            const rowsOut = pd.movedOut.map(i => ccReconRowHTML(a, i, false, {
+                isNew: isNew(i), matchesDiff: hits(i),
+                note: `<span style="color:#9d174d;">billed next statement</span>`
+            })).join("");
+            const rowsAfter = pd.justAfter.map(i => ccReconRowHTML(a, i, false, { isNew: isNew(i), matchesDiff: hits(i), note: "dated after this statement" })).join("");
+
+            const dueStr = ccDueDateStrForClose(a, closeStr);
+            const paidAfter = ccPaymentsAfterClose(a, closeStr, ctx.txs);
+            const stillToPay = Math.max(0, pd.appOwed - paidAfter);
+            const lastClose = ctx.lastClose;
+            const navBtn = (dir, enabled, glyph) => `<button type="button" data-click="${dir < 0 ? "ccReconPrev" : "ccReconNext"}" ${enabled ? "" : "disabled"} style="background:var(--chip-bg); color:var(--text-main); border:none; border-radius:8px; width:34px; height:34px; font-size:1.1rem; ${enabled ? "" : "opacity:.35;"}">${glyph}</button>`;
+
+            let statusHTML;
+            if (status === "done") statusHTML = `<span style="color:#15803d; font-weight:700;">✓ Reconciled${rec && rec.doneAt ? " on " + escapeHtml(ccFmtCloseDate(rec.doneAt.slice(0, 10))) : ""}${rec && Math.abs(rec.diff || 0) > 0.005 ? ` (with a difference of ${formatCurrency(rec.diff, a.currency)})` : ""}</span>`;
+            else if (status === "changed") statusHTML = `<span style="color:#b45309; font-weight:700;">⚠ Entries in this period changed since you reconciled — please re-check.</span>`;
+            else statusHTML = `<span style="color:var(--text-muted); font-weight:600;">Not reconciled yet</span>`;
+
+            let diffHTML;
+            if (diff === null) diffHTML = `<span style="color:var(--text-muted);">Type the balance shown on the bank's statement to compare.</span>`;
+            else if (Math.abs(diff) < 0.005) diffHTML = `<span style="color:#15803d; font-weight:700;">✓ Tallies with the bank statement</span>`;
+            else diffHTML = `<span style="color:#b91c1c; font-weight:700;">Difference ${formatCurrency(Math.abs(diff), a.currency)} — ${diff > 0 ? "the app counts more than the bank. Untick an entry the bank left off." : "the bank counts more than the app. Add what's missing (or tick an entry dated just after)."}</span>`;
+
+            body.innerHTML = `
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+                    ${navBtn(-1, pd.hasEarlier, "‹")}
+                    <div style="text-align:center; flex:1;">
+                        <div style="font-size:0.9rem; font-weight:800;">Statement closing ${escapeHtml(ccFmtCloseDate(closeStr))}</div>
+                        <div style="font-size:0.7rem; color:var(--text-muted);">${escapeHtml(ccFmtShortDate(pd.periodStart))} – ${escapeHtml(ccFmtShortDate(closeStr))}${dueStr ? " · due " + escapeHtml(ccFmtShortDate(dueStr)) : ""}</div>
+                    </div>
+                    ${navBtn(1, closeStr < lastClose, "›")}
+                </div>
+                <div style="font-size:0.74rem; text-align:center; margin-bottom:10px;">${statusHTML}</div>
+
+                <div class="ccr-sum">
+                    <div><span>Previous balance</span><b>${formatCurrency(pd.prevOwed, a.currency)}</b></div>
+                    <div><span>+ Charges (ticked)</span><b>${formatCurrency(pd.charges, a.currency)}</b></div>
+                    <div><span>− Payments &amp; refunds (ticked)</span><b style="color:var(--income-color);">${formatCurrency(pd.credits, a.currency)}</b></div>
+                    <div class="ccr-sum-total"><span>Statement balance (app)</span><b>${formatCurrency(pd.appOwed, a.currency)}</b></div>
+                </div>
+
+                <button type="button" data-click="ccReconAddMissing" class="submit-btn" style="margin:8px 0 6px; background:var(--chip-bg); color:var(--text-main);">+ Add missing transaction</button>
+
+                <div class="ccr-list">
+                    ${rowsIn || `<p style="font-size:0.78rem; color:var(--text-muted); padding:8px 2px;">No card entries counted on this statement.</p>`}
+                    ${rowsOut ? `<div class="ccr-sep">Not on this statement (billed next)</div>${rowsOut}` : ""}
+                    ${rowsAfter ? `<details style="margin-top:6px;"><summary class="ccr-sep" style="cursor:pointer;">Dated just after the statement (${pd.justAfter.length}) — tick if the bank counted one</summary>${rowsAfter}</details>` : ""}
+                </div>
+
+                <div class="ccr-bank">
+                    <label for="ccrBank" style="font-size:0.74rem; font-weight:700;">Bank statement balance (total owed on the statement)</label>
+                    <input type="text" inputmode="decimal" id="ccrBank" data-input="ccReconBankInput" data-change="ccReconBankCommit" data-app="${pd.appOwed}" value="${bank === null ? "" : bank.toFixed(2)}" placeholder="e.g. 1,234.56" autocomplete="off">
+                    <div id="ccrDiff" style="font-size:0.74rem; margin-top:6px; line-height:1.4;">${diffHTML}</div>
+                </div>
+
+                <div style="font-size:0.78rem; font-weight:700; margin:10px 0 8px;">${pd.appOwed > 0.005 ? (stillToPay > 0.005 ? `Still to pay${dueStr ? " by " + escapeHtml(ccFmtShortDate(dueStr)) : ""}: ${formatCurrency(stillToPay, a.currency)}` : `✓ This statement is fully paid`) : "Nothing owed on this statement"}</div>
+
+                ${status === "done"
+                    ? `<button type="button" data-click="ccReconReopen" class="submit-btn" style="background:var(--chip-bg); color:var(--text-main); margin-top:0;">Reopen this statement</button>`
+                    : `<button type="button" data-click="ccReconMarkDone" class="submit-btn" style="margin-top:0;">${status === "changed" ? "Mark reconciled again" : "Mark reconciled"}</button>`}
+            `;
+            ccReconKnownIds = new Set(ctx.txs.filter(t => ccTxTouchesCard(a, t)).map(t => String(t.id)));
+            body.scrollTop = scrollTop;
+        }
+
+        // Writes the bank figure currently typed (if any) into this statement's record.
+        async function ccReconSaveBankDraft() {
+            if (!ccReconAccountId || !ccReconCloseStr) return;
+            const input = document.getElementById("ccrBank");
+            if (!input) return;
+            const val = ccReconParseBank(input.value);
+            const all = await loadCcRecon();
+            const accRec = all[ccReconAccountId] || (all[ccReconAccountId] = {});
+            const cur = accRec[ccReconCloseStr] || {};
+            const curBank = typeof cur.bank === "number" ? cur.bank : null;
+            if (val === curBank) return; // nothing changed — don't write
+            const next = Object.assign({}, cur, { bank: val });
+            if (cur.done) next.done = false; // a different bank figure needs a fresh sign-off
+            accRec[ccReconCloseStr] = next;
+            await saveCcRecon(all);
+        }
+
+        function ccReconBankInput(el) {
+            const v = ccReconParseBank(el.value);
+            const app = Number(el.dataset.app) || 0;
+            const out = document.getElementById("ccrDiff");
+            if (out) {
+                if (v === null) out.innerHTML = `<span style="color:var(--text-muted);">Type the balance shown on the bank's statement to compare.</span>`;
+                else {
+                    const d = Math.round((app - v) * 100) / 100;
+                    out.innerHTML = Math.abs(d) < 0.005
+                        ? `<span style="color:#15803d; font-weight:700;">✓ Tallies with the bank statement</span>`
+                        : `<span style="color:#b91c1c; font-weight:700;">Difference ${escapeHtml(String(Math.abs(d).toFixed(2)))} — ${d > 0 ? "app counts more than the bank" : "bank counts more than the app"}</span>`;
+                }
+            }
+            clearTimeout(ccReconBankTimer);
+            ccReconBankTimer = setTimeout(() => { ccReconSaveBankDraft().catch(() => {}); }, 500);
+        }
+        async function ccReconBankCommit() {
+            clearTimeout(ccReconBankTimer);
+            await ccReconSaveBankDraft();
+            await renderCcRecon(); // refreshes the status and the "≈ the difference" hints
+        }
+
+        async function ccReconToggleTx(el) {
+            const id = Number(el.dataset.id);
+            const wantTicked = !!el.checked;
+            await ccReconSaveBankDraft();
+            const ctx = await ccReconContext();
+            if (!ctx.a) return;
+            const t = ctx.txs.find(r => r.id === id);
+            if (!t) { await renderCcRecon(); return; }
+            // ticked = billed on THIS statement; unticked = billed on the next one
+            const target = wantTicked ? ctx.closeStr : ccAddCycles(ctx.a.statementDay, ctx.closeStr, 1);
+            const shift = ccCyclesBetween(ccNaturalCloseStr(ctx.a.statementDay, t.date), target);
+            if (shift) t.stmtShift = shift; else delete t.stmtShift;
+            await writeDB(STORES.TRANSACTIONS, t);
+            await renderCcRecon();
+        }
+
+        async function ccReconEditTx(el) {
+            const id = Number(el.dataset.id);
+            await ccReconSaveBankDraft();
+            const txs = await readAllDB(STORES.TRANSACTIONS);
+            const t = txs.find(r => r.id === id);
+            if (t) await openTransactionForm(t.type, id);
+        }
+        async function ccReconAddMissing() {
+            await ccReconSaveBankDraft();
+            const ctx = await ccReconContext();
+            if (!ctx.a) return;
+            await openTransactionForm("expense", null, ctx.a.id);
+            // a date inside the statement period, so the new entry lands on this statement
+            document.getElementById("txDate").value = ctx.closeStr <= todayLocalStr() ? ctx.closeStr : todayLocalStr();
+            refreshTxStmtRow();
+        }
+
+        async function ccReconMarkDone() {
+            await ccReconSaveBankDraft();
+            const ctx = await ccReconContext();
+            if (!ctx.a) return;
+            const all = ctx.reconAll;
+            const bank = (all[ctx.a.id] && all[ctx.a.id][ctx.closeStr] && typeof all[ctx.a.id][ctx.closeStr].bank === "number") ? all[ctx.a.id][ctx.closeStr].bank : null;
+            if (bank === null) { alert("Type the balance shown on your bank's statement first."); return; }
+            const diff = Math.round((ctx.pd.appOwed - bank) * 100) / 100;
+            if (Math.abs(diff) > 0.005 && !confirm("The app and the bank differ by " + formatCurrency(Math.abs(diff), ctx.a.currency) + ". Mark this statement as reconciled anyway?")) return;
+            const accRec = all[ctx.a.id] || (all[ctx.a.id] = {});
+            accRec[ctx.closeStr] = { bank, done: true, doneAt: new Date().toISOString(), diff, fp: ctx.pd.fp };
+            await saveCcRecon(all);
+            await renderCcRecon();
+            await refreshAfterTransactionChange(); // the dashboard reminder shows the reconciled tag
+            showToast("Statement reconciled");
+        }
+        async function ccReconReopen() {
+            const ctx = await ccReconContext();
+            if (!ctx.a) return;
+            const all = ctx.reconAll;
+            const cur = all[ctx.a.id] && all[ctx.a.id][ctx.closeStr];
+            if (cur) { cur.done = false; await saveCcRecon(all); }
+            await renderCcRecon();
+            await refreshAfterTransactionChange();
+        }
+        async function ccReconPrev() {
+            await ccReconSaveBankDraft();
+            const ctx = await ccReconContext();
+            if (!ctx.a || !ctx.pd.hasEarlier) return;
+            ccReconCloseStr = ctx.pd.prevClose;
+            ccReconKnownIds = null;
+            await renderCcRecon();
+        }
+        async function ccReconNext() {
+            await ccReconSaveBankDraft();
+            const ctx = await ccReconContext();
+            if (!ctx.a || ctx.closeStr >= ctx.lastClose) return;
+            ccReconCloseStr = ctx.pd.nextClose;
+            ccReconKnownIds = null;
+            await renderCcRecon();
         }
 
         // Wired to the Activity page's own 💳 Pay button — reads which account is currently
@@ -8252,7 +8749,8 @@
             const accountName = id => { if (!id) return "(Opening Balance)"; const a = accounts.find(acc => acc.id === id); return a ? escapeHtml(accountOptionLabel(a, accounts)) : "(deleted account)"; };
 
             const relevantTxs = txs
-                .filter(t => t.currency === currency && (t.src === accountId || t.dest === accountId))
+                .filter(t => (t.currency === currency && (t.src === accountId || t.dest === accountId)) || (t.destCurrency === currency && t.dest === accountId))
+                .filter(t => !(t.destCurrency && t.currency === currency && t.dest === accountId && t.src !== accountId))
                 // v91: collapse Split Expense group siblings to their representative row — see
                 // getSplitGroupInfo().
                 .filter(t => {
@@ -8272,14 +8770,18 @@
                     // just which side (src/dest) it's on — a transfer entered with a negative
                     // amount (e.g. this Opening Balance) actually moves money the opposite way
                     // from what its src/dest role alone would suggest.
-                    const contribution = (t.dest === accountId) ? t.amount : -t.amount;
+                    // v632: in a conversion, this page's currency decides which leg we're showing.
+                    const isConvIn = !!t.destCurrency && t.destCurrency === currency && t.dest === accountId;
+                    const contribution = isConvIn ? t.destAmount : (t.dest === accountId && !t.destCurrency) ? t.amount : -t.amount;
                     if (contribution >= 0) { col = "income-color"; sgn = "+"; }
                     else { col = "expense-color"; sgn = "-"; }
                 }
 
                 const splitInfo = t.splitGroupId ? getSplitGroupInfo(t, txs) : null;
                 const displayCat = splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer');
-                const displayAmount = splitInfo ? splitInfo.totalAmount : t.amount;
+                const convInHere = t.type === "transfer" && !!t.destCurrency && t.destCurrency === currency && t.dest === accountId;
+                const displayAmount = convInHere ? t.destAmount : (splitInfo ? splitInfo.totalAmount : t.amount);
+                const displayCur = convInHere ? t.destCurrency : t.currency;
                 const iconBadge = t.type === "transfer"
                     ? "🔄"
                     : (splitInfo ? splitInfo.members.map(m => getCategoryIcon(m.cat, t.type)).join("") : getCategoryIcon(t.cat, t.type));
@@ -8298,7 +8800,7 @@
                             ${notesLine}
                         </div>
                         <div class="item-right">
-                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(Math.abs(displayAmount), t.currency)}</div>
+                            <div class="item-value" style="color:var(--${col}); font-weight:bold;">${sgn}${formatCurrency(Math.abs(displayAmount), displayCur)}</div>
                         </div>
                     </div>`;
             }).join("");
@@ -8367,6 +8869,9 @@
             if (!document.getElementById("page-insurance").classList.contains("hidden")) {
                 await renderInsurancePage();
             }
+            // v630: an open Credit Card Reconcile screen redraws so an entry just added/edited/deleted shows up.
+            const reconModalEl = document.getElementById("ccReconModal");
+            if (reconModalEl && reconModalEl.classList.contains("active")) await renderCcRecon();
         }
 
         // Relabels the Add/Edit Fund form for Gold vs a regular unit-trust fund — the same DB
@@ -11606,6 +12111,10 @@
                 const ccPayBtnHTML = ccAmountDue > 0.005
                     ? `<button type="button" data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="font-size:0.66rem; font-weight:700; color:#fff; background:#db2777; border:none; border-radius:6px; padding:5px 8px; white-space:nowrap; cursor:pointer;">💳 Pay</button>`
                     : "";
+                // v630: 🧾 Reconcile — whenever the card has a Statement Day (even with nothing owed).
+                const ccReconBtnHTML = (a.type === "creditcard" && a.statementDay)
+                    ? `<button type="button" data-click="ccReconOpen" data-id="${escapeHtml(a.id)}" title="Reconcile with the bank statement" style="font-size:0.66rem; font-weight:700; color:#9d174d; background:#fdf2f8; border:1px solid #fbcfe8; border-radius:6px; padding:4px 7px; white-space:nowrap; cursor:pointer;">🧾 Reconcile</button>`
+                    : "";
 
                 let subrowsHtml = "";
 
@@ -11690,7 +12199,7 @@
                             })()}
                         </div>
                         <span style="display:flex; align-items:center; gap:6px;">
-                            ${ccPayBtnHTML}
+                            ${ccPayBtnHTML}${ccReconBtnHTML}
                             ${subrowToggleHTML}
                             <span style="color:var(--text-muted);">›</span>
                         </span>
@@ -13566,6 +14075,7 @@
                 document.getElementById("txDate").value = tx.date;
                 document.getElementById("txNotes").value = tx.notes || "";
                 document.getElementById("txChecked").checked = !!tx.checked;
+                document.getElementById("txStmtShift").checked = (tx.stmtShift | 0) > 0; // v629
                 // Split Expenses is a new-entry-only affordance (see the comment on #txSplitWrap in
                 // index.html) — an existing record, split or not, is always edited as the single row
                 // it already is.
@@ -13598,6 +14108,7 @@
                 document.getElementById("txTransferDestAmount").value = tx.destAmount != null ? tx.destAmount : "";
                 document.getElementById("txTransferRate").value = (tx.destAmount != null && tx.amount) ? (tx.destAmount / tx.amount).toFixed(6) : "";
                 document.getElementById("txTransferFxManualFields").style.display = tx.destAmount != null ? "block" : "none";
+                txTransferDestCurrencyPending = tx.destCurrency || "";
                 await updateTxTransferFxVisibility();
                 if (tx.destAmount != null) {
                     const transferSrcAcc = accounts.find(a => a.id === tx.src);
@@ -13713,6 +14224,7 @@
                 updateTxTagsRowVisibility();
                 resetTxTagsChips([]);
                 refreshTxPolicyRow(null); // v468
+                document.getElementById("txStmtShift").checked = false; // v629
 
                 // Pre-select the user's default account, if one is set and still exists — new
                 // entries only, never when editing (handled above via tx.src). Income uses
@@ -13817,6 +14329,8 @@
                 document.getElementById("txTransferRate").value = "";
                 document.getElementById("txTransferDestAmount").value = "";
                 document.getElementById("txTransferFxManualFields").style.display = "none";
+                txTransferDestCurrencyPending = "";
+                document.getElementById("txTransferDestCurrency").innerHTML = "";
 
                 syncTransactionCurrency();
             }
@@ -13842,6 +14356,7 @@
             syncAccountPickerButtonText("txCategory");
             // v468: final re-check, now that every branch above has settled the category.
             refreshTxPolicyRow();
+            refreshTxStmtRow(accounts); // v629: "Billed in next statement" row (card accounts with a statement day)
 
             openModal("txModal");
             // v439: callers that preset Account/Currency programmatically right after this function
@@ -14858,6 +15373,7 @@
             const editingId = document.getElementById("txId").value;
             const srcId = document.getElementById("srcAccount").value;
             const destId = document.getElementById("destAccount").value;
+            const txCurrencyForHint = currency;
             let amount = parseFloat(document.getElementById("txAmount").value) || 0;
             document.querySelectorAll("#txSplitRows .tx-split-amt").forEach(inp => { amount += parseFloat(inp.value) || 0; });
 
@@ -14867,30 +15383,37 @@
             if (seq !== txWalletHintSeq) return; // a newer refresh superseded this one
             const { accounts, txs, nativeBalances } = data;
 
-            const renderLeg = (el, accountId, isOut) => {
+            const renderLeg = (el, accountId, isOut, curOverride) => {
+                const currency = curOverride || txCurrencyForHint; // v632: conversion dest leg shows its own currency
                 const acc = accountId ? accounts.find(a => a.id === accountId) : null;
                 if (!acc || acc.type !== "multi" || !currency) { el.style.display = "none"; return; }
                 let bal = (nativeBalances[acc.id] && nativeBalances[acc.id][currency]) || 0;
                 if (editingId !== "") {
                     const orig = txs.find(t => String(t.id) === String(editingId));
-                    if (orig && orig.currency === currency) {
+                    if (orig) {
                         let eff = 0;
-                        if (orig.src === acc.id) eff += orig.type === "income" ? orig.amount : (orig.type === "expense" || orig.type === "transfer") ? -orig.amount : 0;
-                        if (orig.type === "transfer" && orig.dest === acc.id) eff += orig.amount;
+                        if (orig.currency === currency) {
+                            if (orig.src === acc.id) eff += orig.type === "income" ? orig.amount : (orig.type === "expense" || orig.type === "transfer") ? -orig.amount : 0;
+                            if (orig.type === "transfer" && orig.dest === acc.id && !orig.destCurrency) eff += orig.amount;
+                        }
+                        // v632: a saved conversion credited destAmount to its destCurrency basket
+                        if (orig.type === "transfer" && orig.destCurrency === currency && orig.dest === acc.id && orig.destAmount != null) eff += orig.destAmount;
                         bal -= eff;
                     }
                 }
-                const after = isOut ? bal - amount : bal + amount;
-                const warn = isOut && (amount > 0 ? after < -0.005 : bal <= 0.005);
+                const legAmount = curOverride ? (parseFloat(document.getElementById("txTransferDestAmount").value) || 0) : amount;
+                const after = isOut ? bal - legAmount : bal + legAmount;
+                const warn = isOut && (legAmount > 0 ? after < -0.005 : bal <= 0.005);
                 let html = `💱 ${isOut ? "Paying from" : "Receiving into"} <b>${escapeHtml(currency)}</b> balance: <b>${escapeHtml(formatCurrency(bal, currency))}</b>`;
-                if (amount > 0) html += `<div class="twh-after">After this entry: ${escapeHtml(formatCurrency(after, currency))}</div>`;
+                if (legAmount > 0) html += `<div class="twh-after">After this entry: ${escapeHtml(formatCurrency(after, currency))}</div>`;
                 if (warn) html += `<div>⚠️ ${amount > 0 ? `Not enough ${escapeHtml(currency)} in this account — it would go negative.` : `No ${escapeHtml(currency)} balance in this account.`} Change the currency at the top if you meant to use another balance.</div>`;
                 el.innerHTML = html;
                 el.classList.toggle("warn", warn);
                 el.style.display = "block";
             };
             renderLeg(srcEl, (type === "expense" || type === "income" || type === "transfer") ? srcId : "", type !== "income");
-            renderLeg(destEl, type === "transfer" ? destId : "", false);
+            const convDestCur = (type === "transfer" && srcId && srcId !== "" ) ? (document.getElementById("txTransferDestCurrency").value || "") : "";
+            renderLeg(destEl, type === "transfer" ? destId : "", false, convDestCur && document.getElementById("txTransferDestCurrencyRow").style.display !== "none" ? convDestCur : "");
         }
 
         async function syncTransactionCurrency() {
@@ -14914,6 +15437,7 @@
             updateTxTransferFxVisibility();
             updateTxTagsRowVisibility();
             refreshTxWalletHint(); // v439
+            refreshTxStmtRow(accounts); // v629
         }
 
         // v295: Tags row visibility. Transfers are still never taggable in general (see the
@@ -14934,6 +15458,7 @@
         // Auto-calculates the FD placement's maturity date from commencing date + tenure, and
         // previews the simple-interest projected payout for this specific deposit.
         function recalcTxFdMaturity() {
+            updateTxTransferFxVisibility(); // v632: txCurrency change re-evaluates the Multi->Multi conversion block
             const startVal = document.getElementById("txFdStartDate").value;
             const tenure = parseInt(document.getElementById("txFdTenureMonths").value, 10);
             const preview = document.getElementById("txFdMaturityPreview");
@@ -15054,6 +15579,18 @@
         // currencies differ. Multi-currency and Fixed Deposit accounts hold per-currency baskets
         // (a transfer into one just credits that basket in the transaction's own currency — no
         // conversion happens at all, so there's nothing to fix there).
+        let txTransferDestCurrencyPending = null; // v632: dest currency to restore when editing a saved conversion
+        // v632: the (from, to) currencies of the transfer being entered — basket currencies for Multi->Multi.
+        function txTransferCurrencies(srcAcc, destAcc) {
+            if (srcAcc && destAcc && srcAcc.type === "multi" && destAcc.type === "multi")
+                return { from: document.getElementById("txCurrency").value, to: document.getElementById("txTransferDestCurrency").value };
+            return { from: srcAcc && srcAcc.currency, to: destAcc && destAcc.currency };
+        }
+        function onTransferDestCurrencyChange() {
+            const a = document.getElementById("txTransferRate"), b = document.getElementById("txTransferDestAmount");
+            a.value = ""; b.value = "";
+            updateTxTransferFxVisibility();
+        }
         async function updateTxTransferFxVisibility() {
             const wrap = document.getElementById("txTransferFxWrap");
             const type = document.getElementById("txType").value;
@@ -15068,6 +15605,36 @@
             const accounts = await readAllDB(STORES.ACCOUNTS);
             const srcAcc = accounts.find(a => a.id === srcId);
             const destAcc = accounts.find(a => a.id === destId);
+
+            // v632: Multi-Currency -> Multi-Currency (same account allowed) = currency conversion between baskets.
+            if (srcAcc && destAcc && srcAcc.type === "multi" && destAcc.type === "multi") {
+                const curSel = document.getElementById("txTransferDestCurrency");
+                const fromCur = document.getElementById("txCurrency").value;
+                const keep = txTransferDestCurrencyPending !== null ? txTransferDestCurrencyPending : curSel.value;
+                txTransferDestCurrencyPending = null;
+                const codes = Array.from(document.getElementById("txCurrency").options).map(o => o.value).filter(c => c && c !== fromCur);
+                curSel.innerHTML = `<option value="">— same currency (normal transfer) —</option>` + codes.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+                curSel.value = codes.includes(keep) ? keep : "";
+                const converting = curSel.value !== "";
+                wrap.style.display = "block";
+                document.getElementById("txTransferDestCurrencyRow").style.display = "block";
+                document.getElementById("txTransferFxToggleRow").style.display = "none";
+                document.getElementById("txTransferFxToggle").checked = converting;
+                document.getElementById("txTransferFxManualFields").style.display = converting ? "block" : "none";
+                if (converting) {
+                    document.getElementById("txTransferRateLabel").textContent = `Exchange Rate (1 ${fromCur} = ? ${curSel.value})`;
+                    document.getElementById("txTransferDestAmountLabel").textContent = `Amount Received (${curSel.value})`;
+                    if (!document.getElementById("txTransferRate").value) {
+                        const r = convertCurrency(1, fromCur, curSel.value), amt = parseFloat(document.getElementById("txAmount").value) || 0;
+                        if (r > 0 && isFinite(r)) { document.getElementById("txTransferRate").value = r.toFixed(6); document.getElementById("txTransferDestAmount").value = amt > 0 ? (amt * r).toFixed(2) : ""; }
+                    }
+                    updateTransferFxPreview(srcAcc, destAcc);
+                }
+                document.getElementById("txTransferFxAutoHint").textContent = converting ? "" : "Pick a currency above to convert between this account's currency balances (e.g. SGD → USD).";
+                return;
+            }
+            document.getElementById("txTransferDestCurrencyRow").style.display = "none";
+            document.getElementById("txTransferFxToggleRow").style.display = "";
 
             if (!srcAcc || !destAcc || srcAcc.type === "multi" || srcAcc.type === "fd" || destAcc.type === "multi" || destAcc.type === "fd" || srcAcc.currency === destAcc.currency) {
                 wrap.style.display = "none";
@@ -15097,7 +15664,8 @@
                         // Prefill both fields from today's live rate as a starting point — either
                         // one can then be overwritten to recalculate the other (see the two recalc
                         // functions below).
-                        const rate = convertCurrency(1, srcAcc.currency, destAcc.currency);
+                        const cc = txTransferCurrencies(srcAcc, destAcc);
+                        const rate = convertCurrency(1, cc.from, cc.to);
                         const amount = parseFloat(document.getElementById("txAmount").value) || 0;
                         document.getElementById("txTransferRate").value = rate.toFixed(6);
                         document.getElementById("txTransferDestAmount").value = amount > 0 ? (amount * rate).toFixed(2) : "";
@@ -15141,7 +15709,8 @@
             const destAmount = parseFloat(document.getElementById("txTransferDestAmount").value) || 0;
             const rate = parseFloat(document.getElementById("txTransferRate").value) || 0;
             if (!destAmount || !rate) { preview.textContent = ""; return; }
-            preview.textContent = `${destAcc.name} receives ${formatCurrency(destAmount, destAcc.currency)} at rate ${rate.toFixed(4)} — locked in for this transfer regardless of future FX rate table changes.`;
+            const cc = txTransferCurrencies(srcAcc, destAcc);
+            preview.textContent = `${destAcc.name} receives ${formatCurrency(destAmount, cc.to)} at rate ${rate.toFixed(4)} — locked in for this transfer regardless of future FX rate table changes.`;
         }
 
         // Also keeps the two conversion fields in sync when the base transaction Amount itself
@@ -15463,6 +16032,10 @@
                 }
                 transferDestAmountOverride = destAmountVal;
             }
+            // v632: Multi->Multi conversion target currency (null for every other transfer).
+            const transferDestCurrencyVal = (document.getElementById("txTransferDestCurrencyRow").style.display !== "none"
+                && document.getElementById("txType").value === "transfer" && transferDestAmountOverride != null)
+                ? (document.getElementById("txTransferDestCurrency").value || null) : null;
 
             // Editing an existing Transfer that already carries the "Fixed Deposit" category (set
             // deliberately by the FD maturity-resolution flow, not through this form) should keep
@@ -15585,6 +16158,7 @@
                 // the destination account is credited via a live currency conversion each time
                 // the app renders, as before (see computeAccountBalances()/applyToAccountBalance()).
                 destAmount: transferDestAmountOverride,
+                destCurrency: transferDestCurrencyVal, // v632
                 // v468: optional link to an Insurance policy — only meaningful for an Expense, and only
                 // read while the "Policy" row is actually showing (see refreshTxPolicyRow()). Listed
                 // here explicitly for the same reason as splitGroupId/isRefund below: this record is
@@ -15592,6 +16166,9 @@
                 policyId: ((document.getElementById("txType").value === "expense" || (document.getElementById("txType").value === "income" && pendingRefundOf === null)) && document.getElementById("txPolicyRow").style.display !== "none") // v510: an Income entry can be linked too (policy cashback)
                     ? (document.getElementById("txPolicyId").value || null)
                     : undefined,
+                // v629: optional statement-cycle shift (see "CREDIT CARD STATEMENT CYCLES" above). Listed
+                // explicitly because this record is built field-by-field — a field left out is wiped on edit.
+                stmtShift: readTxStmtShiftForSave(existingTxForEdit),
                 // v92 fix: writeDB() does a full put() that replaces the entire stored record, so
                 // an edit that omitted this field was silently stripping splitGroupId off of split
                 // parts, ungrouping them into standalone transactions the moment they were edited
@@ -16002,8 +16579,8 @@
         let inventoryStatusFilter = "all"; // "all" | "active" | "disposed" | "lost"
         // v558: category field + grouping. Categories are a fixed list (stored as the plain name on
         // item.category; an item whose stored name is not in the list still groups under that name).
-        const INV_CATEGORIES = ["Electronics", "Appliances", "Furniture & Storage", "Musical Instruments", "Luggage & Travel", "Tools", "Kitchen & Dining", "Home Accessories", "Toys", "Other"];
-        const INV_CATEGORY_ICONS = { "Electronics": "💻", "Appliances": "🔌", "Furniture & Storage": "🪑", "Musical Instruments": "🎹", "Luggage & Travel": "🧳", "Tools": "🔧", "Kitchen & Dining": "🍽️", "Home Accessories": "🏡", "Toys": "🧸", "Other": "📦" };
+        const INV_CATEGORIES = ["Electronics", "Appliances", "Furniture & Storage", "Musical Instruments", "Gold & Jewelry", "Shoes & Footwear", "Sports & Fitness Gear", "Luggage & Travel", "Tools", "Kitchen & Dining", "Home Accessories", "Toys", "Other"];
+        const INV_CATEGORY_ICONS = { "Electronics": "💻", "Appliances": "🔌", "Furniture & Storage": "🪑", "Musical Instruments": "🎹", "Gold & Jewelry": "💍", "Shoes & Footwear": "👟", "Sports & Fitness Gear": "🏸", "Luggage & Travel": "🧳", "Tools": "🔧", "Kitchen & Dining": "🍽️", "Home Accessories": "🏡", "Toys": "🧸", "Other": "📦" };
         let inventoryCategoryFilter = ""; // "" = All | a category name | "__none__" = Uncategorised
         function fillInvCategorySelect(id, selected) {
             const sel = document.getElementById(id);
@@ -20163,7 +20740,7 @@
             chipsEl.innerHTML = all.length === 0 ? "" :
                 [`<button type="button" class="tl-chip${timelineTypeFilter === "all" ? " active" : ""}" data-click="timelineSetType" data-type="all">All<span class="tl-chip-n">${all.length}</span></button>`]
                     .concat(Object.keys(TL_TYPES).filter(k => counts[k]).map(k =>
-                        `<button type="button" class="tl-chip${timelineTypeFilter === k ? " active" : ""}" data-click="timelineSetType" data-type="${k}">${TL_TYPES[k][0]} ${escapeHtml(TL_TYPES[k][1])}<span class="tl-chip-n">${counts[k]}</span></button>`)).join("");
+                        `<button type="button" class="tl-chip${timelineTypeFilter === k ? " active" : ""}" data-click="timelineSetType" data-type="${k}" title="${escapeHtml(TL_TYPES[k][1])}" aria-label="${escapeHtml(TL_TYPES[k][1])} (${counts[k]})"><span class="tl-chip-ic">${TL_TYPES[k][0]}</span><span class="tl-chip-nm"> ${escapeHtml(TL_TYPES[k][1])}</span><span class="tl-chip-n">${counts[k]}</span></button>`)).join("");
 
             const q = (document.getElementById("timelineSearch").value || "").trim().toLowerCase();
             const memberFilter = memberSel.value;
@@ -20262,14 +20839,14 @@
                 }
                 if (ribbon) {
                     const side = ribIdx % 2 === 0 ? "r" : "l";
-                    const detail = [t[1], shortDate].filter(Boolean).join(" · ");
+
                     html += `
                     <div class="tlr-item tlr-${side} tlr-c${ribIdx % 5}${pre ? " tlr-pre" : ""}" data-click="timelineToggleNote">
                         <span class="tlr-node"></span>
                         <div class="tlr-block">
                             <div class="tlr-top"><span class="tlr-dash"></span><span class="tlr-ring">${escapeHtml(year)}</span></div>
-                            <div class="tlr-label-row"><span class="tlr-label">${tlTitleHTML(e.title)}</span><button type="button" class="tl-edit" data-click="timelineEdit" data-id="${escapeHtml(e.id)}" aria-label="Edit entry" title="Edit">${editIcon}</button></div>
-                            <div class="tlr-text"><span class="tlr-kind">${escapeHtml(detail)}</span>${liveIds.length ? member : ""}${e.note ? `<div class="tlr-note">${escapeHtml(e.note)}</div>` : ""}</div>
+                            <div class="tlr-label-row"><span class="tlr-label" title="${escapeHtml(t[1])}">${tlTitleHTML(e.title)}</span><button type="button" class="tl-edit" data-click="timelineEdit" data-id="${escapeHtml(e.id)}" aria-label="Edit entry" title="Edit">${editIcon}</button></div>
+                            <div class="tlr-text">${shortDate ? `<span class="tlr-kind">${escapeHtml(shortDate)}</span>` : ""}${liveIds.length ? member : ""}${e.note ? `<div class="tlr-note">${escapeHtml(e.note)}</div>` : ""}</div>
                             ${metaParts.length ? `<div class="tl-meta">${metaParts.join("")}</div>` : ""}
                         </div>
                     </div>`;
@@ -22372,7 +22949,9 @@
                 if (t.type === "expense") applyToAccountBalance(aSrc, t.amount, t.currency, -1, t.manualFxRate);
                 if (t.type === "transfer") {
                     applyToAccountBalance(aSrc, t.amount, t.currency, -1);
-                    applyToAccountBalance(aDest, t.amount, t.currency, +1, null, t.destAmount);
+                    // v632: Multi-Currency -> Multi-Currency conversion: credit destAmount to the destCurrency basket.
+                    if (t.destCurrency && t.destAmount != null) applyToAccountBalance(aDest, t.destAmount, t.destCurrency, +1, null, null);
+                    else applyToAccountBalance(aDest, t.amount, t.currency, +1, null, t.destAmount);
                 }
             });
 
@@ -22607,7 +23186,10 @@
             // before the cutoff. Used to tell "billed as of the last statement close" apart from
             // "everything ever posted to the account" (see ccReminderHTML below for why that
             // distinction matters).
-            function ccBalanceAsOf(a, cutoffStr) {
+            function ccBalanceAsOf(a, cutoffStr, byClose) {
+                // v629: byClose = count only what the bank BILLED by that statement close
+                // (transactions' stmtShift applied) — see ccBalanceAtClose().
+                if (byClose && a.statementDay) return ccBalanceAtClose(a, cutoffStr, txs);
                 let bal = a.initialBalance || 0;
                 txs.forEach(t => {
                     if (!t.date || t.date > cutoffStr) return;
@@ -22623,6 +23205,7 @@
                 return bal;
             }
             let ccReminderHTML = "";
+            const ccReconAllForReminder = await loadCcRecon(); // v630: reconcile status tag on each reminder
             accounts.filter(a => a.type === "creditcard" && a.paymentDueDay).forEach(a => {
                 const amountDue = Math.max(0, -(nativeBalances[a.id] || 0));
                 if (amountDue <= 0.005) return; // nothing owed — nothing to remind about
@@ -22650,17 +23233,10 @@
                 // treats future-dated transactions as real. Excludes new charges on purpose:
                 // fresh spending after the statement close belongs to the NEXT cycle, not this
                 // one, and must never be treated as "paying down" old billed debt.
+                // v629: shared with the Reconcile screen (ccPaymentsAfterClose) so a payment's own
+                // statement-cycle shift is honoured the same way everywhere.
                 function ccPaymentsAfter(sinceStr) {
-                    let paid = 0;
-                    txs.forEach(t => {
-                        if (!t.date || t.date <= sinceStr) return;
-                        if (t.type === "income" && t.src === a.id) {
-                            paid += (t.manualFxRate && t.currency !== a.currency) ? t.amount * t.manualFxRate : convertCurrency(t.amount, t.currency, a.currency);
-                        } else if (t.type === "transfer" && t.dest === a.id) {
-                            paid += (t.destAmount != null) ? t.destAmount : convertCurrency(t.amount, t.currency, a.currency);
-                        }
-                    });
-                    return paid;
+                    return ccPaymentsAfterClose(a, sinceStr, txs);
                 }
 
                 let anchor = ccDueDateFor(todayDate.getFullYear(), todayDate.getMonth(), a.paymentDueDay);
@@ -22690,7 +23266,7 @@
                     let closeDate = ccDueDateFor(dueDateObj.getFullYear(), dueDateObj.getMonth(), a.statementDay);
                     if (closeDate > dueDateObj) closeDate = ccDueDateFor(dueDateObj.getFullYear(), dueDateObj.getMonth() - 1, a.statementDay);
                     const closeStr = localDateStr(closeDate);
-                    let billed = Math.max(0, -ccBalanceAsOf(a, closeStr));
+                    let billed = Math.max(0, -ccBalanceAsOf(a, closeStr, true)); // v629: by statement cycle (stmtShift)
                     // v275: subtract anything already paid toward THIS cycle's billed debt
                     // specifically, rather than the old approach of taking min(current total
                     // balance, billed debt) — that couldn't tell "old debt still outstanding"
@@ -22729,9 +23305,18 @@
                 const label = overdue
                     ? `payment overdue by ${daysOverdue} day${daysOverdue === 1 ? '' : 's'} (since ${dueDateStr}) — action needed`
                     : (dueToday ? `due today` : `due in ${daysAway} day${daysAway === 1 ? '' : 's'} (${dueDateStr})`);
+                // v630: is the statement behind this reminder reconciled? (only for cards with a statement day)
+                let reconTagHTML = "";
+                if (a.statementDay) {
+                    const dueObjForTag = new Date(dueDateStr + "T00:00:00");
+                    const reminderCloseStr = ccCloseForDue(a, dueObjForTag);
+                    const reconStatus = ccReconStatusFor(a, reminderCloseStr, txs, ccReconAllForReminder);
+                    const tagText = reconStatus === "done" ? "✓ reconciled" : (reconStatus === "changed" ? "⚠ changed since reconciled" : "not reconciled");
+                    reconTagHTML = `<div style="font-size:0.7rem; font-weight:600; margin-top:4px; opacity:0.9;">${tagText} · <button type="button" data-click="ccReconOpen" data-id="${escapeHtml(a.id)}" data-close="${reminderCloseStr}" style="background:none; border:none; padding:0; color:inherit; font-size:0.7rem; font-weight:700; text-decoration:underline; cursor:pointer;">Reconcile</button></div>`;
+                }
                 ccReminderHTML += `
                     <div data-click="openCreditCardPayment" data-id="${escapeHtml(a.id)}" style="cursor:pointer; background:${bg}; border:1px solid ${border}; color:${textCol}; border-radius:12px; padding:12px 14px; margin-bottom:8px; font-size:0.8rem; font-weight:600; display:flex; justify-content:space-between; align-items:center;">
-                        <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(displayAmount, a.currency)} on "${escapeHtml(accountOptionLabel(a, accounts))}" ${label}.</span>
+                        <span>${overdue ? '⏰' : '🔔'} ${formatCurrency(displayAmount, a.currency)} on "${escapeHtml(accountOptionLabel(a, accounts))}" ${label}.${reconTagHTML}</span>
                         <span style="font-size:1.1rem;">›</span>
                     </div>
                 `;
@@ -22919,8 +23504,11 @@
             if (showFullAccountHistory) {
                 const viewingAcc = accounts.find(a => a.id === activeLedgerAccountView);
                 const amountDue = (viewingAcc && viewingAcc.type === "creditcard") ? Math.max(0, -(nativeBalances[viewingAcc.id] || 0)) : 0;
-                if (viewingAcc && viewingAcc.type === "creditcard" && amountDue > 0.005) {
+                if (viewingAcc && viewingAcc.type === "creditcard" && (amountDue > 0.005 || viewingAcc.statementDay)) {
                     document.getElementById("ledgerCcAmountDue").innerHTML = formatBalanceHTML(amountDue, viewingAcc.currency);
+                    // v630: Pay only while something is owed; 🧾 Reconcile whenever the card has a statement day
+                    document.getElementById("ledgerCcPayBtn").style.display = amountDue > 0.005 ? "" : "none";
+                    document.getElementById("ledgerCcReconBtn").style.display = viewingAcc.statementDay ? "" : "none";
                     ccBanner.style.display = "flex";
                 } else {
                     ccBanner.style.display = "none";
@@ -23290,6 +23878,10 @@
                 const receiptBadge = attCount > 0
                     ? `<span data-click="openTxAttachmentsBadge" data-id="${escapeHtml(t.id)}" data-attachments="${escapeHtml(JSON.stringify(t.attachments || []))}" ${t.image ? `data-legacy-image="${escapeHtml(t.image)}"` : ''} style="cursor:pointer; margin-left:4px;" title="View attachment${attCount > 1 ? 's' : ''}">📎${attCount > 1 ? `<span style="font-size:0.6rem; vertical-align:top;">×${attCount}</span>` : ''}</span>`
                     : '';
+                // v629: small pill on entries the bank bills on a different statement than their date implies.
+                const stmtShiftBadge = (t.stmtShift | 0) !== 0
+                    ? `<span style="font-size:0.62rem; font-weight:700; color:#9d174d; background:#fce7f3; padding:1px 5px; border-radius:4px; margin-left:6px; white-space:nowrap;" title="Billed on a different statement than its date">🧾 ${(t.stmtShift | 0) > 0 ? "Next stmt" : "Earlier stmt"}</span>`
+                    : '';
                 const referenceText = t.fdReferenceNo ? ` · Ref: ${escapeHtml(t.fdReferenceNo)}` : '';
                 // Maturity date (v55) — shown inline on every FD placement row, not just inside
                 // the maturity reminder banner, so it's visible while scrolling that account's
@@ -23368,7 +23960,7 @@
                         ${txIconCircleHTML}
                         <div class="tx-row-body">
                             <div class="item-left">
-                                <span class="item-name">${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}</span>
+                                <span class="item-name">${escapeHtml(t.desc)}${fdStatusBadge}${manualFxBadge}${refundBadge}${stmtShiftBadge}${buildTagBadgesHTML(t.tags, t.id)}${buildClaimedBadgeHTML(t, txs)}</span>
                                 <span class="item-meta">${t.date} [${escapeHtml(splitInfo ? splitInfo.catLabel : (t.cat || 'Transfer'))}]${referenceText}${maturityText}${receiptBadge}</span>
                                 <span class="item-meta" style="display:block; margin-top:2px; color:var(--text-muted);">${accountText}</span>
                                 ${notesLine}
@@ -28954,6 +29546,14 @@
             editAccountFromLedgerHeader: () => editAccountFromLedgerHeader(),
             openCreditCardPayment: (el) => openCreditCardPayment(el),
             openCreditCardPaymentFromLedgerHeader: () => openCreditCardPaymentFromLedgerHeader(),
+            ccReconOpen: (el, e) => { if (e) e.stopPropagation(); openCcRecon(el.dataset.id, el.dataset.close || null); }, // v630
+            ccReconOpenFromLedgerHeader: () => openCcReconFromLedgerHeader(), // v630
+            ccReconPrev: () => ccReconPrev(),
+            ccReconNext: () => ccReconNext(),
+            ccReconAddMissing: () => ccReconAddMissing(),
+            ccReconEditTx: (el) => ccReconEditTx(el),
+            ccReconMarkDone: () => ccReconMarkDone(),
+            ccReconReopen: () => ccReconReopen(),
             navigateToLinkedAccountFromLedgerHeader: (el) => { if (el.dataset.id) navigateToLedgerPage(el.dataset.id, "workspace"); },
             exportLedgerCsv: () => exportLedgerCsv(),
             exportAccountsCsv: () => exportAccountsCsv(),
@@ -29228,6 +29828,9 @@
             recalcTxFdMaturity: () => { recalcTxFdMaturity(); recalcTxSplitTotal(); },
             recalcTplSplitTotal: () => recalcTplSplitTotal(),
             syncTransactionCurrency: () => syncTransactionCurrency(),
+            refreshTxStmtRow: () => refreshTxStmtRow(), // v629
+            ccReconToggleTx: (el) => ccReconToggleTx(el), // v630
+            ccReconBankCommit: () => ccReconBankCommit(),
             handleTxAttachmentsSelected: (el, e) => handleTxAttachmentsSelected(e),
             handleCompanionCustomImageSelected: (el) => handleCompanionCustomImageSelected(el),
             handleAccLogoFileSelected: (el) => handleAccLogoFileSelected(el),
@@ -29298,6 +29901,7 @@
         };
 
         const INPUT_ACTIONS = {
+            ccReconBankInput: (el) => ccReconBankInput(el), // v630
             recalcClaimSettlePreview: () => recalcClaimSettlePreview(),
             recalcTxFdMaturity: () => { recalcTxFdMaturity(); syncTransferFxOnAmountChange(); recalcTxSplitTotal(); },
             insRecalcPaymentTotal: () => insRecalcPaymentTotal(), // v468
@@ -29313,6 +29917,7 @@
             recalcTxManualFxPreview: () => recalcTxManualFxPreview(),
             fxLockInvalidate: () => fxLockInvalidate(),
             recalcTransferFxFromRate: () => recalcTransferFxFromRate(),
+            onTransferDestCurrencyChange: () => onTransferDestCurrencyChange(),
             recalcTransferFxFromDestAmount: () => recalcTransferFxFromDestAmount(),
             recalcFundTxTotal: () => recalcFundTxTotal(),
             recalcFundTxPriceFromTotal: () => recalcFundTxPriceFromTotal(),

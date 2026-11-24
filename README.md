@@ -4656,3 +4656,75 @@ Account No. / Ref now shows a card number as `•••• 1234 👁`; tap it to
 - **Timeline page:** a **Classic / Ribbon** switch sits at the top right of the page header. *Classic* is the existing rail + cards. *Ribbon* draws a centre spine of coloured arrow segments (each tip fits the notch of the next), a node per entry, a dashed connector to a year ring, a colour-matched title pill and the details underneath, alternating right/left. Colours cycle through five tones; entries from before the ledger start get dashed rings and a faded spine. Tap an entry to expand its note; ✏️ edits it.
 - The choice is remembered per device in `localStorage` (`ledgerTimelineStyle`). No data-model change — nothing is stored in IndexedDB, backups or Drive sync.
 - Files: `index.html` (toggle + `.tlr-*` CSS), `ledger.js` (`timelineStyle`, `timelineSetStyle`, ribbon branch in `renderTimelinePage`), `sw.js`. `APP_VERSION` / `CACHE_NAME` bumped to v621.
+
+## v622: Timeline phone-view polish
+
+- **Type filters (phone, <768px):** same look as Inventory's category pills — icon only, count as a corner badge, rows wrap instead of scrolling sideways, the selected pill expands to show its name (name stays in `title`/`aria-label`). Desktop unchanged.
+- **Ribbon:** the type-name line is gone; the type emoji now sits inside the title pill (full name in its `title`). A short date (e.g. "12 Mar") still shows when the entry has one. On phones an extra amount's note moves to a second row inside its chip.
+- `index.html`, `ledger.js`, `sw.js` changed; `APP_VERSION` / `CACHE_NAME` bumped to v622.
+
+## v623: Ribbon fixes
+
+- Phone view: an extra amount's chip is now a block (amount on row 1, note on row 2) that follows the side's text alignment — left-aligned on right-hand entries, right-aligned on left-hand ones (the flex version ran "MYR" into the amount and ignored the alignment).
+- Ribbon's "Ledger starts here" box no longer shows the 📍 emoji (Classic keeps it).
+- `APP_VERSION` / `CACHE_NAME` bumped to v623.
+
+## v624: Ribbon title pill
+
+- The type emoji inside the Ribbon title pill is removed (the full type name stays in the pill's `title`). The "📍 Ledger starts here" emoji is back (v623 removed it by mistake). `APP_VERSION` / `CACHE_NAME` bumped to v624.
+
+## v625: Ribbon arrows point up
+
+- The spine segments now point **up** (newest entry is on top): tip at the top of each segment, notch at the bottom, the next segment's tip nests into the notch above it. `APP_VERSION` / `CACHE_NAME` bumped to v625.
+
+## v626: Timeline subtitle hidden on phones
+
+- The "Things worth remembering…" subtitle under the Timeline title (`.tl-page-sub`) is hidden below 768px; desktop unchanged. `APP_VERSION` / `CACHE_NAME` bumped to v626.
+
+## v627: Ribbon arrows back to pointing down (for comparison with v625/v626, which point up)
+
+- Spine segments: notch at the top, tip at the bottom again (the v621 shape). Only the `.tlr-item::before` clip-path and `.tlr-wrap` top padding changed. `APP_VERSION` / `CACHE_NAME` bumped to v627.
+
+## v628: Ribbon arrows up, no nesting
+
+- Spine segments point up (tip on top, notch at the bottom) but each one now stays inside its own box (`top: 0`), so a segment's tip no longer pokes into the notch of the one above. `APP_VERSION` / `CACHE_NAME` bumped to v628.
+
+## v629: Credit card — "Billed in next statement" (statement-cycle shift)
+
+- **Problem:** a card charge dated on/before the statement day can be left off that statement by the bank (posted after the cut-off) and billed on the next one. The due-date reminder counted it as billed, so after paying the real statement amount the leftover kept showing as overdue.
+- **New optional field `stmtShift` on a transaction** (absent/0 = normal, +1 = billed one statement later, -1 = counted one statement earlier). Only the "billed vs not-yet-billed" maths reads it; balances, reports, budgets and the Ledger list still use the real transaction date. Written by the Add/Edit form as a hand-listed field (the save record is built field-by-field — a field left out is wiped on edit).
+- **Add/Edit Transaction:** new switch **🧾 Billed in next statement** (`#txStmtRow`), shown only when the entry's account is a credit card that has a Statement Day (Expense/Income account, or a Transfer from/to the card). The hint under it names the statement it will land on. `refreshTxStmtRow()` runs on open, on account change (via `syncTransactionCurrency`) and on date/switch change.
+- **Reminder (dashboard):** `billedDebtFor()` now works out "billed by that statement close" with the shift applied (`ccBalanceAtClose` / `ccPaymentsAfterClose`, new shared top-level helpers next to `openCreditCardPayment`). Without any shifted entry the result is identical to v628 (verified against the old date-based maths for statement days 1/2/15/28–31).
+- **💳 Pay:** pre-fills the **billed, still-unpaid statement amount** when the card has a Statement Day and that differs from the total owed (a toast says so); otherwise the total owed as before.
+- **Ledger list:** entries with a shift get a small 🧾 *Next stmt* / *Earlier stmt* pill.
+- Helpers: `ccNaturalCloseStr`, `ccAddCycles`, `ccCyclesBetween`, `ccEffCloseStr`, `ccTxCardDelta`, `ccBalanceAtClose`, `ccPaymentsAfterClose`, `ccLastCloseOnOrBefore`, `ccBilledOutstanding`. No new store / DB_VERSION bump; `stmtShift` rides along in transactions, so backup, restore and Drive sync carry it unchanged.
+- `index.html`, `ledger.js`, `sw.js`, `README.md` changed; `APP_VERSION` / `CACHE_NAME` bumped to v629.
+
+## v630: Credit card — Reconcile screen
+
+- **🧾 Reconcile** (new modal `#ccReconModal`, `openCcRecon()` / `renderCcRecon()` in ledger.js) — for ONE statement period of a card that has a Statement Day: tick/untick the card's entries against the bank statement, type the bank's statement balance and see whether they tally.
+  - Opens from: the dashboard card reminder (opens the exact statement that reminder is about, with a *not reconciled / ✓ reconciled / ⚠ changed since reconciled* tag), the account's Activity header, and the Accounts page (list and cards view). ‹ › moves between statements (up to the latest closed one).
+  - Summary: Previous balance + Charges − Payments/refunds = **Statement balance (app)**; below it the bank figure you type and the live difference. If the difference is not 0, entries whose amount equals it are marked "≈ the difference". "Still to pay (by due date)" uses the same billed-minus-payments maths as the reminder.
+  - **Untick = the v629 shift.** Unticking writes `stmtShift` on the transaction (billed on the next statement), re-ticking removes it; entries carried in from an earlier statement are labelled, and unticking one pushes it a further statement. The "Dated just after the statement" fold lists next-period entries the bank might have counted on this one (ticking sets `stmtShift` −1 … as needed). Reminder, 💳 Pay pre-fill and this screen all read that one field, so they cannot disagree.
+  - **+ Add missing transaction** / tapping a row open the normal Add/Edit form on top (date pre-set inside the period); on save/delete `refreshAfterTransactionChange()` redraws the open Reconcile screen and flashes rows added since. Reconcile itself never edits an entry's amount/date — only the statement shift and the ticks.
+  - **Mark reconciled** stores {bank, done, doneAt, diff, fingerprint}; **Reopen** clears it. The fingerprint (ids/dates/amounts/shifts of the period's entries + the previous balance) is recomputed on display, so any later add/edit/delete/move in that period flips the status to *changed — re-check* by itself. Typing a different bank figure also clears the sign-off. The bank figure is saved as a draft while typing.
+- **Storage:** one SETTINGS row, key `ccRecon` = `{ [cardId]: { [closeDate]: { bank, done, doneAt, diff, fp } } }`. No new object store and no `DB_VERSION` bump — it is part of the settings dump, so backup, restore, Local Snapshots and Drive sync carry it unchanged.
+- `index.html`, `ledger.js`, `sw.js`, `README.md` changed; `APP_VERSION` / `CACHE_NAME` bumped to v630.
+
+## v631: Inventory — 3 new categories
+
+- Added **💍 Gold & Jewelry**, **👟 Shoes & Footwear** and **🏸 Sports & Fitness Gear** to the Inventory category list (`INV_CATEGORIES` / `INV_CATEGORY_ICONS` in ledger.js), placed after Musical Instruments; "Other" stays last.
+- They appear in the item form's Category dropdown, the quick "Set category" dropdown and the category chips / CSV export. Existing items and categories are unchanged; no data migration, no `DB_VERSION` bump.
+- `ledger.js`, `sw.js`, `README.md` changed; `APP_VERSION` / `CACHE_NAME` bumped to v631.
+
+## v632: Multi-Currency account conversion (e.g. SGD → USD inside IBKR)
+
+- **Transfer** now supports Multi-Currency → Multi-Currency conversion, including the **same account** as both From and To.
+  Pick From = To = your IBKR account, choose the source currency in the header dropdown, then set **Convert to currency**
+  and enter either the exchange rate or the **Amount Received**. The source basket is debited, the target basket credited.
+- New transaction field `destCurrency` (set only for such conversions; `destAmount` holds the received amount).
+  Old data is unaffected; leaving "Convert to currency" blank keeps the previous same-currency behaviour.
+- Currency Activity pages show the conversion on both baskets (−SGD on the SGD page, +USD on the USD page).
+- Scope: Multi → Multi only (single-currency accounts keep their existing FX transfer panel).
+
+Bumped `APP_VERSION` (ledger.js) and `CACHE_NAME` (sw.js) to v632.

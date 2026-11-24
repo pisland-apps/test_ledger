@@ -26,6 +26,7 @@
     <ul>
       <li><strong>ledger-backup.json</strong> and <strong>ledger-img-&lt;id&gt;.json</strong> (your data and your attachments) are encrypted on your device with your passcode before upload. Google stores only the encrypted files.</li>
       <li><strong>ledger-primary.json</strong> is a small file that is not encrypted. It records which of your devices may upload automatically: a random device identifier, a device name, a mode and a timestamp. It contains none of your financial data.</li>
+      <li><strong>ledger-orphans.json</strong> is another small file that is not encrypted. It is a bookkeeping list the app uses to clean up attachment copies in Drive that are no longer needed: it holds attachment identifiers and the date each one was first noticed as unused. It contains none of your financial data and none of the contents of your attachments.</li>
       <li>Files are transferred directly between your browser and Google. They never pass through any server run by the developer.</li>
       <li>The app reads the email address of the Google account you signed in with (through the Drive API) only to show which account is connected and to avoid mixing up accounts. It is kept on your device and is not sent anywhere else.</li>
       <li>The Google access token is kept in your browser's memory and is not stored.</li>
@@ -55,7 +56,7 @@
 
     <h2>隐私政策摘要（中文）</h2>
     <p>My Ledger 是纯前端应用，所有记账数据只保存在你自己设备的浏览器中，设置密码后会在本机加密。开发者没有服务器，无法查看或取回你的数据。</p>
-    <p>如果你选择连接 Google Drive，应用只请求 <code>drive.appdata</code> 权限，只能读写它自己在你 Drive 隐藏应用文件夹中的文件，看不到你其他的 Drive 文件。数据和附件上传前已在本机用你的密码加密，并且直接在你的浏览器和 Google 之间传输。另有一个很小的未加密文件，只记录哪台设备可以自动上传，不含任何财务数据。只有在你点击更新汇率时，应用才会向 open.er-api.com 请求汇率，请求里只有货币代码。应用不做数据分析、不投放广告，也不会出售或分享你的任何数据。</p>
+    <p>如果你选择连接 Google Drive，应用只请求 <code>drive.appdata</code> 权限，只能读写它自己在你 Drive 隐藏应用文件夹中的文件，看不到你其他的 Drive 文件。数据和附件上传前已在本机用你的密码加密，并且直接在你的浏览器和 Google 之间传输。另有两个很小的未加密文件：一个只记录哪台设备可以自动上传，另一个只记录待清理的附件编号和日期，都不含任何财务数据，也不含附件内容。只有在你点击更新汇率时，应用才会向 open.er-api.com 请求汇率，请求里只有货币代码。应用不做数据分析、不投放广告，也不会出售或分享你的任何数据。</p>
   </main>
 </body>
 </html>

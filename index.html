@@ -1044,14 +1044,14 @@
         .tl-marker .tl-marker-sub { display: block; margin-top: 2px; font-weight: 600; }
         @media (prefers-reduced-motion: reduce) { .tl-chev { transition: none; } }
 
-        /* v621: Timeline "Ribbon" style (optional, see timelineStyle in ledger.js) — a centre spine made of
+        /* v621 (arrows point up since v628, each segment stays inside its own box — no nesting into the previous one): Timeline "Ribbon" style (optional, see timelineStyle in ledger.js) — a centre spine made of
            coloured arrow segments (each one's tip sits in the notch of the next), a node per entry, a dashed
            connector to a big year ring, then a colour-matched title pill + details; sides alternate. */
         .nav-header .nav-view-toggle { align-self: flex-start; }
         .tlr-wrap { position: relative; padding: 6px 0 90px; }
         .tlr-item { --tcol: #86cdd6; position: relative; padding: 0 0 26px; }
         .tlr-c0 { --tcol: #86cdd6; } .tlr-c1 { --tcol: #e8a752; } .tlr-c2 { --tcol: #5f9eab; } .tlr-c3 { --tcol: #e3808a; } .tlr-c4 { --tcol: #a679ae; }
-        .tlr-item::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 14px; margin-left: -7px; background: var(--tcol); clip-path: polygon(0 0, 50% 9px, 100% 0, 100% calc(100% - 9px), 50% 100%, 0 calc(100% - 9px)); }
+        .tlr-item::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 14px; margin-left: -7px; background: var(--tcol); clip-path: polygon(50% 0, 100% 9px, 100% 100%, 50% calc(100% - 9px), 0 100%, 0 9px); }
         .tlr-pre::before { opacity: 0.5; }
         .tlr-node { position: absolute; left: 50%; top: 14px; width: 24px; height: 24px; margin-left: -12px; border-radius: 50%; background: var(--tcol); box-sizing: border-box; z-index: 1; box-shadow: 0 0 0 3px var(--card-bg); }
         .tlr-node::after { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: var(--card-bg); }
@@ -1073,6 +1073,23 @@
         .tlr-item.open .tlr-note { display: block; -webkit-line-clamp: unset; overflow: visible; }
         .tlr-block .tl-meta { margin: 6px 0 0; }
         .tlr-l .tl-meta { justify-content: flex-end; }
+        /* v622: phone view — Timeline type filters look like the Inventory ones (icon + corner count, wrapping rows,
+           the selected one expands to show its name); an extra amount's note drops to a second row inside its chip. */
+        @media (max-width: 767px) {
+            .tl-page-sub { display: none; }
+            .tl-chips { flex-wrap: wrap; overflow: visible; gap: 10px 8px; padding: 8px 0 12px; }
+            .tl-chip { position: relative; min-width: 46px; min-height: 44px; padding: 6px 12px; display: inline-flex; align-items: center; justify-content: center; font-size: 0.85rem; }
+            .tl-chip-ic { font-size: 1.45rem; line-height: 1; }
+            .tl-chip-nm { display: none; }
+            .tl-chip.active .tl-chip-nm { display: inline; font-size: 0.8rem; margin-left: 2px; }
+            .tl-chip-n { position: absolute; top: -7px; right: -3px; min-width: 18px; margin: 0; padding: 1px 5px; border-radius: 999px; border: 1.5px solid var(--card-bg); background: var(--hover-bg); color: var(--text-muted); text-align: center; font-size: 0.65rem; opacity: 1; }
+            .tl-chip.active .tl-chip-n { background: var(--card-bg); color: var(--primary); opacity: 1; }
+            .tlr-block .tl-ref { display: block; border-radius: 12px; }
+            .tlr-r .tlr-block .tl-ref { text-align: left; }
+            .tlr-l .tlr-block .tl-ref { text-align: right; }
+            .tlr-block .tl-ref .tl-ref-dot { display: none; }
+            .tlr-block .tl-ref .tl-ref-note { display: block; margin-top: 1px; }
+        }
         .tlr-marker { position: relative; z-index: 2; margin: 2px auto 22px; max-width: 86%; text-align: center; background: var(--active-bg); border: 1.5px solid var(--primary); border-radius: 14px; padding: 8px 14px; }
         .tlr-marker b { display: block; font-size: 0.88rem; font-weight: 800; color: var(--primary); }
         .tlr-marker span, .tlr-marker em { display: block; font-size: 0.74rem; font-weight: 700; font-style: normal; color: var(--text-muted); }
@@ -2800,6 +2817,28 @@
             padding: 16px;
         }
         .modal.active { display: flex; }
+        /* v630: Credit Card Reconcile screen (see ccReconModal / renderCcRecon() in ledger.js) */
+        .modal-sheet.ccr-sheet { max-width: 460px; width: 100%; max-height: 90vh; display: flex; flex-direction: column; overflow: hidden; }
+        .ccr-body { overflow-y: auto; flex: 1 1 auto; min-height: 0; -webkit-overflow-scrolling: touch; }
+        .ccr-sum { background: var(--chip-bg); border-radius: 12px; padding: 8px 12px; font-size: 0.78rem; }
+        .ccr-sum > div { display: flex; justify-content: space-between; padding: 3px 0; }
+        .ccr-sum > div span { color: var(--text-muted); font-weight: 600; }
+        .ccr-sum .ccr-sum-total { border-top: 1px solid rgba(100,116,139,0.35); margin-top: 4px; padding-top: 6px; font-size: 0.86rem; }
+        .ccr-sum .ccr-sum-total span { color: var(--text-main); font-weight: 800; }
+        .ccr-row { display: flex; align-items: center; gap: 10px; padding: 9px 4px; border-bottom: 1px solid var(--chip-bg); }
+        .ccr-row.ccr-off { opacity: 0.6; }
+        .ccr-row.ccr-new { animation: ccrFlash 2.6s ease-out; }
+        @keyframes ccrFlash { 0% { background: #fef9c3; } 100% { background: transparent; } }
+        .ccr-tick { display: flex; align-items: center; flex: 0 0 auto; }
+        .ccr-tick input { width: 20px; height: 20px; padding: 0; margin: 0; }
+        .ccr-main { flex: 1; min-width: 0; cursor: pointer; }
+        .ccr-desc { font-size: 0.82rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ccr-sub { font-size: 0.68rem; color: var(--text-muted); }
+        .ccr-amt { font-size: 0.82rem; font-weight: 700; white-space: nowrap; }
+        .ccr-amt.cr { color: var(--income-color); }
+        .ccr-sep { font-size: 0.68rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.03em; color: var(--text-muted); padding: 10px 2px 2px; }
+        .ccr-bank { margin-top: 12px; }
+        .ccr-bank input { margin-top: 4px; }
         .modal-sheet {
             /* v156: frosted-glass sheet — translucent instead of flat white, so the dimmed/
                blurred backdrop reads through very faintly around form fields. Kept at 0.92
@@ -4728,7 +4767,10 @@
              duplicate that number as a separate stored/computed value. -->
         <div id="ledgerCcBanner" style="display:none; align-items:center; justify-content:space-between; gap:10px; font-size:0.78rem; font-weight:700; border-radius:10px; padding:10px 12px; margin:-6px 0 14px; background:#fdf2f8; border:1px solid #fbcfe8; color:#9d174d;">
             <span>💳 Amount due: <span id="ledgerCcAmountDue">RM0.00</span></span>
-            <button type="button" data-click="openCreditCardPaymentFromLedgerHeader" style="background:#db2777; color:white; border:none; border-radius:8px; padding:7px 14px; font-size:0.76rem; font-weight:700; cursor:pointer; white-space:nowrap;">💳 Pay</button>
+            <span style="display:flex; gap:6px;">
+                <button type="button" id="ledgerCcReconBtn" data-click="ccReconOpenFromLedgerHeader" style="display:none; background:#fff; color:#9d174d; border:1px solid #fbcfe8; border-radius:8px; padding:7px 12px; font-size:0.76rem; font-weight:700; cursor:pointer; white-space:nowrap;">🧾 Reconcile</button>
+                <button type="button" id="ledgerCcPayBtn" data-click="openCreditCardPaymentFromLedgerHeader" style="background:#db2777; color:white; border:none; border-radius:8px; padding:7px 14px; font-size:0.76rem; font-weight:700; cursor:pointer; white-space:nowrap;">💳 Pay</button>
+            </span>
         </div>
         <div id="ledgerYearNavHome">
         <div id="ledgerYearNav" style="display:none; align-items:center; justify-content:center; gap:16px; padding:10px 0 14px;">
@@ -5397,7 +5439,7 @@
             <button class="back-btn" data-click="navigateToWorkspace">&larr; Back</button>
             <div style="flex:1;">
                 <h3 style="font-weight:800; font-size:1.2rem;">Timeline</h3>
-                <p style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Things worth remembering, from before the ledger started and after.</p>
+                <p class="tl-page-sub" style="font-size:0.75rem; color:var(--text-muted); font-weight:600;">Things worth remembering, from before the ledger started and after.</p>
             </div>
             <div class="nav-view-toggle" id="timelineStyleToggle" role="group" aria-label="Timeline style">
                 <button type="button" class="nav-view-toggle-btn tl-style-btn" data-click="timelineSetStyle" data-mode="classic" aria-pressed="true">Classic</button>
@@ -7558,6 +7600,18 @@
          past the bottom of the viewport, overlapping whatever was there. Capped at
          calc(100vh - 32px) (matches .modal's own 16px top+bottom padding) below, same idiom
          templatePickerModal above already uses at 75vh. -->
+    <!-- v630: Credit Card Reconcile — tick a card's entries against the bank statement for one statement period
+         (see openCcRecon()/renderCcRecon() in ledger.js). Declared before #txModal so the Add/Edit form opens on top of it. -->
+    <div class="modal" id="ccReconModal">
+        <div class="modal-sheet ccr-sheet">
+            <div class="modal-header" style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;">
+                <h3 id="ccReconTitle" style="font-weight:800; font-size:1rem;">🧾 Reconcile statement</h3>
+                <button type="button" data-click="closeModal" data-modal="ccReconModal" style="background:none; border:none; font-size:1.5rem; padding:0 0 0 10px; line-height:1;">&times;</button>
+            </div>
+            <div id="ccReconBody" class="ccr-body"></div>
+        </div>
+    </div>
+
     <div class="modal" id="txModal">
         <div class="modal-sheet" style="padding:0; display:flex; flex-direction:column; overflow:hidden; max-height:calc(100vh - 32px);">
             <div class="modal-header" style="display:flex; justify-content:space-between; align-items:center; gap:8px; padding:20px 20px 12px; flex-shrink:0; border-bottom:1px solid var(--border-color);">
@@ -7681,7 +7735,13 @@
                      the received amount itself (effective rate auto-calculated back). -->
                 <div id="txTransferFxWrap" style="display:none; background:#eff6ff; border:1px solid #bfdbfe; border-radius:10px; padding:10px; margin-bottom:10px;">
                     <p style="font-size:0.7rem; font-weight:700; text-transform:uppercase; color:#1d4ed8; margin-bottom:8px;">🔁 Currency Conversion</p>
-                    <div class="toggle-switch-row" style="margin:0 0 8px;">
+                    <!-- v632: Multi-Currency -> Multi-Currency (incl. the SAME account) conversion. Only shown in that
+                         case; picks which currency basket receives the money. Blank = ordinary same-currency transfer. -->
+                    <div class="form-row" id="txTransferDestCurrencyRow" style="display:none; margin-bottom:8px;">
+                        <label>Convert to currency</label>
+                        <select id="txTransferDestCurrency" class="form-input" data-change="onTransferDestCurrencyChange"></select>
+                    </div>
+                    <div class="toggle-switch-row" id="txTransferFxToggleRow" style="margin:0 0 8px;">
                         <span class="toggle-switch-label" style="font-size:0.75rem;">✏️ Manually set conversion</span>
                         <label class="toggle-switch">
                             <input type="checkbox" id="txTransferFxToggle" data-change="toggleTxTransferFx">
@@ -7725,7 +7785,22 @@
                     <p id="txManualFxAutoHint" style="font-size:0.7rem; color:var(--text-muted); margin:0;"></p>
                 </div>
 
-                <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📅</span><input type="date" id="txDate" required aria-label="Date"></div>
+                <div class="form-row form-row-icon"><span class="field-icon" aria-hidden="true">📅</span><input type="date" id="txDate" required aria-label="Date" data-change="refreshTxStmtRow"></div>
+
+                <!-- v629: credit-card statement cycle. Only shown when the entry's account is a credit card that has a
+                     Statement Day (see refreshTxStmtRow() in ledger.js). Switching it on tells the app the bank left
+                     this entry off the statement its date implies and bills it on the NEXT one, so the due-date
+                     reminder / Pay pre-fill match the real statement. The date itself is never changed. -->
+                <div class="form-row" id="txStmtRow" style="display:none;">
+                    <div class="toggle-switch-row">
+                        <span class="toggle-switch-label">🧾 Billed in next statement</span>
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="txStmtShift" data-change="refreshTxStmtRow">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                    <p id="txStmtHint" style="font-size:0.7rem; color:var(--text-muted); margin:2px 0 0;"></p>
+                </div>
 
                 <!-- Fixed Deposit placement terms — shown only when this entry deposits funds into an FD account -->
                 <div id="txFdFieldsWrap" style="display:none; background:#faf5ff; border:1px solid #ede9fe; border-radius:10px; padding:10px; margin-bottom:10px;">
