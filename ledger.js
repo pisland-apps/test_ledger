@@ -10,7 +10,7 @@
         // that's the signal to hard-refresh (Ctrl/Cmd+Shift+R) or clear the site's Service
         // Worker/cache in devtools — not a signal that the deploy itself failed. The browser may
         // just be running a cached copy of the old ledger.js.
-        const APP_VERSION = "v635";
+        const APP_VERSION = "v637";
         const APP_VERSION_DATE = "2026-11-24";
 
         // v100: shared calculator-button icon (replaces the 🧮 emoji, which rendered
@@ -1833,6 +1833,7 @@
             { name: "Dividend Unit Trust", type: "income", icon: "🧺" },
             { name: "Rental Income", type: "income", icon: "🏠" },
             { name: "Bank Charges", type: "expense", icon: "💳" },
+            { name: "Brokerage / FX Fees", type: "expense", icon: "💱", parent: "Bank Charges" }, // v637: broker commissions, FX conversion fees
             { name: "Books & Stationery", type: "expense", icon: "📚" },
             { name: "Mortgage Interest", type: "expense", icon: "🏠" },
             { name: "Education", type: "expense", icon: "🎓" },
@@ -1915,6 +1916,7 @@
             "rebate": "💸",
             "grants": "🎓",
             "bank charges": "💳",
+            "brokerage / fx fees": "💱",
             "books & stationery": "📚",
             "parking": "🅿️",
             "education": "🎓",
@@ -23842,7 +23844,7 @@
                 let col, sgn;
                 if (t.type === "income") { col = "income-color"; sgn = "+"; }
                 else if (t.type === "expense") { col = "expense-color"; sgn = "-"; }
-                else if (activeLedgerAccountView !== "all" && (t.dest === activeLedgerAccountView || t.src === activeLedgerAccountView)) {
+                else if (activeLedgerAccountView !== "all" && (t.dest === activeLedgerAccountView || t.src === activeLedgerAccountView) && !(t.destCurrency && t.src === t.dest)) { // v636: a same-account currency conversion nets out inside the account, so it keeps the neutral 🔄 style
                     // v312: same signed-contribution fix as the Currency Activity page — see
                     // comment there. A negative-amount transfer's direction flips relative to
                     // its src/dest role.

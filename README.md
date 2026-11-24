@@ -4743,3 +4743,11 @@ See v633 note; bumped `APP_VERSION` / `CACHE_NAME` to v634.
 ## v635: USD now displays as "US$"
 
 - `currencySymbols.USD` changed from "$" to "US$" so USD amounts (e.g. NVIDIA "US$662.00") are clearly distinguishable from RM / S$. Display only; stored data unchanged. Bumped `APP_VERSION` / `CACHE_NAME` to v635.
+
+## v636: same-account currency conversion keeps the neutral 🔄 style in the Transactions list
+
+- In an account's Transactions list, a Multi-Currency conversion whose From and To are the same account (e.g. IBKR SGD → USD) is no longer shown as a green "+" incoming row; it stays neutral 🔄 like other transfers viewed from "All". Display only. Bumped `APP_VERSION` / `CACHE_NAME` to v636.
+
+## v637: new default category "Brokerage / FX Fees"
+
+- Added `Brokerage / FX Fees` (💱, expense) as a subcategory of `Bank Charges` in `DEFAULT_CATEGORIES`, for broker commissions and FX conversion fees (e.g. IBKR). `ensureDefaultCategories()` seeds it on the next launch for existing data too (matched by name, so a category you already created with that name is left alone; renamed/deleted ones are handled by the existing rules). Bumped `APP_VERSION` / `CACHE_NAME` to v637.
